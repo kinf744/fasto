@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Progrès de la Science — Éducation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #080D1C;
+      --surface:   #0F1830;
+      --border:    #1A2740;
+      --cyan:      #00C8FF;
+      --cyan-dim:  #0099CC;
+      --green:     #00E5A0;
+      --amber:     #FFB830;
+      --text:      #D8E4F0;
+      --muted:     #7A93B0;
+      --white:     #F0F6FF;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 1rem;
+      line-height: 1.7;
+    }
+
+    /* ── HEADER ─────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+    }
+    .header-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+    }
+    .logo {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: var(--cyan);
+      letter-spacing: .03em;
+      text-decoration: none;
+    }
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: .85rem;
+      margin-left: 1.5rem;
+      transition: color .2s;
+    }
+    nav a:hover { color: var(--cyan); }
+
+    /* ── HERO ────────────────────────────────────────── */
+    .hero {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 5rem 2rem 4rem;
+      text-align: center;
+    }
+    .hero-eyebrow {
+      display: inline-block;
+      font-size: .75rem;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      border: 1px solid var(--cyan-dim);
+      padding: .25rem .75rem;
+      border-radius: 2rem;
+      margin-bottom: 1.8rem;
+    }
+    .hero h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
+      font-weight: 700;
+      color: var(--white);
+      line-height: 1.15;
+      margin-bottom: 1.4rem;
+    }
+    .hero h1 em {
+      font-style: normal;
+      color: var(--cyan);
+    }
+    .hero p {
+      max-width: 580px;
+      margin: 0 auto 2.5rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+    .hero-stats {
+      display: flex;
+      justify-content: center;
+      gap: 3rem;
+      flex-wrap: wrap;
+    }
+    .stat-item { text-align: center; }
+    .stat-num {
+      display: block;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--white);
+    }
+    .stat-label {
+      font-size: .78rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+    }
+
+    /* ── DIVIDER ─────────────────────────────────────── */
+    .divider {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 2rem;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── SECTIONS COMMUNES ───────────────────────────── */
+    section {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 4rem 2rem;
+    }
+    .section-label {
+      font-size: .72rem;
+      font-weight: 600;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: .6rem;
+    }
+    h2 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 700;
+      color: var(--white);
+      margin-bottom: 1rem;
+    }
+    h2 + p, h3 + p { margin-top: .5rem; }
+
+    /* ── TIMELINE ────────────────────────────────────── */
+    .timeline { position: relative; margin-top: 2.5rem; }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 80px;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--cyan), var(--green), transparent);
+    }
+    .tl-entry {
+      display: grid;
+      grid-template-columns: 80px 2rem 1fr;
+      gap: 0 1rem;
+      margin-bottom: 2.5rem;
+      align-items: start;
+    }
+    .tl-year {
+      text-align: right;
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: .9rem;
+      color: var(--cyan);
+      padding-top: .1rem;
+    }
+    .tl-dot {
+      display: flex;
+      justify-content: center;
+      padding-top: .45rem;
+    }
+    .tl-dot span {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(0,200,255,.2);
+      flex-shrink: 0;
+    }
+    .tl-body h3 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--white);
+      margin-bottom: .3rem;
+    }
+    .tl-body p { font-size: .92rem; color: var(--muted); }
+    .tl-tag {
+      display: inline-block;
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: .15rem .55rem;
+      border-radius: .25rem;
+      margin-bottom: .5rem;
+    }
+    .tag-physique  { background: rgba(0,200,255,.12); color: var(--cyan); }
+    .tag-bio       { background: rgba(0,229,160,.12); color: var(--green); }
+    .tag-info      { background: rgba(255,184,48,.12); color: var(--amber); }
+    .tag-medecine  { background: rgba(200,100,255,.12); color: #C864FF; }
+    .tag-espace    { background: rgba(100,150,255,.12); color: #6496FF; }
+
+    /* ── DOMAINES CARDS ──────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 1.2rem;
+      margin-top: 2rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: .75rem;
+      padding: 1.5rem;
+      transition: border-color .25s, transform .25s;
+    }
+    .card:hover {
+      border-color: var(--cyan-dim);
+      transform: translateY(-2px);
+    }
+    .card-icon {
+      font-size: 1.5rem;
+      margin-bottom: .8rem;
+    }
+    .card h3 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: .95rem;
+      font-weight: 600;
+      color: var(--white);
+      margin-bottom: .4rem;
+    }
+    .card p { font-size: .88rem; color: var(--muted); }
+
+    /* ── ACCORDION (Quiz) ────────────────────────────── */
+    .accordion { margin-top: 2rem; }
+    details {
+      border: 1px solid var(--border);
+      border-radius: .6rem;
+      margin-bottom: .8rem;
+      background: var(--surface);
+      overflow: hidden;
+      transition: border-color .2s;
+    }
+    details[open] { border-color: var(--cyan-dim); }
+    summary {
+      padding: 1rem 1.2rem;
+      cursor: pointer;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: .95rem;
+      font-weight: 600;
+      color: var(--white);
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+    }
+    summary::after {
+      content: '+';
+      font-size: 1.2rem;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+    details[open] summary::after { content: '−'; }
+    .answer {
+      padding: .2rem 1.2rem 1rem;
+      color: var(--muted);
+      font-size: .93rem;
+      border-top: 1px solid var(--border);
+    }
+    .answer strong { color: var(--green); }
+
+    /* ── GLOSSAIRE ───────────────────────────────────── */
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .gloss-item {
+      background: var(--surface);
+      border-left: 3px solid var(--cyan);
+      border-radius: 0 .5rem .5rem 0;
+      padding: .9rem 1.1rem;
+    }
+    .gloss-item dt {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 600;
+      color: var(--white);
+      font-size: .95rem;
+      margin-bottom: .3rem;
+    }
+    .gloss-item dd { font-size: .88rem; color: var(--muted); }
+
+    /* ── FOOTER ──────────────────────────────────────── */
+    footer {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      text-align: center;
+      padding: 2.5rem 2rem;
+    }
+    footer p { font-size: .83rem; color: var(--muted); }
+    footer a { color: var(--cyan); text-decoration: none; }
+
+    /* ── RESPONSIVE ──────────────────────────────────── */
+    @media (max-width: 600px) {
+      .timeline::before { left: 54px; }
+      .tl-entry { grid-template-columns: 54px 1.5rem 1fr; }
+      .tl-year { font-size: .78rem; }
+      .hero-stats { gap: 1.5rem; }
+      nav { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .card { transition: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HEADER ──────────────────────────────────────────── -->
+<header>
+  <div class="header-inner">
+    <a href="#" class="logo">⚛ ScienceÉdu</a>
+    <nav>
+      <a href="#timeline">Histoire</a>
+      <a href="#domaines">Domaines</a>
+      <a href="#quiz">Quiz</a>
+      <a href="#glossaire">Glossaire</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ── HERO ────────────────────────────────────────────── -->
+<section class="hero">
+  <span class="hero-eyebrow">Portail éducatif gratuit</span>
+  <h1>L'humanité avance grâce à <em>la science</em></h1>
+  <p>
+    Des premières lois de Newton aux intelligences artificielles, découvrez comment
+    la démarche scientifique a transformé notre compréhension du monde — et notre quotidien.
+  </p>
+  <div class="hero-stats">
+    <div class="stat-item">
+      <span class="stat-num">≈ 8 M</span>
+      <span class="stat-label">chercheurs actifs dans le monde</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num">2,5 M</span>
+      <span class="stat-label">articles scientifiques par an</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num">350 +</span>
+      <span class="stat-label">ans de méthode scientifique</span>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ── TIMELINE ────────────────────────────────────────── -->
+<section id="timeline">
+  <p class="section-label">Histoire des découvertes</p>
+  <h2>Des jalons qui ont changé le monde</h2>
+  <p>Chaque découverte ouvre des portes que les générations suivantes franchissent à leur tour.</p>
+
+  <div class="timeline">
+
+    <div class="tl-entry">
+      <div class="tl-year">1687</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-physique">Physique</span>
+        <h3>Principia Mathematica — Isaac Newton</h3>
+        <p>Newton formule les trois lois du mouvement et la loi de la gravitation universelle. Pour la première fois, les mêmes équations expliquent la chute d'une pomme et l'orbite de la Lune.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">1796</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-medecine">Médecine</span>
+        <h3>Premier vaccin — Edward Jenner</h3>
+        <p>Jenner inocule le virus de la vaccine pour protéger contre la variole, fondant le principe de la vaccination. Ce geste a depuis sauvé des centaines de millions de vies.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">1859</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-bio">Biologie</span>
+        <h3>De l'origine des espèces — Charles Darwin</h3>
+        <p>Darwin expose la théorie de l'évolution par sélection naturelle, unifiant la biologie autour d'un cadre explicatif commun à tous les êtres vivants.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">1905</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-physique">Physique</span>
+        <h3>Année miraculeuse — Albert Einstein</h3>
+        <p>Einstein publie quatre articles fondateurs, dont la relativité restreinte (E = mc²) et l'explication de l'effet photoélectrique, qui poseront les bases de la physique moderne.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">1953</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-bio">Biologie</span>
+        <h3>Structure de l'ADN — Watson, Crick & Franklin</h3>
+        <p>La double hélice de l'ADN est décrite. Cette découverte lance la biologie moléculaire et permettra, des décennies plus tard, le séquençage du génome humain et les thérapies géniques.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">1969</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-espace">Espace</span>
+        <h3>Apollo 11 — Premier pas sur la Lune</h3>
+        <p>Neil Armstrong et Buzz Aldrin foulent le sol lunaire. Cette mission mobilise 400 000 ingénieurs et scientifiques, et stimule des dizaines de technologies civiles encore utilisées aujourd'hui.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">1991</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-info">Informatique</span>
+        <h3>Naissance du World Wide Web — Tim Berners-Lee</h3>
+        <p>Berners-Lee invente le Web au CERN pour faciliter le partage de données entre chercheurs. Ce réseau de documents hypertextes ouvert et gratuit devient l'infrastructure mondiale de la connaissance.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">2012</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-physique">Physique</span>
+        <h3>Découverte du boson de Higgs — CERN</h3>
+        <p>Le Grand Collisionneur de Hadrons confirme l'existence de la particule prédite par Peter Higgs en 1964, complétant le Modèle Standard de la physique des particules.</p>
+      </div>
+    </div>
+
+    <div class="tl-entry">
+      <div class="tl-year">2020</div>
+      <div class="tl-dot"><span></span></div>
+      <div class="tl-body">
+        <span class="tl-tag tag-medecine">Médecine</span>
+        <h3>Vaccins ARNm contre la COVID-19</h3>
+        <p>En moins d'un an, la technologie ARN messager — développée sur plusieurs décennies — permet de créer des vaccins efficaces, ouvrant la voie à de futurs traitements contre le cancer et d'autres maladies.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ── DOMAINES ─────────────────────────────────────────── -->
+<section id="domaines">
+  <p class="section-label">Les grands champs scientifiques</p>
+  <h2>Explorer les disciplines d'aujourd'hui</h2>
+  <p>La science moderne est un réseau de disciplines interconnectées. En voici les principales.</p>
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-icon">🔬</div>
+      <h3>Biologie &amp; Génétique</h3>
+      <p>CRISPR-Cas9 permet d'éditer le génome avec une précision inégalée. Des maladies héréditaires autrefois incurables entrent en phase d'essais cliniques.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">⚛️</div>
+      <h3>Physique quantique</h3>
+      <p>L'ordinateur quantique exploite la superposition et l'intrication pour résoudre des problèmes impossibles pour les machines classiques : cryptographie, simulation moléculaire, logistique.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">🧠</div>
+      <h3>Neurosciences</h3>
+      <p>Les interfaces cerveau-machine permettent à des patients paralysés de communiquer. La cartographie du connectome humain progresse, révélant les bases biologiques de la pensée.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">🌍</div>
+      <h3>Sciences du climat</h3>
+      <p>Les modèles climatiques, nourris de données satellites, prévoient les extrêmes météorologiques avec une précision croissante et orientent les politiques d'adaptation.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">🚀</div>
+      <h3>Astronomie &amp; Espace</h3>
+      <p>Le télescope James Webb capte la lumière de galaxies formées 300 millions d'ans après le Big Bang. La détection d'ondes gravitationnelles ouvre une nouvelle fenêtre sur l'univers.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">💊</div>
+      <h3>Médecine de précision</h3>
+      <p>L'analyse génomique des tumeurs permet de personnaliser les traitements anticancéreux. Les thérapies cellulaires CAR-T obtiennent des rémissions durables dans certaines leucémies.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <h3>Énergie &amp; Matériaux</h3>
+      <p>La fusion nucléaire (NIF, ITER) a franchi le seuil d'ignition en 2022. Les pérovskites améliorent le rendement des cellules solaires au-delà de 33 %, ouvrant des perspectives pour l'énergie propre.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">🤖</div>
+      <h3>Intelligence artificielle</h3>
+      <p>Les grands modèles de langage accélèrent la recherche (AlphaFold résout la structure de 200 millions de protéines). L'IA aide à découvrir de nouveaux antibiotiques et à analyser des données médicales.</p>
+    </div>
+
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ── QUIZ ─────────────────────────────────────────────── -->
+<section id="quiz">
+  <p class="section-label">Quiz éducatif</p>
+  <h2>Testez vos connaissances</h2>
+  <p>Cliquez sur une question pour révéler la réponse.</p>
+
+  <div class="accordion">
+
+    <details>
+      <summary>Qu'est-ce que la méthode scientifique ?</summary>
+      <div class="answer">
+        <strong>La méthode hypothético-déductive :</strong> observation d'un phénomène → formulation d'une hypothèse → prédictions testables → expériences → analyse des résultats → validation ou réfutation. Une hypothèse doit être falsifiable (Popper, 1934) : si aucune expérience ne peut la réfuter, elle n'est pas scientifique.
+      </div>
+    </details>
+
+    <details>
+      <summary>Pourquoi dit-on que l'ADN est en double hélice ?</summary>
+      <div class="answer">
+        <strong>Deux brins complémentaires s'enroulent l'un autour de l'autre.</strong> Chaque brin est une chaîne de nucléotides (A, T, G, C). Un A est toujours en face d'un T, et un G en face d'un C. Cette structure permet la copie fidèle du génome lors de la division cellulaire.
+      </div>
+    </details>
+
+    <details>
+      <summary>À quoi sert le Grand Collisionneur de Hadrons (LHC) ?</summary>
+      <div class="answer">
+        <strong>C'est le plus grand accélérateur de particules au monde (27 km de circonférence).</strong> Il propulse des protons à près de la vitesse de la lumière et les fait entrer en collision. Les débris analysés révèlent les constituants fondamentaux de la matière. C'est là que le boson de Higgs a été détecté en 2012.
+      </div>
+    </details>
+
+    <details>
+      <summary>Qu'est-ce que CRISPR-Cas9 et pourquoi est-ce révolutionnaire ?</summary>
+      <div class="answer">
+        <strong>Un « ciseau moléculaire » guidé par une séquence ARN.</strong> Il coupe l'ADN à un endroit précis, permettant de supprimer, corriger ou insérer des gènes. Moins coûteux et plus précis que les outils précédents, il est utilisé dans la recherche contre le cancer, la drépanocytose et des maladies génétiques rares.
+      </div>
+    </details>
+
+    <details>
+      <summary>Comment les vaccins ARNm fonctionnent-ils ?</summary>
+      <div class="answer">
+        <strong>Ils livrent à nos cellules une « notice de fabrication » temporaire.</strong> L'ARNm code la protéine spike du virus ; nos cellules la fabriquent et la présentent au système immunitaire, qui apprend à la reconnaître. L'ARNm est dégradé en quelques jours et ne touche jamais l'ADN.
+      </div>
+    </details>
+
+    <details>
+      <summary>Qu'est-ce qu'une onde gravitationnelle ?</summary>
+      <div class="answer">
+        <strong>Une déformation de l'espace-temps qui se propage à la vitesse de la lumière.</strong> Prédites par Einstein en 1916 et détectées pour la première fois en 2015 par LIGO, elles sont produites par des événements cataclysmiques comme la fusion de deux trous noirs. Leur observation ouvre une toute nouvelle façon d'observer l'univers.
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ── GLOSSAIRE ─────────────────────────────────────────── -->
+<section id="glossaire">
+  <p class="section-label">Vocabulaire scientifique</p>
+  <h2>Glossaire essentiel</h2>
+  <p>Les termes clés pour comprendre la science contemporaine.</p>
+
+  <dl class="glossary">
+    <div class="gloss-item">
+      <dt>Atome</dt>
+      <dd>La plus petite unité d'un élément chimique conservant ses propriétés. Composé d'un noyau (protons + neutrons) et d'électrons en orbite.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Gène</dt>
+      <dd>Segment d'ADN portant les instructions pour fabriquer une protéine. Le génome humain contient environ 20 000 gènes.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Énergie de liaison</dt>
+      <dd>Énergie nécessaire pour séparer les constituants d'un noyau atomique. La fission libère cette énergie en séparant des atomes lourds.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Spectre électromagnétique</dt>
+      <dd>Ensemble des rayonnements électromagnétiques, des ondes radio aux rayons gamma, en passant par la lumière visible (400–700 nm).</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Entropie</dt>
+      <dd>Mesure du désordre d'un système. Le 2ᵉ principe de la thermodynamique stipule que l'entropie d'un système isolé ne peut qu'augmenter.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Qubit</dt>
+      <dd>Unité d'information quantique. Contrairement au bit classique (0 ou 1), un qubit peut être en superposition des deux états simultanément.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Neurone</dt>
+      <dd>Cellule spécialisée du système nerveux qui transmet des signaux électriques et chimiques. Le cerveau humain en contient environ 86 milliards.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Exoplanète</dt>
+      <dd>Planète en orbite autour d'une étoile autre que le Soleil. Plus de 5 700 exoplanètes confirmées en 2024, dont certaines dans la « zone habitable ».</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Antigène</dt>
+      <dd>Molécule étrangère reconnue par le système immunitaire. Les vaccins présentent un antigène pour entraîner l'organisme à produire des anticorps.</dd>
+    </div>
+    <div class="gloss-item">
+      <dt>Algorithme</dt>
+      <dd>Suite finie d'instructions précises pour résoudre un problème. Les algorithmes d'apprentissage automatique s'améliorent grâce aux données.</dd>
+    </div>
+  </dl>
+</section>
+
+<!-- ── FOOTER ───────────────────────────────────────────── -->
+<footer>
+  <p>
+    <strong style="color:var(--white)">ScienceÉdu</strong> — Portail éducatif libre et gratuit, sans publicité.<br>
+    Hébergé sur <a href="#">to.kingom.ggff.net</a> · Contenu sous licence CC BY-NC 4.0 · 2025
+  </p>
+</footer>
+
+</body>
+</html>
