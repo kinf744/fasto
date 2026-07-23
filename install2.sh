@@ -3,7 +3,122 @@
 #  KIGHMU PANEL — V3.9.9
 #  Panneau de contrôle VPS (SSH / Xray / V2Ray-DNS / ZIVPN / Hysteria / ...)
 #  Fichier unique — nftables only — sans panel web, sans bot telegram
+#  PROPRIÉTAIRE — Distribution non autorisée interdite.
 # ==============================================================================
+
+# ── Protection anti-copie / anti-débogage ─────────────────────────────────────
+_secure_init() {
+    # Détection debugger (strace, gdb, ltrace) via /proc
+    if [[ -f /proc/self/status ]]; then
+        local tracer
+        tracer=$(grep -oP '^TracerPid:\s*\K\d+' /proc/self/status 2>/dev/null || echo 0)
+        if [[ "$tracer" != "0" ]]; then
+            echo -e "\033[0;31mERROR: Debugging detected.\033[0m" >&2
+            exit 1
+        fi
+    fi
+    # Vérification racine
+    [[ $EUID -eq 0 ]] || { echo -e "\033[0;31mERROR: Root required.\033[0m" >&2; exit 1; }
+    # Umask restrictif : aucun droit pour groupe/autres
+    umask 077
+    # Verrouillage des permissions du script lui-même
+    [[ -f "$0" ]] && chmod 700 "$0" 2>/dev/null || true
+}
+_secure_init
+
+# ── Vérification de licence ───────────────────────────────────────────────────
+# L'utilisateur doit saisir une clé de licence valide (créée via ventes.sh).
+_verify_license() {
+    local CYAN=$'\e[38;2;0;200;255m'   YELLOW=$'\e[38;2;255;196;0m'
+    local WHITE=$'\e[38;2;235;235;235m' GREEN=$'\e[1;38;2;0;230;80m'
+    local RED=$'\e[1;38;2;255;70;70m'   GRAY=$'\e[38;2;120;120;120m'
+    local RST=$'\e[0m'                  BLD=$'\e[1m'
+    local MAGENTA=$'\e[38;2;200;100;255m' BLUE=$'\e[38;2;80;160;255m'
+
+    # Activer sqlite3 si nécessaire
+    command -v sqlite3 &>/dev/null || {
+        echo -e " ${YELLOW}[!]${RST} Installation de sqlite3..."
+        apt-get update -qq 2>/dev/null && apt-get install -y -qq sqlite3 2>/dev/null || true
+    }
+
+    local db="/etc/ventes/ventes.db"
+    local tries=0 key="" name="" expires="" status_text=""
+    local ok=0
+
+    while (( tries < 3 && ok == 0 )); do
+        clear
+        echo
+        echo -e "  ${BLUE}╔══════════════════════════════════════════════════════╗${RST}"
+        echo -e "  ${BLUE}║${RST}         ${WHITE}🔑 VERIFICATION DE LICENCE${RST}${BLUE}                ║${RST}"
+        echo -e "  ${BLUE}║${RST}         ${GRAY}KIGHMU PANEL v3.9.9${RST}${BLUE}                         ║${RST}"
+        echo -e "  ${BLUE}╚══════════════════════════════════════════════════════╝${RST}"
+        echo
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+        echo -e "  ${WHITE}  Veuillez saisir votre clé de licence pour continuer${RST}"
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+        echo
+        echo -e "  ${GRAY}  Exemple : a137726f21f7360a825fd376a3dfe9bd${RST}"
+        echo
+
+        if [[ ! -f "$db" ]]; then
+            echo -e "  ${YELLOW}⚠${RST}  ${WHITE}Aucune base de licence trouvée.${RST}"
+            echo -e "  ${GRAY}  Exécutez d'abord ventes.sh pour créer une licence.${RST}"
+            echo
+        fi
+
+        echo -ne "  ${CYAN}►${RST} ${WHITE}Clé de licence :${RST} " >&2
+        read -r key
+        key="${key// /}"
+
+        # Mode bypass : maître
+        if [[ "$key" == "KIGHMU_MASTER_2026" ]]; then
+            echo -e "  ${GREEN}✓${RST}  ${WHITE}Mode maître activé.${RST}"
+            ok=1; break
+        fi
+
+        # Vérification dans la base
+        if [[ -f "$db" ]]; then
+            local row
+            row=$(sqlite3 "$db" "SELECT client_name, expires_at, status FROM licenses WHERE license_key='$key' AND status='ACTIVE' AND (expires_at >= date('now') OR expires_at='9999-12-31');" 2>/dev/null)
+            if [[ -n "$row" ]]; then
+                IFS='|' read -r name expires status_text <<< "$row"
+                echo
+                echo -e "  ${GREEN}✔${RST}  ${WHITE}Licence valide !${RST}"
+                echo -e "  ${GRAY}  Client : ${WHITE}${name}${RST}${GRAY} | expire : ${WHITE}${expires}${RST}"
+                echo
+                # Marquer le checkin
+                sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$key';" 2>/dev/null || true
+                echo -e "  ${GRAY}Installation autorisée.${RST}"
+                ok=1; break
+            fi
+            echo
+            echo -e "  ${RED}✗${RST}  ${WHITE}Clé invalide ou licence expirée.${RST}"
+        else
+            echo
+            echo -e "  ${RED}✗${RST}  ${WHITE}Aucune base de licence disponible.${RST}"
+            echo -e "  ${GRAY}  Contactez l'administrateur.${RST}"
+        fi
+
+        tries=$((tries + 1))
+        local remaining=$((3 - tries))
+        echo
+        echo -e "  ${YELLOW}⚠${RST}  ${WHITE}Il vous reste ${remaining} tentative(s).${RST}"
+        echo
+        if (( tries < 3 )); then
+            echo -ne "  ${GRAY}Appuyez sur Entrée pour réessayer...${RST}" >&2; read -r
+        fi
+    done
+
+    if (( ok == 0 )); then
+        echo
+        echo -e "  ${RED}╔════════════════════════════════════════════╗${RST}"
+        echo -e "  ${RED}║${RST}  ${WHITE}LICENCE INVALIDE — INSTALLATION BLOQUÉE${RST}${RED}    ║${RST}"
+        echo -e "  ${RED}╚════════════════════════════════════════════╝${RST}"
+        echo
+        exit 1
+    fi
+}
+_verify_license
 
 # S'assurer d'un locale UTF-8 (comptage correct des caractères box-drawing) ----
 if ! locale 2>/dev/null | grep -qiE 'UTF-8'; then
@@ -1131,6 +1246,59 @@ show_ssh_details() {
     press_enter
 }
 
+
+# ==============================================================================
+#  SÉCURITÉ — Intégrité & permissions
+# ==============================================================================
+CHKSUM_FILE="${CHKSUM_FILE:-/etc/kighmu/.checksum}"
+
+# Verrouille les permissions de tous les fichiers/dossiers sensibles
+_secure_permissions() {
+    chmod 700 "$0" 2>/dev/null || true
+    chmod 750 /etc/kighmu 2>/dev/null || true
+    chmod 750 /etc/kighmu/users 2>/dev/null || true
+    chmod 750 /etc/kighmu/bandwidth 2>/dev/null || true
+    chmod 750 /etc/kighmu/state 2>/dev/null || true
+    chmod 700 /usr/local/bin/kighmu 2>/dev/null || true
+    find /etc/kighmu/users -type f -exec chmod 600 {} + 2>/dev/null || true
+    find /etc/kighmu/bandwidth -type f -exec chmod 600 {} + 2>/dev/null || true
+    find /etc/kighmu/state -type f -exec chmod 600 {} + 2>/dev/null || true
+}
+
+# Calcule l'empreinte SHA256 du script lui-même
+_script_checksum() {
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$0" 2>/dev/null | cut -d' ' -f1
+    else
+        sha256sum "$0" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$0" 2>/dev/null | cut -d' ' -f1 || echo ""
+    fi
+}
+
+# Stocke le checksum de référence (à faire après installation)
+store_checksum() {
+    local csum
+    csum=$(_script_checksum)
+    [[ -n "$csum" ]] && echo "$csum $0" > "$CHKSUM_FILE" && chmod 600 "$CHKSUM_FILE"
+}
+
+# Vérifie que le script n'a pas été modifié
+verify_integrity() {
+    [[ -f "$CHKSUM_FILE" ]] || { echo "INFO: Aucun checksum de référence." >&2; return 1; }
+    local stored current
+    stored=$(cut -d' ' -f1 < "$CHKSUM_FILE" 2>/dev/null || echo "")
+    current=$(_script_checksum)
+    if [[ -z "$stored" || -z "$current" ]]; then
+        echo "WARN: Impossible de vérifier l'intégrité." >&2
+        return 1
+    fi
+    if [[ "$stored" != "$current" ]]; then
+        echo "ALERTE: Le script a été modifié ! (checksum mismatch)" >&2
+        echo "  Référence: $stored" >&2
+        echo "  Actuel:    $current" >&2
+        return 1
+    fi
+    return 0
+}
 
 # ==============================================================================
 #  LOGIQUE MÉTIER — GESTION DES UTILISATEURS (source de vérité unifiée)
@@ -2606,6 +2774,8 @@ install_all_missing() {
     [[ -x "$ZIVPN_BIN" ]] || install_zivpn
     [[ -x "$HY_BIN" ]]    || install_hysteria
     unset SKIP_PAUSE
+    _secure_permissions
+    store_checksum
     log "Installation des protocoles manquants terminée"; press_enter
 }
 
