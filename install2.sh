@@ -53,11 +53,12 @@ _verify_license() {
             local row
             row=$(sqlite3 "$db" "SELECT client_name FROM licenses WHERE license_key='$stored_key' AND status='ACTIVE' AND (expires_at >= date('now') OR expires_at='9999-12-31');" 2>/dev/null)
             if [[ -n "$row" ]]; then
+                echo "$row" > /etc/kighmu/.client_name 2>/dev/null || true
                 sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$stored_key';" 2>/dev/null || true
                 return 0
             fi
         fi
-        [[ "$stored_key" == "KIGHMU_MASTER_2026" ]] && return 0
+        [[ "$stored_key" == "KIGHMU_MASTER_2026" ]] && { echo "ADMIN" > /etc/kighmu/.client_name 2>/dev/null || true; return 0; }
     fi
 
     while (( tries < 3 && ok == 0 )); do
@@ -88,6 +89,9 @@ _verify_license() {
         # Mode bypass : maître
         if [[ "$key" == "KIGHMU_MASTER_2026" ]]; then
             echo -e "  ${GREEN}✓${RST}  ${WHITE}Mode maître activé.${RST}"
+            mkdir -p /etc/kighmu 2>/dev/null
+            echo "ADMIN" > /etc/kighmu/.client_name 2>/dev/null || true
+            chmod 600 /etc/kighmu/.client_name 2>/dev/null || true
             ok=1; break
         fi
 
@@ -105,7 +109,8 @@ _verify_license() {
                 sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$key';" 2>/dev/null || true
                 mkdir -p /etc/kighmu 2>/dev/null
                 echo "$key" > /etc/kighmu/.license_key
-                chmod 600 /etc/kighmu/.license_key
+                echo "$name" > /etc/kighmu/.client_name
+                chmod 600 /etc/kighmu/.license_key /etc/kighmu/.client_name
                 echo -e "  ${GRAY}Installation autorisée.${RST}"
                 ok=1; break
             fi
@@ -157,7 +162,7 @@ BOLD=$'\e[1m'
 RESET=$'\e[0m'
 
 VERSION="V3.9.9"
-KEYLINE="Verified - Kighmu tech tutorials oficial ©"
+_client_name() { local n; n=$(cat /etc/kighmu/.client_name 2>/dev/null || echo "---"); printf '%s' "Verified - ${n} ©"; }
 
 # ==============================================================================
 #  HELPERS DE RENDU DYNAMIQUE (réutilisés par TOUS les écrans)
@@ -495,13 +500,14 @@ scr_main() {
     local L=( "%SEP%" )
     local bl
     for bl in "${BANNER_LINES[@]}"; do L+=( "${CYAN}${bl}${RESET}" ); done
+    L+=( "           ${WHITE}👤 $(_client_name)${RESET}" )
     L+=(
         "%SEP%"
         " ${YELLOW}○${RESET} ${WHITE}ONLINES:${RESET} ${GREEN}[${ONL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}EXP:${RESET} ${RED}[${EXP}]${RESET}  ${GRAY}•${RESET}  ${WHITE}KILL:${RESET} ${RED}[${KILL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}TOTAL:${RESET} ${WHITE}[${TOT}]${RESET}"
         " ${YELLOW}○${RESET} ${WHITE}S.O:${RESET} ${WHITE}${OS}${RESET}  ${GRAY}•${RESET}  ${WHITE}Base:${RESET} ${WHITE}${ARCH}${RESET}  ${GRAY}•${RESET}  ${WHITE}CPU's:${RESET} ${WHITE}${CORES}${RESET}"
         " ${YELLOW}○${RESET} ${WHITE}IP:${RESET} ${WHITE}${IP}${RESET}  ${GRAY}•${RESET}  ${WHITE}TIME:${RESET} ${WHITE}${DT}${RESET}"
         "%SEP%"
-        " ${KEYBG} Key: [ ${KEYLINE} ] ${RESET}   ${GRAY}(${VERSION})${RESET}"
+        " ${KEYBG} Key: [ $(_client_name) ] ${RESET}   ${GRAY}(${VERSION})${RESET}"
         "%SEP%"
     )
     L+=("${pg[@]}")
@@ -537,7 +543,7 @@ push_header() {
     local ln
     for ln in "$@"; do _out+=( "$ln" ); done
     [[ "$mode" == "full" ]] && _out+=( " ${YELLOW}○${RESET} ${WHITE}SCRIPT :${RESET} ${WHITE}Kighmu Panel${RESET}   ${GRAY}•${RESET}   ${WHITE}VERSION :${RESET} ${GREEN}${VERSION}${RESET}" )
-    _out+=( "%SEP%" " ${KEYBG} Key: [ ${KEYLINE} ] ${RESET}" "%SEP%" )
+    _out+=( "%SEP%" " ${KEYBG} Key: [ $(_client_name) ] ${RESET}" "%SEP%" )
 }
 
 # ==============================================================================
@@ -3091,6 +3097,9 @@ _license_watchdog() {
         _auto_uninstall_all
         exit 1
     fi
+    local cname
+    cname=$(echo "$row" | cut -d'|' -f3)
+    echo "$cname" > /etc/kighmu/.client_name 2>/dev/null || true
     sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$key';" 2>/dev/null || true
     return 0
 }
