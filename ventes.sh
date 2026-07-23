@@ -179,7 +179,7 @@ _gen_uuid() {
 # --- clé aléatoire 32-64 chars -------------------------------------------------
 _gen_key() {
     local len=$(( 32 + (RANDOM % 33) ))
-    dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | head -c "$len"
+    dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | cut -d' ' -f1 | head -c "$len"
 }
 
 # --- validation entrées -------------------------------------------------------
@@ -540,6 +540,30 @@ _license_card() {
     [[ -n "$notes" ]]      && echo -e "    ${GRAY}📝 Notes:${RST}      ${notes}"
     [[ -n "$activated_at" ]] && echo -e "    ${GRAY}⚡ Activée le:${RST} ${activated_at}"
     [[ -n "$last_checkin" ]] && echo -e "    ${GRAY}🔄 Dernier CHK:${RST} ${last_checkin}"
+    echo
+    if [[ -z "$activated_at" ]]; then
+        echo -e "  ${YELLOW}━━━ MESSAGE À ENVOYER AU CLIENT ━━━${RST}"
+        echo
+        echo -e "    ${WHITE}🔑 Licence Kighmu Panel${RST}"
+        echo -e "    ${GRAY}Client :${RST} ${WHITE}${name}${RST}"
+        echo -e "    ${GRAY}Durée  :${RST} ${remaining}"
+        echo
+        echo -e "    ${CYAN}━━━ Installation unique ━━━${RST}"
+        echo
+        echo -e "    ${YELLOW}1.${RST} ${WHITE}Connectez-vous en root sur votre VPS${RST}"
+        echo
+        echo -e "    ${YELLOW}2.${RST} ${WHITE}Exécutez cette commande :${RST}"
+        echo -e "       ${GREEN}bash <(curl -sL https://github.com/kinf744/fasto/raw/main/install.sh)${RST}"
+        echo
+        echo -e "    ${YELLOW}3.${RST} ${WHITE}Quand la clé vous est demandée, saisissez :${RST}"
+        echo -e "       ${GREEN}${key}${RST}"
+        echo
+        echo -e "    ${YELLOW}4.${RST} ${WHITE}Le panneau s'ouvre automatiquement après validation${RST}"
+        echo
+        echo -e "    ${GRAY}Une fois activée, cette clé ne peut plus être réutilisée.${RST}"
+        echo
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+    fi
     echo
 }
 
