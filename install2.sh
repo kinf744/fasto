@@ -45,6 +45,21 @@ _verify_license() {
     local tries=0 key="" name="" expires="" status_text=""
     local ok=0
 
+    # Si une clé est déjà enregistrée et valide → on passe
+    if [[ -f /etc/kighmu/.license_key ]]; then
+        local stored_key
+        stored_key=$(cat /etc/kighmu/.license_key 2>/dev/null || echo "")
+        if [[ -n "$stored_key" && "$stored_key" != "KIGHMU_MASTER_2026" ]] && [[ -f "$db" ]]; then
+            local row
+            row=$(sqlite3 "$db" "SELECT client_name FROM licenses WHERE license_key='$stored_key' AND status='ACTIVE' AND (expires_at >= date('now') OR expires_at='9999-12-31');" 2>/dev/null)
+            if [[ -n "$row" ]]; then
+                sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$stored_key';" 2>/dev/null || true
+                return 0
+            fi
+        fi
+        [[ "$stored_key" == "KIGHMU_MASTER_2026" ]] && return 0
+    fi
+
     while (( tries < 3 && ok == 0 )); do
         clear
         echo
@@ -121,10 +136,6 @@ _verify_license() {
         exit 1
     fi
 }
-# Appeler la vérification uniquement en mode direct (pas sourcé)
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    _verify_license
-fi
 
 # S'assurer d'un locale UTF-8 (comptage correct des caractères box-drawing) ----
 if ! locale 2>/dev/null | grep -qiE 'UTF-8'; then
@@ -3033,6 +3044,25 @@ upd_remove() {
 # ── Vérificateur de licence (cron + démarrage) ────────────────────────────────
 # S'appelle via le cron ou au lancement du menu.
 # Si la licence est expirée → désinstallation complète automatique.
+# ── Désinstallation complète automatique (sans aucune confirmation) ───────────
+_auto_uninstall_all() {
+    export SKIP_PAUSE=1
+    uninstall_dropbear; uninstall_ws_stack; uninstall_udp_stack
+    uninstall_slowdns; uninstall_xray; uninstall_v2ray; uninstall_zivpn; uninstall_hysteria
+    rm -rf /etc/kighmu /usr/local/bin/kighmu /usr/local/bin/menu 2>/dev/null || true
+    rm -f /root/install2.sh 2>/dev/null || true
+    rm -f /etc/cron.d/kighmu-license 2>/dev/null || true
+    sed -i '/kighmu-license/d' /etc/crontab 2>/dev/null || true
+    unset SKIP_PAUSE
+    echo
+    echo -e " ${RED}╔════════════════════════════════════════════╗${RST}"
+    echo -e " ${RED}║${RST}  ${WHITE}LICENCE EXPIRÉE — SYSTÈME RÉINITIALISÉ${RST}${RED}    ║${RST}"
+    echo -e " ${RED}║${RST}  ${GRAY}Tous les tunnels et le panneau${RST}${RED}              ║${RST}"
+    echo -e " ${RED}║${RST}  ${GRAY}ont été supprimés du serveur.${RST}${RED}               ║${RST}"
+    echo -e " ${RED}╚════════════════════════════════════════════╝${RST}"
+    echo
+}
+
 _license_watchdog() {
     local key_file="/etc/kighmu/.license_key"
     local db="/etc/ventes/ventes.db"
@@ -3043,8 +3073,8 @@ _license_watchdog() {
     [[ -z "$key" || "$key" == "KIGHMU_MASTER_2026" ]] && return 0
 
     if [[ ! -f "$db" ]]; then
-        echo -e " ${RED}[✗]${RESET} Base de licence introuvable. Désinstallation..."
-        uninstall_all_active
+        echo -e " ${RED}[✗]${RESET} Base de licence introuvable. Désinstallation complète..."
+        _auto_uninstall_all
         return 1
     fi
 
@@ -3054,22 +3084,11 @@ _license_watchdog() {
         local why
         why=$(sqlite3 "$db" "SELECT status FROM licenses WHERE license_key='$key';" 2>/dev/null)
         if [[ -z "$why" ]]; then
-            echo -e " ${RED}[✗]${RESET} Licence '${key:0:12}...' introuvable. Désinstallation..."
+            echo -e " ${RED}[✗]${RESET} Licence '${key:0:12}...' introuvable. Désinstallation complète..."
         else
-            echo -e " ${RED}[✗]${RESET} Licence '${key:0:12}...' statut=${why}. Désinstallation..."
+            echo -e " ${RED}[✗]${RESET} Licence '${key:0:12}...' statut=${why}. Désinstallation complète..."
         fi
-        # Désinstallation automatique (sans confirmation)
-        export SKIP_PAUSE=1
-        uninstall_dropbear; uninstall_ws_stack; uninstall_udp_stack
-        uninstall_slowdns; uninstall_xray; uninstall_v2ray; uninstall_zivpn; uninstall_hysteria
-        rm -rf /etc/kighmu /usr/local/bin/kighmu /usr/local/bin/menu 2>/dev/null || true
-        rm -f /root/install2.sh 2>/dev/null || true
-        unset SKIP_PAUSE
-        echo -e " ${RED}██╗██╗██╗██╗██╗██╗██╗██╗${RST}"
-        echo -e " ${RED}╚════════════════════════════════════════════╗${RST}"
-        echo -e "  ${WHITE}LICENCE EXPIRÉE — SYSTÈME RÉINITIALISÉ${RST}${RED}    ║${RST}"
-        echo -e " ${RED}╚════════════════════════════════════════════╝${RST}"
-        echo
+        _auto_uninstall_all
         exit 1
     fi
     sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$key';" 2>/dev/null || true
@@ -3281,19 +3300,14 @@ fi
 case "${1:-}" in
     --install)  # bootstrap : installe la commande `menu` puis ouvre le panneau
         self_install && { clear; echo -e " ${GREEN:-}${WHITE:-}✓ Commande 'menu' installée.${RESET:-}"; sleep 1; }
+        _verify_license
         _license_watchdog
         main_menu ;;
-    --watchdog) # exécution silencieuse (cron / démarrage)
+    --watchdog) # exécution silencieuse (cron / démarrage) — pas de vérif clé
         _license_watchdog
         exit $? ;;
-    --auto-uninstall) # forcer la désinstallation (appelé par le watchdog)
-        export SKIP_PAUSE=1
-        uninstall_dropbear; uninstall_ws_stack; uninstall_udp_stack
-        uninstall_slowdns; uninstall_xray; uninstall_v2ray; uninstall_zivpn; uninstall_hysteria
-        rm -rf /etc/kighmu /usr/local/bin/kighmu /usr/local/bin/menu 2>/dev/null || true
-        rm -f /root/install2.sh 2>/dev/null || true
-        unset SKIP_PAUSE
-        echo "KIGHMU uninstalled (license expired)."
+    --auto-uninstall) # forcer la désinstallation complète (appelé par le watchdog)
+        _auto_uninstall_all
         exit 0 ;;
     --render) shift
         case "${1:-main}" in
@@ -3318,5 +3332,5 @@ case "${1:-}" in
             ssh-detail)       show_ssh_details      "${2:-created}" alice   Al1cePass 2026-12-31 ;;
         esac
         echo; exit 0 ;;
-    *) self_install 2>/dev/null || true; _license_watchdog; main_menu ;;
+    *) self_install 2>/dev/null || true; _verify_license; _license_watchdog; main_menu ;;
 esac
