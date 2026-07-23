@@ -88,6 +88,9 @@ _verify_license() {
                 echo
                 # Marquer le checkin
                 sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$key';" 2>/dev/null || true
+                mkdir -p /etc/kighmu 2>/dev/null
+                echo "$key" > /etc/kighmu/.license_key
+                chmod 600 /etc/kighmu/.license_key
                 echo -e "  ${GRAY}Installation autorisée.${RST}"
                 ok=1; break
             fi
@@ -118,7 +121,10 @@ _verify_license() {
         exit 1
     fi
 }
-_verify_license
+# Appeler la vérification uniquement en mode direct (pas sourcé)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    _verify_license
+fi
 
 # S'assurer d'un locale UTF-8 (comptage correct des caractères box-drawing) ----
 if ! locale 2>/dev/null | grep -qiE 'UTF-8'; then
@@ -2776,7 +2782,21 @@ install_all_missing() {
     unset SKIP_PAUSE
     _secure_permissions
     store_checksum
+    # Installer le cron de vérification de licence
+    _install_license_cron
     log "Installation des protocoles manquants terminée"; press_enter
+}
+
+# ── Cron de vérification de licence ──────────────────────────────────────────
+_install_license_cron() {
+    local cron_line="0 6 * * * root /usr/local/bin/kighmu --watchdog > /dev/null 2>&1"
+    local cron_file="/etc/cron.d/kighmu-license"
+    echo "$cron_line" > "$cron_file" 2>/dev/null
+    chmod 644 "$cron_file" 2>/dev/null
+    # Fallback crontab si /etc/cron.d/ non supporté
+    if ! grep -q 'kighmu-license' /etc/crontab 2>/dev/null; then
+        echo "$cron_line" >> /etc/crontab 2>/dev/null || true
+    fi
 }
 
 uninstall_all_active() {
@@ -3010,7 +3030,54 @@ upd_remove() {
     _msg_ok "Panneau supprimé. (Données /etc/kighmu conservées.)"; press_enter; clear; exit 0
 }
 
+# ── Vérificateur de licence (cron + démarrage) ────────────────────────────────
+# S'appelle via le cron ou au lancement du menu.
+# Si la licence est expirée → désinstallation complète automatique.
+_license_watchdog() {
+    local key_file="/etc/kighmu/.license_key"
+    local db="/etc/ventes/ventes.db"
+
+    [[ ! -f "$key_file" ]] && return 0
+    local key
+    key=$(cat "$key_file" 2>/dev/null) || return 0
+    [[ -z "$key" || "$key" == "KIGHMU_MASTER_2026" ]] && return 0
+
+    if [[ ! -f "$db" ]]; then
+        echo -e " ${RED}[✗]${RESET} Base de licence introuvable. Désinstallation..."
+        uninstall_all_active
+        return 1
+    fi
+
+    local row
+    row=$(sqlite3 "$db" "SELECT status, expires_at, client_name FROM licenses WHERE license_key='$key' AND status='ACTIVE' AND (expires_at >= date('now') OR expires_at='9999-12-31');" 2>/dev/null)
+    if [[ -z "$row" ]]; then
+        local why
+        why=$(sqlite3 "$db" "SELECT status FROM licenses WHERE license_key='$key';" 2>/dev/null)
+        if [[ -z "$why" ]]; then
+            echo -e " ${RED}[✗]${RESET} Licence '${key:0:12}...' introuvable. Désinstallation..."
+        else
+            echo -e " ${RED}[✗]${RESET} Licence '${key:0:12}...' statut=${why}. Désinstallation..."
+        fi
+        # Désinstallation automatique (sans confirmation)
+        export SKIP_PAUSE=1
+        uninstall_dropbear; uninstall_ws_stack; uninstall_udp_stack
+        uninstall_slowdns; uninstall_xray; uninstall_v2ray; uninstall_zivpn; uninstall_hysteria
+        rm -rf /etc/kighmu /usr/local/bin/kighmu /usr/local/bin/menu 2>/dev/null || true
+        rm -f /root/install2.sh 2>/dev/null || true
+        unset SKIP_PAUSE
+        echo -e " ${RED}██╗██╗██╗██╗██╗██╗██╗██╗${RST}"
+        echo -e " ${RED}╚════════════════════════════════════════════╗${RST}"
+        echo -e "  ${WHITE}LICENCE EXPIRÉE — SYSTÈME RÉINITIALISÉ${RST}${RED}    ║${RST}"
+        echo -e " ${RED}╚════════════════════════════════════════════╝${RST}"
+        echo
+        exit 1
+    fi
+    sqlite3 "$db" "UPDATE licenses SET last_checkin=datetime('now') WHERE license_key='$key';" 2>/dev/null || true
+    return 0
+}
+
 main_menu() {
+    _license_watchdog
     while true; do
         scr_main
         read -r CH
@@ -3214,7 +3281,20 @@ fi
 case "${1:-}" in
     --install)  # bootstrap : installe la commande `menu` puis ouvre le panneau
         self_install && { clear; echo -e " ${GREEN:-}${WHITE:-}✓ Commande 'menu' installée.${RESET:-}"; sleep 1; }
+        _license_watchdog
         main_menu ;;
+    --watchdog) # exécution silencieuse (cron / démarrage)
+        _license_watchdog
+        exit $? ;;
+    --auto-uninstall) # forcer la désinstallation (appelé par le watchdog)
+        export SKIP_PAUSE=1
+        uninstall_dropbear; uninstall_ws_stack; uninstall_udp_stack
+        uninstall_slowdns; uninstall_xray; uninstall_v2ray; uninstall_zivpn; uninstall_hysteria
+        rm -rf /etc/kighmu /usr/local/bin/kighmu /usr/local/bin/menu 2>/dev/null || true
+        rm -f /root/install2.sh 2>/dev/null || true
+        unset SKIP_PAUSE
+        echo "KIGHMU uninstalled (license expired)."
+        exit 0 ;;
     --render) shift
         case "${1:-main}" in
             main)         scr_main ;;
@@ -3238,5 +3318,5 @@ case "${1:-}" in
             ssh-detail)       show_ssh_details      "${2:-created}" alice   Al1cePass 2026-12-31 ;;
         esac
         echo; exit 0 ;;
-    *) self_install 2>/dev/null || true; main_menu ;;
+    *) self_install 2>/dev/null || true; _license_watchdog; main_menu ;;
 esac
