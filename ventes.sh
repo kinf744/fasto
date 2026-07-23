@@ -334,9 +334,7 @@ create_license() {
     _prompt "Client / Slogan" ""; name=$__prompt_result
     [[ -z "$name" ]] && { _err "Nom requis."; return 1; }
 
-    _prompt "Téléphone" ""; phone=$__prompt_result
-    _prompt "Email" ""; email=$__prompt_result
-    _prompt "Notes" ""; notes=$__prompt_result
+    phone=""; email=""; notes=""
 
     echo -e "  ${YELLOW}►${RST} ${WHITE}Durée :${RST}"
     local durations=("1 jour" "3 jours" "7 jours" "15 jours" "30 jours" "60 jours" "90 jours" "180 jours" "365 jours" "Illimité")
