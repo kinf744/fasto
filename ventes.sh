@@ -179,7 +179,7 @@ _gen_uuid() {
 # --- clé aléatoire 32-64 chars -------------------------------------------------
 _gen_key() {
     local len=$(( 32 + (RANDOM % 33) ))
-    tr -dc 'A-Za-z0-9_-' < /dev/urandom | head -c "$len"
+    dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | head -c "$len"
 }
 
 # --- validation entrées -------------------------------------------------------
@@ -188,14 +188,15 @@ _valid_phone()  { [[ "$1" =~ ^[0-9+][0-9[:space:]()-]{4,20}$ ]] || [[ -z "$1" ]]
 _valid_email()  { [[ "$1" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || [[ -z "$1" ]]; }
 _valid_status() { [[ "$1" =~ ^(ACTIVE|SUSPENDED|EXPIRED|BANNED|DELETED)$ ]]; }
 _valid_days()   { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 0 )); }
+__prompt_result=
 _prompt() {
-    local msg="$1" default="${2:-}" var
-    echo -ne "  ${YELLOW}►${RST} ${WHITE}${msg}${RST}"
-    [[ -n "$default" ]] && echo -ne " ${GRAY}[${default}]${RST}"
+    local msg="$1" default="${2:-}"
+    echo -ne "  ${YELLOW}►${RST} ${WHITE}${msg}${RST}" >&2
+    [[ -n "$default" ]] && echo -ne " ${GRAY}[${default}]${RST}" >&2
     echo -ne " : ${RST}" >&2
-    read -r var
-    [[ -z "$var" && -n "$default" ]] && var="$default"
-    echo "$var"
+    IFS= read -r __prompt_result
+    [[ -z "$__prompt_result" && -n "$default" ]] && __prompt_result="$default"
+    return 0
 }
 _confirm() {
     local msg="$1"
@@ -330,12 +331,12 @@ create_license() {
     echo
     echo -e "  ${BLUE}═══${RST} ${WHITE}CRÉER UNE LICENCE${RST} ${BLUE}═══${RST}"
     echo
-    name=$(_prompt "Client / Slogan" "")
+    _prompt "Client / Slogan" ""; name=$__prompt_result
     [[ -z "$name" ]] && { _err "Nom requis."; return 1; }
 
-    phone=$(_prompt "Téléphone" "")
-    email=$(_prompt "Email" "")
-    notes=$(_prompt "Notes" "")
+    _prompt "Téléphone" ""; phone=$__prompt_result
+    _prompt "Email" ""; email=$__prompt_result
+    _prompt "Notes" ""; notes=$__prompt_result
 
     echo -e "  ${YELLOW}►${RST} ${WHITE}Durée :${RST}"
     local durations=("1 jour" "3 jours" "7 jours" "15 jours" "30 jours" "60 jours" "90 jours" "180 jours" "365 jours" "Illimité")
@@ -345,7 +346,7 @@ create_license() {
         printf "    ${CYAN}%2d${RST}) ${WHITE}%s${RST}\n" $((i+1)) "${durations[$i]}"
     done
     local choice
-    choice=$(_prompt "Choix" "5")
+    _prompt "Choix" "5"; choice=$__prompt_result
     [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#dvals[@]} )) || choice=5
     days=${dvals[$((choice-1))]}
 
@@ -377,7 +378,7 @@ create_license() {
 # --- Supprimer (soft delete) --------------------------------------------------
 delete_license() {
     local uuid
-    uuid=$(_prompt "UUID de la licence à supprimer")
+    _prompt "UUID de la licence à supprimer"; uuid=$__prompt_result
     local exists
     exists=$(_sql "SELECT uuid FROM licenses WHERE uuid='$uuid' AND status != 'DELETED';")
     [[ -z "$exists" ]] && { _err "Licence introuvable ou déjà supprimée."; _press_enter; return 1; }
@@ -395,7 +396,7 @@ delete_license() {
 # --- Suspendre ----------------------------------------------------------------
 suspend_license() {
     local uuid
-    uuid=$(_prompt "UUID de la licence à suspendre")
+    _prompt "UUID de la licence à suspendre"; uuid=$__prompt_result
     local name
     name=$(_sql "SELECT client_name FROM licenses WHERE uuid='$uuid' AND status='ACTIVE';")
     [[ -z "$name" ]] && { _err "Licence active introuvable."; _press_enter; return 1; }
@@ -408,7 +409,7 @@ suspend_license() {
 # --- Réactiver ----------------------------------------------------------------
 reactivate_license() {
     local uuid
-    uuid=$(_prompt "UUID de la licence à réactiver")
+    _prompt "UUID de la licence à réactiver"; uuid=$__prompt_result
     local name
     name=$(_sql "SELECT client_name FROM licenses WHERE uuid='$uuid' AND status='SUSPENDED';")
     [[ -z "$name" ]] && { _err "Licence suspendue introuvable."; _press_enter; return 1; }
@@ -429,7 +430,7 @@ reactivate_license() {
 # --- Renouveler ---------------------------------------------------------------
 renew_license() {
     local uuid days
-    uuid=$(_prompt "UUID de la licence à renouveler")
+    _prompt "UUID de la licence à renouveler"; uuid=$__prompt_result
     local name expires_at status
     name=$(_sql "SELECT client_name FROM licenses WHERE uuid='$uuid' AND status NOT IN ('DELETED','BANNED');")
     [[ -z "$name" ]] && { _err "Licence introuvable."; _press_enter; return 1; }
@@ -445,7 +446,7 @@ renew_license() {
         printf "    ${CYAN}%2d${RST}) ${WHITE}%s${RST}\n" $((i+1)) "${durations[$i]}"
     done
     local choice
-    choice=$(_prompt "Choix" "3")
+    _prompt "Choix" "3"; choice=$__prompt_result
     [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#dvals[@]} )) || choice=3
     days=${dvals[$((choice-1))]}
 
@@ -465,13 +466,13 @@ renew_license() {
 # --- Prolonger ----------------------------------------------------------------
 extend_license() {
     local uuid extra
-    uuid=$(_prompt "UUID de la licence à prolonger")
+    _prompt "UUID de la licence à prolonger"; uuid=$__prompt_result
     local name expires_at
     name=$(_sql "SELECT client_name FROM licenses WHERE uuid='$uuid' AND status NOT IN ('DELETED','BANNED');")
     [[ -z "$name" ]] && { _err "Licence introuvable."; _press_enter; return 1; }
     expires_at=$(_sql "SELECT expires_at FROM licenses WHERE uuid='$uuid';")
     echo -e "  ${ICON_INFO} Client : ${WHITE}${name}${RST}, expire actuellement le ${WHITE}${expires_at}${RST}"
-    extra=$(_prompt "Jours supplémentaires" "30")
+    _prompt "Jours supplémentaires" "30"; extra=$__prompt_result
     _valid_days "$extra" || { _err "Nombre de jours invalide."; _press_enter; return 1; }
 
     local current_expires new_expires
@@ -498,7 +499,8 @@ extend_license() {
 _license_card() {
     local uuid="$1" key="$2" name="$3" phone="$4" email="$5"
     local notes="$6" status="$7" created_at="$8" expires_at="$9"
-    local activated_at="${10}" last_checkin="${11}"
+    shift 9
+    local activated_at="${1:-}" last_checkin="${2:-}"
 
     local remaining sstatus
     if [[ "$expires_at" == "9999-12-31" ]]; then
@@ -634,7 +636,7 @@ search_licenses() {
     echo -e "  ${BLUE}═══${RST} ${WHITE}RECHERCHER UNE LICENCE${RST} ${BLUE}═══${RST}"
     echo
     local term
-    term=$(_prompt "Terme (nom, UUID, email, téléphone)")
+    _prompt "Terme (nom, UUID, email, téléphone)"; term=$__prompt_result
     [[ -z "$term" ]] && { _info "Annulé."; _press_enter; return; }
     local escaped
     escaped=$(_sql_escape "$term")
@@ -719,9 +721,9 @@ export_licenses() {
     echo -e "    ${CYAN}1${RST}) ${WHITE}JSON${RST}"
     echo -e "    ${CYAN}2${RST}) ${WHITE}CSV${RST}"
     local choice
-    choice=$(_prompt "Format" "1")
+    _prompt "Format" "1"; choice=$__prompt_result
     local outfile
-    outfile=$(_prompt "Fichier de sortie" "/tmp/ventes-export-$(_today).json")
+    _prompt "Fichier de sortie" "/tmp/ventes-export-$(_today).json"; outfile=$__prompt_result
 
     case "$choice" in
         2)
@@ -743,7 +745,7 @@ import_licenses() {
     echo -e "  ${BLUE}═══${RST} ${WHITE}IMPORTER DES LICENCES${RST} ${BLUE}═══${RST}"
     echo
     local infile
-    infile=$(_prompt "Fichier à importer (JSON)")
+    _prompt "Fichier à importer (JSON)"; infile=$__prompt_result
     [[ -f "$infile" ]] || { _err "Fichier introuvable."; _press_enter; return 1; }
 
     _confirm "Cela va ajouter les licences du fichier. Continuer ?" || { _info "Annulé."; _press_enter; return; }
@@ -874,7 +876,7 @@ restore_backup() {
 
     echo
     local choice
-    choice=$(_prompt "Choisissez une sauvegarde" "1")
+    _prompt "Choisissez une sauvegarde" "1"; choice=$__prompt_result
     [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= i )) || { _err "Choix invalide."; _press_enter; return; }
     local chosen="${backups[$((choice-1))]}"
 
@@ -1037,7 +1039,7 @@ show_audit_log() {
     echo -e "  ${BLUE}═══${RST} ${WHITE}JOURNAL D'ACTIVITÉS${RST} ${BLUE}═══${RST}"
     echo
     local n
-    n=$(_prompt "Nombre de lignes" "30")
+    _prompt "Nombre de lignes" "30"; n=$__prompt_result
     [[ "$n" =~ ^[0-9]+$ ]] || n=30
     echo
     local IFS=$'\n'
@@ -1219,7 +1221,7 @@ _menu_licenses() {
             9) list_licenses "status='EXPIRED' OR (expires_at < '$(_today)' AND expires_at != '9999-12-31' AND status='ACTIVE')" "LICENCES EXPIRÉES" ;;
             10)
                 local uuid
-                uuid=$(_prompt "UUID ou nom du client")
+                _prompt "UUID ou nom du client"; uuid=$__prompt_result
                 if [[ -n "$uuid" ]]; then
                     local row
                     row=$(_sql "SELECT uuid FROM licenses WHERE uuid='$uuid' OR client_name LIKE '%$(_sql_escape "$uuid")%' LIMIT 1;")
