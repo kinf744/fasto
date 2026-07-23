@@ -162,7 +162,7 @@ BOLD=$'\e[1m'
 RESET=$'\e[0m'
 
 VERSION="V3.9.9"
-_client_name() { local n; n=$(cat /etc/kighmu/.client_name 2>/dev/null || echo "---"); printf '%s' "Verified - ${n} ©"; }
+_client_name() { local n; n=$(cat /etc/kighmu/.client_name 2>/dev/null || echo "---"); printf '%s' "Verified - ${n} tech tutorials oficial ©"; }
 
 # ==============================================================================
 #  HELPERS DE RENDU DYNAMIQUE (réutilisés par TOUS les écrans)
