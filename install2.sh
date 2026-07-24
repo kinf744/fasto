@@ -874,7 +874,7 @@ scr_online_details() {
 scr_protocol_installer() {
     clear
     # Détection réelle par protocole
-    local s_ssh s_ws s_ssl s_xray s_v2ray s_badvpn s_udpcustom s_hyst s_zivpn s_slowdns
+    local s_ssh s_ws s_ssl s_xray s_v2ray s_badvpn s_udpcustom s_hyst s_zivpn s_slowdns s_haproxy
     proto_on sshd dropbear dropbear-custom && s_ssh=on || s_ssh=off
     proto_on sshws ws-epro            && s_ws=on     || s_ws=off
     proto_on ssl_tls stunnel4         && s_ssl=on    || s_ssl=off
@@ -884,7 +884,8 @@ scr_protocol_installer() {
     proto_on udp-custom               && s_udpcustom=on || s_udpcustom=off
     proto_on hysteria hysteria-server && s_hyst=on   || s_hyst=off
     proto_on zivpn                    && s_zivpn=on  || s_zivpn=off
-    proto_on slowdns                  && s_slowdns=on || s_slowdns=off
+    proto_on slowdns-router slowdns-ns4 slowdns-nv4 && s_slowdns=on || s_slowdns=off
+    proto_on haproxy && s_haproxy=on || s_haproxy=off
 
     # rend une paire "[STATUT] ⇨ [Action]" alignée
     _pi_line() {
@@ -923,8 +924,7 @@ scr_protocol_installer() {
     p5=$(_pi_line 05 "${p_labels[4]}" "$s_v2ray"  "$pw")
     p6=$(_pi_line 06 "${p_labels[5]}" "$s_badvpn" "$pw")
     p7=$(_pi_line 07 "${p_labels[6]}" "$s_udpcustom" "$pw")
-    # SLOWDNS : pas une bascule → [!] + Configure
-    p8=$(printf " ${GREEN}[08]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  ${RED}[!]${RESET}    ${YELLOW}⇨${RESET} ${CYAN}Configure${RESET}" "$pw" "${p_labels[7]}")
+    p8=$(_pi_line 08 "${p_labels[7]}" "$s_slowdns" "$pw")
     p9=$(_pi_line 09 "${p_labels[8]}" "$s_hyst"   "$pw")
     p10=$(_pi_line 10 "${p_labels[9]}" "$s_zivpn"  "$pw")
     p11=$(printf " ${GREEN}[11]${RESET} ${YELLOW}⇨${RESET} ${GREEN}%s${RESET}" "${p_labels[10]}")
@@ -949,7 +949,7 @@ scr_protocol_installer() {
         "$p12"
         "%SEP%"
         " ${YELLOW}○${RESET} ${GRAY}Dependencies (auto-installed with Xray):${RESET}"
-        " ${YELLOW}○${RESET} ${GRAY}HAProxy .......... included    (TLS 443 / NTLS 8880)${RESET}"
+        " ${YELLOW}○${RESET} ${WHITE}HAProxy${RESET} $([[ "$s_haproxy" == "on" ]] && echo "${GREEN}[ON]${RESET}" || echo "${RED}[OFF]${RESET}")          ${GRAY}(TLS 443 / NTLS 8880)${RESET}"
         "%SEP%"
         " ${BTNBG} [0] ⇦ [ BACK TO MAIN MENU ] ${RESET}"
         "%SEP%"
