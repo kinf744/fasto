@@ -311,6 +311,17 @@ count_ssh_online() {
     (( total < w )) && total=$w
     echo $total
 }
+count_udpcustom_online() {
+    local c=0
+    c=$(conntrack -L -p udp --dport 36712 2>/dev/null | grep -cF 'ESTABLISHED')
+    if (( c == 0 )); then
+        c=$(ss -unp "( dport = :36712 )" 2>/dev/null | awk 'NR>1{print $5}' | grep -cv ':36712$' 2>/dev/null || echo 0)
+    fi
+    echo $c
+}
+count_total_online() {
+    echo $(( $(count_ssh_online) + $(count_udpcustom_online) ))
+}
 # Détail par utilisateur (username|source_ip|since_epoch), une ligne par session
 ssh_online_detail() {
     who 2>/dev/null | awk '
@@ -443,30 +454,37 @@ scr_main() {
 
     # -- Données réelles recalculées à chaque affichage --
     local ONL EXP KILL TOT OS ARCH CORES IP DT
-    ONL=$(count_ssh_online); EXP=$(count_expired); KILL=$(count_locked); TOT=$(count_total_users)
+    ONL=$(count_total_online); EXP=$(count_expired); KILL=$(count_locked); TOT=$(count_total_users)
     OS=$(get_os); ARCH=$(get_arch); CORES=$(get_cores); IP=$(get_ip); DT=$(get_datetime)
 
     local RT RF RU RPCT CPCT BUF
     RT=$(ram_total_g); RF=$(ram_free_g); RU=$(ram_used_g)
     RPCT=$(ram_pct); CPCT=$(cpu_pct); BUF=$(ram_buffer_m)
 
-    # -- Grille de protocoles (tableau nom:port, colonnes dynamiques) --
+    # -- Grille de protocoles (tableau nom:port:service, colonnes dynamiques) --
+    # service = nom systemd ou 'sshd' (toujours actif)
     local ports=(
-        "SSH:22"            "Dropbear:109"      "V2Ray-DNS:5401"
-        "HAProxy:447"       "SSH-WS:80"         "SSH-SSL:444"
-        "Xray:8880/443"     "SlowDNS:5300"      "ZIVPN:5667"
-        "Hysteria:20000"    "BadVPN:7100-7300"  "UDP-Custom:36712"
+        "SSH:22:sshd"            "Dropbear:109:dropbear-custom"      "V2Ray-DNS:5401:v2ray"
+        "HAProxy:447:haproxy"       "SSH-WS:80:sshws"         "SSH-SSL:444:ssl_tls"
+        "Xray:8880/443:xray"     "SlowDNS:5300:slowdns"      "ZIVPN:5667:zivpn"
+        "Hysteria:20000:hysteria"    "BadVPN:7100-7300:badvpn-udpgw"  "UDP-Custom:36712:udp-custom"
     )
-    # largeur de colonne = plus long "NAME: PORT" du tableau
-    local cw=0 p nm pr disp
+    local cw=0 p nm pr svc dot
     for p in "${ports[@]}"; do
-        nm=${p%%:*}; pr=${p#*:}; disp="${nm}: ${pr}"
+        IFS=: read -r nm pr svc <<< "$p"
+        disp="${nm}: ${pr}"
         (( ${#disp} > cw )) && cw=${#disp}
     done
     local pg=() row="" i=0
     for p in "${ports[@]}"; do
-        nm=${p%%:*}; pr=${p#*:}; disp="${nm}: ${pr}"
-        row+=$(printf " ${YELLOW}○${RESET} ${WHITE}%-*s${RESET} " "$cw" "$disp")
+        IFS=: read -r nm pr svc <<< "$p"
+        disp="${nm}: ${pr}"
+        if [[ "$svc" == "sshd" ]] || systemctl is-active --quiet "$svc" 2>/dev/null; then
+            dot="${GREEN}●${RESET}"
+        else
+            dot="${RED}○${RESET}"
+        fi
+        row+=$(printf " ${dot} ${WHITE}%-*s${RESET} " "$cw" "$disp")
         (( i++ ))
         if (( i % 3 == 0 )); then pg+=("$row"); row=""; fi
     done
@@ -499,7 +517,6 @@ scr_main() {
     local L=( "%SEP%" )
     local bl
     for bl in "${BANNER_LINES[@]}"; do L+=( "${CYAN}${bl}${RESET}" ); done
-    L+=( "           ${WHITE}👤 $(_client_name)${RESET}" )
     L+=(
         "%SEP%"
         " ${YELLOW}○${RESET} ${WHITE}ONLINES:${RESET} ${GREEN}[${ONL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}EXP:${RESET} ${RED}[${EXP}]${RESET}  ${GRAY}•${RESET}  ${WHITE}KILL:${RESET} ${RED}[${KILL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}TOTAL:${RESET} ${WHITE}[${TOT}]${RESET}"
@@ -551,7 +568,7 @@ push_header() {
 scr_manage_users() {
     clear
     local TOT ONL EXP
-    TOT=$(count_total_users); ONL=$(count_ssh_online); EXP=$(count_expired)
+    TOT=$(count_total_users); ONL=$(count_total_online); EXP=$(count_expired)
     local L=()
     push_header L full " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}MANAGE USERS${RESET}"
     L+=(
@@ -588,7 +605,7 @@ _user_subpanel() {
         " ${YELLOW}○${RESET} ${subtitle}"
     # Bandeau de stats (avec ou sans ONLINE)
     if [[ "$show_online" == "1" ]]; then
-        ONL=$(count_ssh_online)
+ONL=$(count_total_online)
         L+=( " ${YELLOW}○${RESET} ${WHITE}TOTAL ${statlabel} USERS:${RESET} ${WHITE}[${TOT}]${RESET}     ${YELLOW}○${RESET} ${WHITE}ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}     ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}" )
     else
         L+=( " ${YELLOW}○${RESET} ${WHITE}TOTAL ${statlabel} USERS:${RESET} ${WHITE}[${TOT}]${RESET}     ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}" )
@@ -736,7 +753,7 @@ scr_optimize() {
 scr_online_counter() {
     clear
     local ONL ITV ST_AUTO
-    ONL=$(count_ssh_online)
+    ONL=$(count_total_online)
     ITV=$(refresh_interval)
     ST_AUTO=$(flag_status online_counter)
 
@@ -762,13 +779,13 @@ scr_online_counter() {
     # Bandeau REFRESH : AUTO (Xs) si activé, sinon MANUAL
     local refline
     if [[ "$ST_AUTO" == *"[ON]"* ]]; then
-        refline=" ${YELLOW}○${RESET} ${WHITE}SSH ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}          ${YELLOW}○${RESET} ${WHITE}REFRESH:${RESET} ${GREEN}AUTO (${ITV}s)${RESET}"
+        refline=" ${YELLOW}○${RESET} ${WHITE}DEVICES ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}          ${YELLOW}○${RESET} ${WHITE}REFRESH:${RESET} ${GREEN}AUTO (${ITV}s)${RESET}"
     else
-        refline=" ${YELLOW}○${RESET} ${WHITE}SSH ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}          ${YELLOW}○${RESET} ${WHITE}REFRESH:${RESET} ${GRAY}MANUAL${RESET}"
+        refline=" ${YELLOW}○${RESET} ${WHITE}DEVICES ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}          ${YELLOW}○${RESET} ${WHITE}REFRESH:${RESET} ${GRAY}MANUAL${RESET}"
     fi
 
     local L=()
-    push_header L full " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}ONLINE USERS COUNTER${RESET}"
+    push_header L full " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}DEVICES ONLINE COUNTER${RESET}"
     L+=(
         "$refline"
         "%SEP%"
@@ -3057,7 +3074,7 @@ oc_export() {
     local dir="/var/log/kighmu" f
     mkdir -p "$dir"; f="$dir/online-$(date '+%Y%m%d-%H%M%S').log"
     { echo "# Kighmu online snapshot $(date '+%Y-%m-%d %H:%M:%S')";
-      echo "# SSH online: $(count_ssh_online 2>/dev/null || echo 0)";
+      echo "# SSH online: $(count_total_online 2>/dev/null || echo 0)";
       ssh_online_detail 2>/dev/null || true; } > "$f"
     _msg_ok "Export écrit : $f"; press_enter
 }
