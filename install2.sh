@@ -2162,7 +2162,7 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func main() {
-	listen := getEnv("LISTEN", "0.0.0.0:53")
+	listen := getEnv("LISTEN", "0.0.0.0:5300")
 	timeout := time.Duration(getEnvInt("TIMEOUT", 5)) * time.Second
 	verbose := os.Getenv("VERBOSE") == "1"
 	routesDef := getEnv("ROUTES", "")
@@ -2287,7 +2287,7 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 Type=simple
-Environment=LISTEN=0.0.0.0:53
+Environment=LISTEN=0.0.0.0:5300
 Environment=ROUTES=$NS4=127.0.0.1:5353,$NV4=127.0.0.1:5354
 Environment=TIMEOUT=5
 ExecStart=/usr/local/bin/slowdns-router
@@ -2300,7 +2300,7 @@ WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload && systemctl enable --now slowdns-router.service 2>/dev/null || true
 
-    deploy_nft_tunnel slowdns 'table inet slowdns { chain prerouting { type nat hook prerouting priority -100; }; chain input { type filter hook input priority 0; policy accept; udp dport 53 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }'
+    deploy_nft_tunnel slowdns 'table inet slowdns { chain prerouting { type nat hook prerouting priority -100; }; chain input { type filter hook input priority 0; policy accept; udp dport 5300 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }' 109 accept; tcp dport 5401 accept; }; }'
     chattr -i /etc/resolv.conf 2>/dev/null || true
     printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
     chattr +i /etc/resolv.conf 2>/dev/null || true
