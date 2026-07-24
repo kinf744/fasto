@@ -466,8 +466,8 @@ scr_main() {
     local ports=(
         "SSH:22:sshd"            "Dropbear:109:dropbear-custom"      "V2Ray-DNS:5401:v2ray"
         "HAProxy:447:haproxy"       "SSH-WS:80:sshws"         "SSH-SSL:444:ssl_tls"
-        "Xray:8880/443:xray"     "SlowDNS:5300:slowdns"      "ZIVPN:5667:zivpn"
-        "Hysteria:20000:hysteria"    "BadVPN:7100-7300:badvpn-udpgw"  "UDP-Custom:36712:udp-custom"
+        "Xray:8880/443:xray"     "SlowDNS:5300:slowdns-router"      "ZIVPN:5667:zivpn"
+        "Hysteria:20000:hysteria"    "BadVPN:7100-7300:badvpn@7100"  "UDP-Custom:36712:udp-custom"
     )
     local cw=0 p nm pr svc dot
     for p in "${ports[@]}"; do
