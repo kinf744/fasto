@@ -2301,7 +2301,9 @@ UNIT
     systemctl daemon-reload && systemctl enable --now slowdns-router.service 2>/dev/null || true
 
 
-    deploy_nft_tunnel slowdns 'table inet slowdns { chain prerouting { type nat hook prerouting priority -100; udp dport 53 dnat ip to 127.0.0.1:5300; }; chain input { type filter hook input priority 0; policy accept; udp dport 53 accept; udp dport 5300 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }'
+    iptables -I INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || true
+    iptables -t nat -I PREROUTING -i eth0 -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || true
+    deploy_nft_tunnel slowdns 'table inet slowdns { chain input { type filter hook input priority 0; policy accept; udp dport 53 accept; udp dport 5300 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }'
     chattr -i /etc/resolv.conf 2>/dev/null || true
     printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
     chattr +i /etc/resolv.conf 2>/dev/null || true
@@ -2313,7 +2315,8 @@ uninstall_slowdns() {
     rm -f /etc/systemd/system/slowdns-ns4.service /etc/systemd/system/slowdns-nv4.service /etc/systemd/system/slowdns-router.service
     rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-router /usr/local/bin/slowdns-ns4-start.sh /usr/local/bin/slowdns-nv4-start.sh
     rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router
-    systemctl daemon-reload; remove_nft_tunnel slowdns
+    systemctl daemon-reload; remove_nft_tunnel slowdns; iptables -D INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i eth0 -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null || true
     chattr -i /etc/resolv.conf 2>/dev/null || true
     log "SlowDNS supprimé"; pause
 }
