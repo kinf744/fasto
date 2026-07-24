@@ -296,29 +296,28 @@ pct_color() { local p=$1; if (( p > 90 )); then echo -e "${RED}${p}%${RESET}"; e
 # Couvre WS/SSL/SlowDNS qui aboutissent tous sur sshd(22) ou dropbear(109),
 # donc aucun double comptage.
 _openssh_sessions() {
-    ps -eo cmd= 2>/dev/null | grep -cE '^sshd(-session)?: [^ ]+(@[^ ]+)?$'
+    ps -eo cmd= 2>/dev/null | grep -cE '^sshd(-session)?: [^ ]+@'
 }
 _dropbear_sessions() {
     local t; t=$(pgrep -x dropbear 2>/dev/null | wc -l)
-    (( t > 0 )) && echo $(( t - 1 )) || echo 0
+    (( t > 1 )) && echo $(( t - 1 )) || echo 0
+}
+_sshws_sessions() {
+    who 2>/dev/null | awk '$2 ~ /pts\//' | wc -l
 }
 count_ssh_online() {
-    local o d; o=$(_openssh_sessions); d=$(_dropbear_sessions)
-    echo $(( o + d ))
+    local o d w; o=$(_openssh_sessions); d=$(_dropbear_sessions); w=$(_sshws_sessions)
+    local total=$(( o + d ))
+    (( total < w )) && total=$w
+    echo $total
 }
-# Détail par utilisateur (username|since_epoch), une ligne par session
+# Détail par utilisateur (username|source_ip|since_epoch), une ligne par session
 ssh_online_detail() {
-    ps -eo pid=,lstart=,cmd= 2>/dev/null | awk '
-        {
-            # champs 1=pid, 2..6=lstart (Www Mmm dd HH:MM:SS YYYY), 7+=cmd
-            pid=$1
-            cmd=""
-            for(i=7;i<=NF;i++){cmd=cmd (i>7?" ":"") $i}
-            if (cmd ~ /^sshd(-session)?: [^ ]+(@[^ ]+)?$/) {
-                u=cmd; sub(/^sshd(-session)?: /,"",u); sub(/@.*/,"",u)
-                since=$2" "$3" "$4" "$5" "$6
-                print u"|"since
-            }
+    who 2>/dev/null | awk '
+        /^[a-zA-Z0-9._-]/ {
+            user=$1; tty=$2; src=""; for(i=3;i<=NF;i++){if($i ~ /\(.*\)/){src=substr($i,2,length($i)-2); break}}
+            if (src=="") src="local"
+            if (tty ~ /^pts\//) print user"|"src
         }'
 }
 count_ssh_total() { awk -F: '$3>=1000 && $7 ~ /(bash|sh)$/ {n++} END{print n+0}' /etc/passwd; }
@@ -1422,6 +1421,14 @@ create_user() {
             [[ -z "$pass" ]] && pass=$(gen_pass)
             echo "$user:$pass" | chpasswd 2>/dev/null || return 3
             write_meta "$user" ssh "$exp" "${limit:-1}" "$pass" "" "" "$quota"
+            local slowdns_ns
+            slowdns_ns=$(cat /etc/slowdns/ns.conf 2>/dev/null || echo "")
+            if [[ -n "$slowdns_ns" ]]; then
+                local host_ip; host_ip=$(get_ip)
+                local dom; dom=$(get_domain)
+                local uline="${user}|${pass}|${limit:-1}|${exp}|${host_ip}|${dom}|${slowdns_ns}"
+                echo "$uline" >> /etc/kighmu/users.list 2>/dev/null || true
+            fi
             ;;
         vmess|vless)
             uuid=$(gen_uuid)
@@ -1463,7 +1470,8 @@ delete_user() {
     _meta_exists "$user" || return 2
     proto=$(_meta_get "$user" proto)
     case "$proto" in
-        ssh) userdel -f "$user" 2>/dev/null || true ;;
+        ssh) userdel -f "$user" 2>/dev/null || true
+             sed -i "/^${user}|/d" /etc/kighmu/users.list 2>/dev/null || true ;;
         vmess|vless|trojan) xray_del_user "$user"; xray_reload ;;
         zivpn) rm -f "$USERDIR/$user"; zivpn_apply 2>/dev/null || true ;;
         hysteria) rm -f "$USERDIR/$user"; hysteria_apply 2>/dev/null || true ;;
@@ -1840,6 +1848,7 @@ hysteria_apply() { _json_reload_passwords "$HY_CONFIG"    "$HY_SERVICE"    hyste
 v2raydns_apply() {
     [[ -f "$V2RAY_CONFIG" ]] || return 0
     local today f uuid exp clients tmp; today=$(date +%Y-%m-%d); clients="[]"
+    local users_json="/etc/v2ray/users.json"
     for f in "$USERDIR"/*; do
         [[ -f "$f" ]] || continue
         [[ "$(grep -oP '^proto=\K.*' "$f" 2>/dev/null)" == "v2raydns" ]] || continue
@@ -1848,6 +1857,7 @@ v2raydns_apply() {
         uuid=$(grep -oP '^uuid=\K.*' "$f" 2>/dev/null); [[ -z "$uuid" ]] && continue
         clients=$(echo "$clients" | jq --arg id "$uuid" --arg em "$(basename "$f")" '. += [{"id":$id,"email":$em,"level":0}]' 2>/dev/null)
     done
+    echo "{\"vless\":$(echo "$clients" | jq '.')}" > "$users_json" 2>/dev/null || true
     tmp=$(mktemp)
     if jq --argjson c "$clients" '.inbounds[0].settings.clients = $c' "$V2RAY_CONFIG" > "$tmp" 2>/dev/null && jq empty "$tmp" >/dev/null 2>&1; then
         mv "$tmp" "$V2RAY_CONFIG"; systemctl restart v2ray 2>/dev/null || true
@@ -1898,13 +1908,19 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload && systemctl enable --now dropbear-custom.service 2>/dev/null || true
+    # Alias pour compatibilité
+    if [[ ! -f /etc/systemd/system/dropbear.service ]]; then
+        ln -sf /etc/systemd/system/dropbear-custom.service /etc/systemd/system/dropbear.service 2>/dev/null || true
+    fi
+    systemctl daemon-reload 2>/dev/null || true
     deploy_nft_tunnel dropbear 'table inet dropbear { chain input { type filter hook input priority 0; policy accept; tcp dport 109 accept; }; }'
     log "Dropbear actif (port 109)"; pause
 }
 
 uninstall_dropbear() {
     systemctl disable --now dropbear-custom.service 2>/dev/null || true
-    rm -f /etc/systemd/system/dropbear-custom.service; rm -rf /etc/dropbear
+    systemctl disable --now dropbear.service 2>/dev/null || true
+    rm -f /etc/systemd/system/dropbear-custom.service /etc/systemd/system/dropbear.service; rm -rf /etc/dropbear
     rm -f /usr/local/sbin/dropbear /usr/local/bin/dropbear*
     remove_nft_tunnel dropbear; systemctl daemon-reload; log "Dropbear supprimé"; pause
 }
@@ -1971,11 +1987,16 @@ WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload && systemctl enable --now sshws.service 2>/dev/null || true
     deploy_nft_tunnel sshws 'table inet sshws { chain input { type filter hook input priority 0; policy accept; tcp dport 80 accept; }; }'
+    # Alias pour compatibilité (ws-epro / ws-dropbear)
+    ln -sf /etc/systemd/system/sshws.service /etc/systemd/system/ws-dropbear.service 2>/dev/null || true
+    ln -sf /etc/systemd/system/sshws.service /etc/systemd/system/ws-epro.service 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
     log "SSH WS actif (port 80 → 109)"; pause
 }
 
 uninstall_sshws() {
-    systemctl disable --now sshws.service 2>/dev/null || true; rm -f /etc/systemd/system/sshws.service
+    systemctl disable --now sshws.service 2>/dev/null || true
+    rm -f /etc/systemd/system/sshws.service /etc/systemd/system/ws-dropbear.service /etc/systemd/system/ws-epro.service
     rm -f /usr/local/bin/sshws; remove_nft_tunnel sshws; systemctl daemon-reload; log "sshws supprimé"; pause
 }
 
@@ -2234,6 +2255,49 @@ uninstall_slowdns() {
     log "SlowDNS supprimé"; pause
 }
 
+configure_slowdns() {
+    clear; echo -e " ${CYAN}━━━ Configuration SlowDNS ━━━${RESET}"
+    local DIR="/etc/slowdns"
+    local NS4_cur NV4_cur
+    NS4_cur=$(cat "$DIR/ns.conf" 2>/dev/null || echo "non défini")
+    NV4_cur=$(cat "$DIR/nv4/ns.conf" 2>/dev/null || echo "non défini")
+    echo -e " ${WHITE}NS4 actuel:${RESET} ${CYAN}$NS4_cur${RESET}"
+    echo -e " ${WHITE}NV4 actuel:${RESET} ${CYAN}$NV4_cur${RESET}"
+    echo
+    read -rp " Nouveau NS4 (laisser vide pour ne pas changer): " new_ns4
+    read -rp " Nouveau NV4 (laisser vide pour ne pas changer): " new_nv4
+    if [[ -n "$new_ns4" && "$new_ns4" != "$NS4_cur" ]]; then
+        echo "$new_ns4" > "$DIR/ns.conf"
+        cat > /usr/local/bin/slowdns-ns4-start.sh << STARTEOF
+#!/bin/bash
+NS=\$(cat $DIR/ns.conf)
+exec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -privkey-file $DIR/server.key \$NS 127.0.0.1:109
+STARTEOF
+        systemctl restart slowdns-ns4 2>/dev/null || true
+        log "NS4 mis à jour: $new_ns4"
+    fi
+    if [[ -n "$new_nv4" && "$new_nv4" != "$NV4_cur" ]]; then
+        mkdir -p "$DIR/nv4"
+        echo "$new_nv4" > "$DIR/nv4/ns.conf"
+        cat > /usr/local/bin/slowdns-nv4-start.sh << STARTEOF
+#!/bin/bash
+NV4=\$(cat $DIR/nv4/ns.conf)
+exec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -privkey-file $DIR/server.key \$NV4 127.0.0.1:5401
+STARTEOF
+        systemctl restart slowdns-nv4 2>/dev/null || true
+        log "NV4 mis à jour: $new_nv4"
+    fi
+    if [[ -n "$new_ns4" || -n "$new_nv4" ]]; then
+        local ns4_final nv4_final
+        ns4_final=$(cat "$DIR/ns.conf")
+        nv4_final=$(cat "$DIR/nv4/ns.conf")
+        sed -i "s|Environment=ROUTES=.*|Environment=ROUTES=${ns4_final}=127.0.0.1:5353,${nv4_final}=127.0.0.1:5354|" /etc/systemd/system/slowdns-router.service 2>/dev/null || true
+        systemctl daemon-reload && systemctl restart slowdns-router 2>/dev/null || true
+        log "Routeur SlowDNS mis à jour"
+    fi
+    echo; press_enter
+}
+
 # ==============================================================================
 #  BADVPN + UDP CUSTOM
 # ==============================================================================
@@ -2448,6 +2512,7 @@ v2ray_gen_config() {
   "routing": {"rules":[{"type":"field","inboundTag":"api","outboundTag":"api"}]}
 }
 V2CONFEOF
+    echo '{"vless":[]}' > /etc/v2ray/users.json
 }
 
 install_v2ray() {
@@ -2486,13 +2551,17 @@ V2SVCEOF
     systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true
     deploy_nft_tunnel v2ray 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 5401 accept; }; }'
     v2raydns_apply
+    (crontab -l 2>/dev/null | grep -v v2ray_watchdog | crontab - 2>/dev/null || true)
+    (crontab -l 2>/dev/null; echo "*/15 * * * * systemctl is-active --quiet v2ray || systemctl restart v2ray >> /var/log/v2ray_watchdog.log 2>&1") | crontab - 2>/dev/null || true
     log "V2Ray-DNS actif (port 5401, VLESS TCP)"; pause
 }
 
 uninstall_v2ray() {
     systemctl stop v2ray 2>/dev/null || true; systemctl disable v2ray 2>/dev/null || true
     rm -f /etc/systemd/system/v2ray.service "$V2RAY_BIN"; rm -rf /etc/v2ray /var/log/v2ray
-    remove_nft_tunnel v2ray; systemctl daemon-reload; log "V2Ray-DNS supprimé"; pause
+    remove_nft_tunnel v2ray; systemctl daemon-reload
+    (crontab -l 2>/dev/null | grep -v v2ray_watchdog | crontab - 2>/dev/null || true)
+    log "V2Ray-DNS supprimé"; pause
 }
 
 # ==============================================================================
@@ -2846,7 +2915,7 @@ proto_action() {   # $1=titre $2=fn_install $3=fn_uninstall
 #  LOGIQUE — OPTIMIZE VPS / ONLINE COUNTER / UPDATE-REMOVE  (section métier #3)
 # ==============================================================================
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo /usr/local/bin/kighmu)"
-SCRIPT_RAW_URL="https://raw.githubusercontent.com/kinf744/Tyiop24/main/install2.sh"
+SCRIPT_RAW_URL="https://raw.githubusercontent.com/kinf744/fasto/main/install2.sh"
 
 # --- horodatage / marqueur d'optimisation ---
 opt_stamp() { mkdir -p "$STATEDIR"; date '+%Y-%m-%d %H:%M' > "$STATEDIR/optimized"; }
@@ -3249,7 +3318,8 @@ menu_protocol_installer() {
             5|05) proto_action "V2RAY-DNS (VLESS TCP 5401)"        install_v2ray       uninstall_v2ray ;;
             6|06) proto_action "BADVPN (UDPGW 7100/7200/7300)"     install_badvpn      uninstall_badvpn ;;
             7|07) proto_action "UDP CUSTOM (36712)"                install_udp_custom  uninstall_udp_custom ;;
-            8|08) proto_action "SLOWDNS (53 → 5353/5354)"          install_slowdns     uninstall_slowdns ;;
+            8|08) clear; echo -e " ${CYAN}1) Install/Repair  2) Uninstall  3) Configure NS  0) Back${RESET}"; read -r a
+            case "$a" in 1) install_slowdns;; 2) uninstall_slowdns;; 3) configure_slowdns;; esac ;;
             9|09) proto_action "HYSTERIA (20000-50000)"            install_hysteria    uninstall_hysteria ;;
             10)   proto_action "ZIVPN (5667 / 6000-19999)"         install_zivpn       uninstall_zivpn ;;
             11)   install_all_missing ;;
@@ -3307,10 +3377,29 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
 fi
 
 case "${1:-}" in
-    --install)  # bootstrap : installe la commande `menu` puis ouvre le panneau
+    --install)  # bootstrap : installe la commande `menu` puis tous les services
         self_install && { clear; echo -e " ${GREEN:-}${WHITE:-}✓ Commande 'menu' installée.${RESET:-}"; sleep 1; }
         _verify_license
         _license_watchdog
+        export SKIP_PAUSE=1
+        command -v /usr/local/sbin/dropbear &>/dev/null || install_ssh_stack
+        command -v sshws &>/dev/null || install_sshws
+        command -v ssl_tls &>/dev/null || install_ssl_tls
+        command -v badvpn-udpgw &>/dev/null || install_badvpn
+        command -v udp-custom &>/dev/null || install_udp_custom
+        command -v dnstt-server &>/dev/null || install_slowdns
+        [[ -x "$XRAY_BIN" ]]  || install_xray
+        [[ -x "$V2RAY_BIN" ]] || install_v2ray
+        [[ -x "$ZIVPN_BIN" ]] || install_zivpn
+        [[ -x "$HY_BIN" ]]    || install_hysteria
+        unset SKIP_PAUSE
+        _secure_permissions
+        store_checksum
+        for svc in dropbear-custom sshws ssl_tls v2ray slowdns-router slowdns-ns4 slowdns-nv4; do
+            if systemctl cat "$svc.service" &>/dev/null 2>&1; then
+                systemctl is-active --quiet "$svc" 2>/dev/null || systemctl restart "$svc" 2>/dev/null || true
+            fi
+        done
         main_menu ;;
     --watchdog) # exécution silencieuse (cron / démarrage) — pas de vérif clé
         _license_watchdog
