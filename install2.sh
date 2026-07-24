@@ -461,7 +461,31 @@ scr_main() {
     RT=$(ram_total_g); RF=$(ram_free_g); RU=$(ram_used_g)
     RPCT=$(ram_pct); CPCT=$(cpu_pct); BUF=$(ram_buffer_m)
 
-    # -- Grille de protocoles (tableau nom:port:service, colonnes dynamiques) --
+    # -- Vérification renforcée : service systemd actif ET port qui écoute --
+_svc_ready() {
+    local svc="$1" port="$2"
+    case "$svc" in
+        sshd) return 0 ;;
+        badvpn@7100)
+            systemctl is-active --quiet badvpn@7100 2>/dev/null && ss -tlnp 2>/dev/null | grep -q ':7100 ' && return 0
+            return 1 ;;
+        badvpn@7200)
+            systemctl is-active --quiet badvpn@7200 2>/dev/null && ss -tlnp 2>/dev/null | grep -q ':7200 ' && return 0
+            return 1 ;;
+        badvpn@7300)
+            systemctl is-active --quiet badvpn@7300 2>/dev/null && ss -tlnp 2>/dev/null | grep -q ':7300 ' && return 0
+            return 1 ;;
+        slowdns-router)
+            systemctl is-active --quiet slowdns-router 2>/dev/null && ss -ulnp 2>/dev/null | grep -q ':5300 ' && return 0
+            return 1 ;;
+        *)
+            systemctl is-active --quiet "$svc" 2>/dev/null || return 1
+            local p="${port%%/*}"
+            ss -tlnp 2>/dev/null | grep -qE ":${p}\b" || ss -ulnp 2>/dev/null | grep -qE ":${p}\b" || return 1
+            return 0 ;;
+    esac
+}
+# -- Grille de protocoles (tableau nom:port:service, colonnes dynamiques) --
     # service = nom systemd ou 'sshd' (toujours actif)
     local ports=(
         "SSH:22:sshd"            "Dropbear:109:dropbear-custom"      "V2Ray-DNS:5401:v2ray"
@@ -479,7 +503,7 @@ scr_main() {
     for p in "${ports[@]}"; do
         IFS=: read -r nm pr svc <<< "$p"
         disp="${nm}: ${pr}"
-        if [[ "$svc" == "sshd" ]] || systemctl is-active --quiet "$svc" 2>/dev/null; then
+        if _svc_ready "$svc" "$pr"; then
             dot="${GREEN}●${RESET}"
         else
             dot="${RED}○${RESET}"
