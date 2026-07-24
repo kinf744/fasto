@@ -336,17 +336,9 @@ create_license() {
 
     phone=""; email=""; notes=""
 
-    echo -e "  ${YELLOW}►${RST} ${WHITE}Durée :${RST}"
-    local durations=("1 jour" "3 jours" "7 jours" "15 jours" "30 jours" "60 jours" "90 jours" "180 jours" "365 jours" "Illimité")
-    local dvals=(1 3 7 15 30 60 90 180 365 0)
-    local i
-    for i in "${!durations[@]}"; do
-        printf "    ${CYAN}%2d${RST}) ${WHITE}%s${RST}\n" $((i+1)) "${durations[$i]}"
-    done
-    local choice
-    _prompt "Choix" "5"; choice=$__prompt_result
-    [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#dvals[@]} )) || choice=5
-    days=${dvals[$((choice-1))]}
+    echo -e "  ${YELLOW}►${RST} ${WHITE}Durée (en jours, 0 = illimité) :${RST}"
+    _prompt "Jours" "30"; days=$__prompt_result
+    [[ "$days" =~ ^[0-9]+$ ]] || days=30
 
     uuid=$(_gen_uuid)
     key=$(_gen_key)
@@ -437,16 +429,9 @@ renew_license() {
 
     echo -e "  ${ICON_INFO} Client : ${WHITE}${name}${RST}, expire le ${WHITE}${expires_at}${RST}, statut : ${WHITE}${status}${RST}"
     echo
-    local durations=("30 jours" "60 jours" "90 jours" "180 jours" "365 jours" "Illimité")
-    local dvals=(30 60 90 180 365 0)
-    local i
-    for i in "${!durations[@]}"; do
-        printf "    ${CYAN}%2d${RST}) ${WHITE}%s${RST}\n" $((i+1)) "${durations[$i]}"
-    done
-    local choice
-    _prompt "Choix" "3"; choice=$__prompt_result
-    [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#dvals[@]} )) || choice=3
-    days=${dvals[$((choice-1))]}
+    echo -e "  ${YELLOW}►${RST} ${WHITE}Nouvelle durée (en jours, 0 = illimité) :${RST}"
+    _prompt "Jours" "30"; days=$__prompt_result
+    [[ "$days" =~ ^[0-9]+$ ]] || days=30
 
     local new_expires
     if [[ "$days" == "0" ]]; then
