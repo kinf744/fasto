@@ -2300,7 +2300,8 @@ WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload && systemctl enable --now slowdns-router.service 2>/dev/null || true
 
-    deploy_nft_tunnel slowdns 'table inet slowdns { chain prerouting { type nat hook prerouting priority -100; }; chain input { type filter hook input priority 0; policy accept; udp dport 5300 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }' 109 accept; tcp dport 5401 accept; }; }'
+
+    deploy_nft_tunnel slowdns 'table inet slowdns { chain prerouting { type nat hook prerouting priority -100; }; chain input { type filter hook input priority 0; policy accept; udp dport 53 accept; udp dport 53 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }'
     chattr -i /etc/resolv.conf 2>/dev/null || true
     printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
     chattr +i /etc/resolv.conf 2>/dev/null || true
@@ -2309,6 +2310,7 @@ UNIT
 
 uninstall_slowdns() {
     for svc in slowdns-ns4 slowdns-nv4 slowdns-router; do systemctl disable --now "$svc" 2>/dev/null || true; done
+    rm -f /etc/systemd/system/slowdns-ns4.service /etc/systemd/system/slowdns-nv4.service /etc/systemd/system/slowdns-router.service /etc/systemd/system/
     rm -f /etc/systemd/system/slowdns-ns4.service /etc/systemd/system/slowdns-nv4.service /etc/systemd/system/slowdns-router.service
     rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-router /usr/local/bin/slowdns-ns4-start.sh /usr/local/bin/slowdns-nv4-start.sh
     rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router
