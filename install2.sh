@@ -255,12 +255,27 @@ STATEDIR="${STATEDIR:-/etc/kighmu/state}"  # bascules de fonctionnalités
 get_os()      { . /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-$(uname -s)}"; }
 get_arch()    { uname -m; }
 get_cores()   { nproc 2>/dev/null || echo 1; }
-get_ip()      {
+get_ipv4()    {
     local ip
-    ip=$(curl -s --max-time 2 ifconfig.me 2>/dev/null)
-    [[ -z "$ip" ]] && ip=$(curl -s --max-time 2 ipinfo.io/ip 2>/dev/null)
+    ip=$(curl -4 -s --max-time 2 ifconfig.me 2>/dev/null)
+    [[ -z "$ip" ]] && ip=$(curl -4 -s --max-time 2 ipinfo.io/ip 2>/dev/null)
+    [[ -z "$ip" ]] && ip=$(ip -4 addr show 2>/dev/null | grep -oP 'inet \K[\d.]+' | grep -v '^127\.' | head -1)
     [[ -z "$ip" ]] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     printf '%s' "${ip:-N/A}"
+}
+get_ipv6()    {
+    local ip
+    ip=$(curl -6 -s --max-time 2 ifconfig.me 2>/dev/null)
+    [[ -z "$ip" ]] && ip=$(curl -6 -s --max-time 2 ipinfo.io/ip 2>/dev/null)
+    [[ -z "$ip" ]] && ip=$(ip -6 addr show 2>/dev/null | grep -oP 'inet6 \K[\da-f:]+' | grep -v '^::1\|^fe80\|^fd' | head -1)
+    printf '%s' "${ip:-}"
+}
+get_ip()      { get_ipv4; }
+get_primary_ip() {
+    local v4 v6
+    v4=$(get_ipv4); v6=$(get_ipv6)
+    [[ -n "$v6" ]] && printf '%s' "$v6" && return
+    printf '%s' "$v4"
 }
 get_datetime() { date '+%Y-%m-%d %H:%M:%S'; }
 
@@ -1870,6 +1885,10 @@ net.ipv4.ip_forward=1
 net.ipv4.udp_mem=102400 873800 16777216
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_mtu_probing=1
+net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.all.accept_ra=2
+net.ipv6.conf.all.autoconf=1
+net.ipv6.conf.all.disable_ipv6=0
 SYSEOF
     sysctl -p >/dev/null 2>&1 || true
     local IFACE; IFACE=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
@@ -2089,12 +2108,12 @@ install_slowdns() {
     cat > /usr/local/bin/slowdns-ns4-start.sh << STARTEOF
 #!/bin/bash
 NS=\$(cat $DIR/ns.conf)
-exec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -privkey-file $DIR/server.key \$NS 127.0.0.1:109
+exec /usr/local/bin/dnstt-server -udp :5353 -privkey-file $DIR/server.key \$NS 127.0.0.1:109
 STARTEOF
     cat > /usr/local/bin/slowdns-nv4-start.sh << STARTEOF
 #!/bin/bash
 NV4=\$(cat $DIR/nv4/ns.conf)
-exec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -privkey-file $DIR/server.key \$NV4 127.0.0.1:5401
+exec /usr/local/bin/dnstt-server -udp :5354 -privkey-file $DIR/server.key \$NV4 127.0.0.1:5401
 STARTEOF
     chmod +x /usr/local/bin/slowdns-ns4-start.sh /usr/local/bin/slowdns-nv4-start.sh
 
@@ -2162,7 +2181,7 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func main() {
-	listen := getEnv("LISTEN", "0.0.0.0:5300")
+	listen := getEnv("LISTEN", ":5300")
 	timeout := time.Duration(getEnvInt("TIMEOUT", 5)) * time.Second
 	verbose := os.Getenv("VERBOSE") == "1"
 	routesDef := getEnv("ROUTES", "")
@@ -2175,14 +2194,14 @@ func main() {
 		eq := strings.IndexByte(part, '=')
 		if eq < 1 { log.Fatalf("invalid route %q", part) }
 		domain := strings.ToLower(strings.TrimSuffix(part[:eq], "."))
-		addr, err := net.ResolveUDPAddr("udp4", part[eq+1:])
+		addr, err := net.ResolveUDPAddr("udp", part[eq+1:])
 		if err != nil { log.Fatalf("resolve: %v", err) }
 		routes = append(routes, route{domain: domain, addr: addr})
 	}
 
 	var st stats; st.routed = make(map[string]int64)
-	laddr, _ := net.ResolveUDPAddr("udp4", listen)
-	conn, err := net.ListenUDP("udp4", laddr)
+	laddr, _ := net.ResolveUDPAddr("udp", listen)
+	conn, err := net.ListenUDP("udp", laddr)
 	if err != nil { log.Fatalf("listen: %v", err) }
 	defer conn.Close()
 
@@ -2248,7 +2267,7 @@ func extractQName(packet []byte) (string, error) {
 }
 
 func forward(packet []byte, backend *net.UDPAddr, timeout time.Duration) ([]byte, error) {
-	bc, err := net.DialUDP("udp4", nil, backend)
+	bc, err := net.DialUDP("udp", nil, backend)
 	if err != nil { return nil, err }
 	defer bc.Close()
 	bc.SetDeadline(time.Now().Add(timeout))
@@ -2287,7 +2306,7 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 Type=simple
-Environment=LISTEN=0.0.0.0:5300
+Environment=LISTEN=:5300
 Environment=ROUTES=$NS4=127.0.0.1:5353,$NV4=127.0.0.1:5354
 Environment=TIMEOUT=5
 ExecStart=/usr/local/bin/slowdns-router
@@ -2301,9 +2320,10 @@ UNIT
     systemctl daemon-reload && systemctl enable --now slowdns-router.service 2>/dev/null || true
 
 
-    deploy_nft_tunnel slowdns 'table inet slowdns { chain prerouting { type nat hook prerouting priority -100; iif "eth0" udp dport 53 redirect to :5300; }; chain input { type filter hook input priority 0; policy accept; udp dport 53 accept; udp dport 5300 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }'
+    local IFACE; IFACE=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1); IFACE=${IFACE:-eth0}
+    deploy_nft_tunnel slowdns "table inet slowdns { chain prerouting { type nat hook prerouting priority -100; iif \"$IFACE\" udp dport 53 redirect to :5300; }; chain input { type filter hook input priority 0; policy accept; udp dport 53 accept; udp dport 5300 accept; udp dport 5353 accept; udp dport 5354 accept; tcp dport 109 accept; tcp dport 5401 accept; }; }"
     chattr -i /etc/resolv.conf 2>/dev/null || true
-    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 2606:4700:4700::1111\nnameserver 2001:4860:4860::8888\n' > /etc/resolv.conf
     chattr +i /etc/resolv.conf 2>/dev/null || true
     log "SlowDNS actif  —  NS4: $NS4 → SSH(109) | NV4: $NV4 → V2Ray(5401)"; pause
 }
@@ -2334,7 +2354,7 @@ configure_slowdns() {
         cat > /usr/local/bin/slowdns-ns4-start.sh << STARTEOF
 #!/bin/bash
 NS=\$(cat $DIR/ns.conf)
-exec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -privkey-file $DIR/server.key \$NS 127.0.0.1:109
+exec /usr/local/bin/dnstt-server -udp :5353 -privkey-file $DIR/server.key \$NS 127.0.0.1:109
 STARTEOF
         systemctl restart slowdns-ns4 2>/dev/null || true
         log "NS4 mis à jour: $new_ns4"
@@ -2345,7 +2365,7 @@ STARTEOF
         cat > /usr/local/bin/slowdns-nv4-start.sh << STARTEOF
 #!/bin/bash
 NV4=\$(cat $DIR/nv4/ns.conf)
-exec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -privkey-file $DIR/server.key \$NV4 127.0.0.1:5401
+exec /usr/local/bin/dnstt-server -udp :5354 -privkey-file $DIR/server.key \$NV4 127.0.0.1:5401
 STARTEOF
         systemctl restart slowdns-nv4 2>/dev/null || true
         log "NV4 mis à jour: $new_nv4"
@@ -2563,7 +2583,7 @@ v2ray_gen_config() {
 {
   "log": {"loglevel":"warning","access":"/var/log/v2ray/access.log","error":"/var/log/v2ray/error.log"},
   "inbounds": [{
-    "port": 5401, "listen": "0.0.0.0", "protocol": "vless",
+    "port": 5401, "listen": "::", "protocol": "vless",
     "settings": {"clients": [{"id":"$uuid","email":"default@v2ray","level":0}],"decryption":"none"},
     "streamSettings": {"network":"tcp","security":"none"},
     "tag": "VLESS-TCP"
