@@ -163,10 +163,12 @@ def proto_on(*candidates):
     return False
 
 def _svc_ready(svc):
+    if svc == "sshd": return True
+    if svc == "haproxy":
+        return sh("systemctl is-active --quiet haproxy 2>/dev/null") == "" and (":443 " in sh("ss -tlnp 2>/dev/null") or ":8880 " in sh("ss -tlnp 2>/dev/null"))
     cases = {
-        "sshd": True, "badvpn@7100": sh("systemctl is-active --quiet badvpn@7100 2>/dev/null") == "",
+        "badvpn@7100": sh("systemctl is-active --quiet badvpn@7100 2>/dev/null") == "",
         "slowdns-router": sh("systemctl is-active --quiet slowdns-router 2>/dev/null") == "",
-        "haproxy": sh("systemctl is-active --quiet haproxy 2>/dev/null") == "" and "haproxy" in sh("ss -tlnp 2>/dev/null"),
         "dropbear-custom": sh("systemctl is-active --quiet dropbear-custom 2>/dev/null") == "" and ":109 " in sh("ss -tlnp 2>/dev/null"),
         "v2ray": sh("systemctl is-active --quiet v2ray 2>/dev/null") == "" and ":5401 " in sh("ss -tlnp 2>/dev/null"),
         "xray": sh("systemctl is-active --quiet xray 2>/dev/null") == "" and ":10001 " in sh("ss -tlnp 2>/dev/null"),
@@ -474,19 +476,22 @@ def uninstall_udp_custom():
 
 def install_slowdns():
     if sh("command -v dnstt-server 2>/dev/null") != "": return
-    sh("apt-get install -y -qq curl jq wget 2>/dev/null")
-    Path("/etc/slowdns/ns4").mkdir(parents=True, exist_ok=True)
-    Path("/etc/slowdns/nv4").mkdir(parents=True, exist_ok=True)
+    sh("apt-get install -y -qq curl jq wget golang-go 2>/dev/null")
+    DIR = Path("/etc/slowdns")
+    DIR.mkdir(parents=True, exist_ok=True)
+    (DIR / "ns4").mkdir(parents=True, exist_ok=True)
+    (DIR / "nv4").mkdir(parents=True, exist_ok=True)
     priv = "4ab3af05fc004cb69d50c89de2cd5d138be1c397a55788b8867088e801f7fcaa"
     pub = "2cb39d63928451bd67f5954ffa5ac16c8d903562a10c4b21756de4f1a82d581c"
-    Path("/etc/slowdns/server.key").write_text(priv + "\n")
-    Path("/etc/slowdns/server.pub").write_text(pub + "\n")
+    (DIR / "server.key").write_text(priv + "\n")
+    (DIR / "server.pub").write_text(pub + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
     sh("curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
     ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null") or "ns4.kighmu.local"
     nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null") or "nv4.kighmu.local"
-    Path("/etc/slowdns/ns.conf").write_text(ns4 + "\n")
-    Path("/etc/slowdns/nv4/ns.conf").write_text(nv4 + "\n")
+    (DIR / "ns.conf").write_text(ns4 + "\n")
+    (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
+    # dnstt-server start scripts
     n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5353 -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
     nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5354 -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
     Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
@@ -509,8 +514,123 @@ StandardError=append:/var/log/slowdns/{svc_name}.log
 WantedBy=multi-user.target
 """
         Path(f"/etc/systemd/system/{svc_name}.service").write_text(svc)
+    # slowdns-router: compile Go DNS router
+    ROUTER_DIR = Path("/root/Kighmu/slowdns-router")
+    ROUTER_DIR.mkdir(parents=True, exist_ok=True)
+    main_go = ROUTER_DIR / "main.go"
+    if not main_go.exists():
+        main_go.write_text('''package main
+import (
+    "fmt" "log" "net" "os" "os/signal" "strings" "sync" "syscall" "time"
+)
+type route struct {
+    domain string
+    addr   *net.UDPAddr
+}
+type stats struct {
+    mu      sync.Mutex
+    total   int64
+    routed  map[string]int64
+    refused int64
+    errors  int64
+}
+func getEnv(key, fallback string) string {
+    if v := os.Getenv(key); v != "" { return v }
+    return fallback
+}
+func getEnvInt(key string, fallback int) int {
+    if v := os.Getenv(key); v != "" { if n, err := fmt.Sscanf(v, "%d", &fallback); n == 1 && err == nil { return fallback } }
+    return fallback
+}
+func main() {
+    listen := getEnv("LISTEN", ":5300")
+    routesStr := getEnv("ROUTES", "ns4.kighmu.local=127.0.0.1:5353,nv4.kighmu.local=127.0.0.1:5354")
+    timeout := getEnvInt("TIMEOUT", 5)
+    var routes []route
+    for _, part := range strings.Split(routesStr, ",") {
+        kv := strings.SplitN(part, "=", 2)
+        if len(kv) != 2 { continue }
+        domain := strings.TrimSpace(kv[0])
+        addrStr := strings.TrimSpace(kv[1])
+        if !strings.HasSuffix(domain, ".") { domain += "." }
+        addr, err := net.ResolveUDPAddr("udp", addrStr)
+        if err != nil { log.Printf("Invalid route %s=%s: %v", domain, addrStr, err); continue }
+        routes = append(routes, route{domain: domain, addr: addr})
+    }
+    if len(routes) == 0 { log.Fatal("No valid routes") }
+    conn, err := net.ListenPacket("udp", listen)
+    if err != nil { log.Fatal(err) }
+    defer conn.Close()
+    log.Printf("slowdns-router on %s", listen)
+    for _, r := range routes { log.Printf("  route %s -> %s", r.domain, r.addr) }
+    buf := make([]byte, 65535)
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+    for {
+        select {
+        case <-sigCh: log.Println("shutting down"); return
+        default:
+            conn.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
+            n, src, err := conn.ReadFrom(buf)
+            if err != nil { continue }
+            qname := extractQName(buf[:n])
+            for _, r := range routes {
+                if strings.HasSuffix(qname, r.domain) || qname == r.domain[:len(r.domain)-1]+"." {
+                    conn.WriteTo(buf[:n], r.addr); break
+                }
+            }
+        }
+    }
+}
+func extractQName(pkt []byte) string {
+    if len(pkt) < 12 { return "" }
+    var parts []string
+    i := 12
+    for i < len(pkt) {
+        l := int(pkt[i])
+        if l == 0 { break }
+        if i+l+1 > len(pkt) { break }
+        parts = append(parts, string(pkt[i+1:i+1+l]))
+        i += l + 1
+    }
+    return strings.Join(parts, ".") + "."
+}
+''')
+    # Try to compile or use existing binary
+    if not Path("/usr/local/bin/slowdns-router").exists():
+        sh("cd /root/Kighmu/slowdns-router && go mod init slowdns-router 2>/dev/null && go build -o slowdns-router . 2>/dev/null && cp slowdns-router /usr/local/bin/slowdns-router 2>/dev/null") or True
+    if Path("/usr/local/bin/slowdns-router").exists():
+        svc = f"""[Unit]
+Description=SlowDNS Router (53->5353/5354)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+Environment=LISTEN=:5300
+Environment=ROUTES={ns4}=127.0.0.1:5353,{nv4}=127.0.0.1:5354
+Environment=TIMEOUT=5
+ExecStart=/usr/local/bin/slowdns-router
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+StandardOutput=append:/var/log/slowdns/slowdns-router.log
+StandardError=append:/var/log/slowdns/slowdns-router.log
+[Install]
+WantedBy=multi-user.target
+"""
+        Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
+    # nftables rules for SlowDNS
+    _deploy_nft("slowdns", """table inet slowdns {
+    chain prerouting { type nat hook prerouting priority -100; policy accept;
+        iif "eth0" udp dport 53 redirect to :5300
+    }
+    chain input { type filter hook input priority 0; policy accept;
+        udp dport {53,5300,5353,5354} accept
+    }
+}""")
     sh("systemctl daemon-reload 2>/dev/null || true")
-    for s in ["slowdns-ns4","slowdns-nv4"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
+    for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
 
 def uninstall_slowdns():
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]:
@@ -519,25 +639,270 @@ def uninstall_slowdns():
     sh("rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-*-start.sh 2>/dev/null; rm -rf /etc/slowdns 2>/dev/null || true")
     sh("systemctl daemon-reload 2>/dev/null || true")
 
+def xray_gen_config():
+    XRAY_CONFIG = Path("/etc/xray/config.json")
+    inbounds = [
+        {"tag":"VMess-TCP","port":10001,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"VMess-WS","port":10002,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess"}}},
+        {"tag":"VMess-TLS","port":10003,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"VMess-WSS","port":10004,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vmess"}}},
+        {"tag":"VLESS-TCP","port":10005,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"VLESS-WS","port":10006,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless"}}},
+        {"tag":"VLESS-TLS","port":10007,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"VLESS-WSS","port":10008,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless"}}},
+        {"tag":"Trojan-TCP","port":10009,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"Trojan-WS","port":10010,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan"}}},
+        {"tag":"Shadowsocks","port":10011,"listen":"127.0.0.1","protocol":"shadowsocks","settings":{"clients":[],"network":"tcp,udp"},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"VLESS-XHTTP","port":10012,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/vless-xhttp"}}},
+        {"tag":"VLESS-gRPC","port":10013,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"vless-grpc"}}},
+        {"tag":"VMess-XHTTP","port":10014,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/vmess-xhttp"}}},
+        {"tag":"VMess-gRPC","port":10015,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"vmess-grpc"}}},
+        {"tag":"Trojan-XHTTP","port":10016,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/trojan-xhttp"}}},
+        {"tag":"Trojan-gRPC","port":10017,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"trojan-grpc"}}},
+        {"tag":"VLESS-HUpgrade","port":10018,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"httpupgrade","security":"none","httpupgradeSettings":{"path":"/vless-hupgrade"}}},
+        {"tag":"api","port":10085,"listen":"127.0.0.1","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}
+    ]
+    config = {
+        "log": {"loglevel": "warning", "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log"},
+        "inbounds": inbounds,
+        "outbounds": [{"protocol":"freedom","settings":{}}],
+        "stats": {},
+        "policy": {"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},"system":{"statsInboundUplink":True,"statsInboundDownlink":True}},
+        "api": {"tag":"api","services":["HandlerService","StatsService"]},
+        "routing": {"rules":[{"type":"field","inboundTag":"api","outboundTag":"api"}]}
+    }
+    XRAY_CONFIG.write_text(json.dumps(config, indent=2))
+
+def xray_gen_haproxy():
+    haproxy_cfg = """global
+    daemon
+    maxconn 65535
+    tune.ssl.default-dh-param 2048
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+    ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+
+defaults
+    mode tcp
+    log global
+    option tcplog
+    option dontlognull
+    timeout connect 5s
+    timeout client 86400s
+    timeout server 86400s
+    timeout tunnel 86400s
+    retries 3
+
+frontend xray-ntls
+    bind *:8880
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.len ge 21 }
+    acl is_h2         req.payload(0,3) -m bin 505249
+    acl is_http       req.payload(0,4) -m bin 474554202f
+    acl is_post       req.payload(0,4) -m bin 504f5354
+    acl is_vless      req.payload(0,1) -m bin 00
+    acl is_vless_ws   req.payload(0,11) -m bin 474554202f766c65737320
+    acl is_vmess_ws   req.payload(0,12) -m bin 474554202f766d65737320
+    acl is_trojan_ws  req.payload(0,13) -m bin 474554202f74726f6a616e20
+    use_backend grpc_router        if is_h2
+    use_backend xray-vless-ws      if is_vless_ws
+    use_backend xray-vmess-ws      if is_vmess_ws
+    use_backend xray-trojan-ws     if is_trojan_ws
+    use_backend grpc_router        if is_http or is_post
+    use_backend xray-vmess-tcp     if !is_vless
+    default_backend xray-vless-tcp
+
+frontend xray-tls
+    bind *:443 ssl crt /etc/xray/xray.pem alpn h2,http/1.1
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.len ge 5 }
+    acl is_h2         req.payload(0,3) -m bin 505249
+    acl is_http       req.payload(0,4) -m bin 474554202f
+    acl is_post       req.payload(0,4) -m bin 504f5354
+    acl is_vless      req.payload(0,1) -m bin 00
+    acl is_vless_ws   req.payload(0,11) -m bin 474554202f766c65737320
+    acl is_vmess_ws   req.payload(0,12) -m bin 474554202f766d65737320
+    acl is_trojan_ws  req.payload(0,13) -m bin 474554202f74726f6a616e20
+    use_backend grpc_router        if is_h2
+    use_backend xray-vless-ws      if is_vless_ws
+    use_backend xray-vmess-ws      if is_vmess_ws
+    use_backend xray-trojan-ws     if is_trojan_ws
+    use_backend grpc_router        if is_http or is_post
+    use_backend xray-vmess-tcp     if !is_vless
+    default_backend xray-vless-tcp
+
+frontend grpc_router
+    bind 127.0.0.1:9898
+    mode http
+    timeout http-request 5s
+    use_backend xray-vmess-grpc   if { path_beg /vmess-grpc }
+    use_backend xray-vless-grpc   if { path_beg /vless-grpc }
+    use_backend xray-trojan-grpc  if { path_beg /trojan-grpc }
+    use_backend xray-vmess-grpc   if { path_beg /vmess-h2 }
+    use_backend xray-vless-grpc   if { path_beg /vless-h2 }
+    use_backend xray-trojan-grpc  if { path_beg /trojan-h2 }
+    use_backend xray-vmess-xhttp  if { path_beg /vmess-xhttp }
+    use_backend xray-vless-xhttp  if { path_beg /vless-xhttp }
+    use_backend xray-trojan-xhttp if { path_beg /trojan-xhttp }
+    use_backend xray-vless-hupgrade  if { path_beg /vless-hupgrade }
+    default_backend xray-vless-grpc
+
+backend grpc_router
+    server grpc_http 127.0.0.1:9898
+backend xray-vmess-tcp
+    server s1 127.0.0.1:10001
+backend xray-vmess-ws
+    server s1 127.0.0.1:10002
+backend xray-vless-tcp
+    server s1 127.0.0.1:10005
+backend xray-vless-ws
+    server s1 127.0.0.1:10006
+backend xray-vless-tls
+    server s1 127.0.0.1:10007
+backend xray-trojan-tcp
+    server s1 127.0.0.1:10009
+backend xray-trojan-ws
+    server s1 127.0.0.1:10010
+backend xray-ss
+    server s1 127.0.0.1:10011
+backend xray-vless-xhttp
+    mode http
+    server s1 127.0.0.1:10012
+backend xray-vless-grpc
+    mode http
+    server s1 127.0.0.1:10013
+backend xray-vmess-xhttp
+    mode http
+    server s1 127.0.0.1:10014
+backend xray-vmess-grpc
+    mode http
+    server s1 127.0.0.1:10015
+backend xray-trojan-xhttp
+    mode http
+    server s1 127.0.0.1:10016
+backend xray-trojan-grpc
+    mode http
+    server s1 127.0.0.1:10017
+backend xray-vless-hupgrade
+    mode http
+    server s1 127.0.0.1:10018
+"""
+    Path("/etc/haproxy/haproxy.cfg").write_text(haproxy_cfg)
+
+def xray_build_config():
+    XRAY_CONFIG = Path("/etc/xray/config.json")
+    if not XRAY_CONFIG.exists(): return
+    try:
+        config = json.loads(XRAY_CONFIG.read_text())
+        users = json.loads(XRAY_USERS.read_text()) if XRAY_USERS.exists() else {"vmess":[],"vless":[],"trojan":[],"shadow":[]}
+        tag_map = {
+            "VMess-TCP":"vmess","VMess-WS":"vmess","VMess-TLS":"vmess","VMess-WSS":"vmess","VMess-XHTTP":"vmess","VMess-gRPC":"vmess",
+            "VLESS-TCP":"vless","VLESS-WS":"vless","VLESS-TLS":"vless","VLESS-WSS":"vless","VLESS-XHTTP":"vless","VLESS-gRPC":"vless","VLESS-HUpgrade":"vless",
+            "Trojan-TCP":"trojan","Trojan-WS":"trojan","Trojan-XHTTP":"trojan","Trojan-gRPC":"trojan",
+            "Shadowsocks":"shadow"
+        }
+        proto_index = {"vmess":0,"vless":0,"trojan":0,"shadow":0}
+        for inbound in config.get("inbounds", []):
+            tag = inbound.get("tag","")
+            p = tag_map.get(tag)
+            if p:
+                ulist = users.get(p, [])
+                if ulist:
+                    idx = proto_index[p] % len(ulist)
+                    proto_index[p] += 1
+                    u = ulist[idx]
+                    if p == "shadow" and isinstance(u, dict) and "method" in u:
+                        inbound["settings"] = {"method":u["method"],"password":u["password"],"network":"tcp,udp","level":0}
+                    elif isinstance(u, dict) and "id" in u:
+                        client = {"id":u["id"],"level":0,"email":u.get("email","")}
+                        if inbound["protocol"]=="vless" and "flow" in u:
+                            client["flow"] = u["flow"]
+                        inbound["settings"]["clients"] = [client]
+                else:
+                    inbound["settings"]["clients"] = []
+        XRAY_CONFIG.write_text(json.dumps(config, indent=2))
+    except: pass
+    sh("systemctl restart xray 2>/dev/null || true")
+
 def install_xray():
     if sh("command -v xray 2>/dev/null") != "": return
-    sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>/dev/null || true")
+    DOMAIN = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or get_ip()
+    sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
+    if sh("command -v xray 2>/dev/null") == "":
+        sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>/dev/null || true")
     Path("/etc/xray").mkdir(parents=True, exist_ok=True)
-    if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[]}')
-    _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880,10001,10085} accept; }; }')
-    # HAProxy dependency
-    if sh("command -v haproxy 2>/dev/null") == "":
-        sh("apt-get install -y -qq haproxy 2>/dev/null || true")
+    Path("/var/log/xray").mkdir(parents=True, exist_ok=True)
+    if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
+    if not Path("/etc/xray/xray.crt").exists():
+        sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    sh("cat /etc/xray/xray.crt /etc/xray/xray.key > /etc/xray/xray.pem 2>/dev/null || true")
+    sh("chmod 600 /etc/xray/xray.key /etc/xray/xray.pem 2>/dev/null || true")
+    xray_gen_config()
+    xray_gen_haproxy()
+    if not Path("/etc/systemd/system/xray.service").exists():
+        svc = """[Unit]
+Description=Xray Service
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+[Service]
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray -config /etc/xray/config.json
+Restart=always
+RestartSec=5s
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target
+"""
+        Path("/etc/systemd/system/xray.service").write_text(svc)
+    Path("/etc/systemd/system/haproxy.service.d").mkdir(parents=True, exist_ok=True)
+    Path("/etc/systemd/system/haproxy.service.d/override.conf").write_text("[Service]\nRestart=always\nStartLimitIntervalSec=0\nStartLimitBurst=0\n")
+    _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880,10001,10085,9898} accept; }; }')
+    xray_build_config()
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl enable --now xray haproxy 2>/dev/null || true; sleep 2")
+    crontab_cmds = [
+        "*/15 * * * * systemctl is-active --quiet xray || systemctl restart xray >> /var/log/xray-watchdog.log 2>&1",
+        "*/5 * * * * systemctl is-active --quiet haproxy || systemctl restart haproxy >> /var/log/haproxy-watchdog.log 2>&1"
+    ]
+    existing = sh("crontab -l 2>/dev/null")
+    for cmd in crontab_cmds:
+        if cmd not in existing:
+            sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
 
 def uninstall_xray():
-    sh("systemctl disable --now xray 2>/dev/null || true")
-    sh("rm -f /usr/local/bin/xray /usr/local/bin/xray-* 2>/dev/null; rm -rf /etc/xray 2>/dev/null || true")
+    sh("systemctl disable --now xray haproxy 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/xray /usr/local/bin/xray-* 2>/dev/null; rm -rf /etc/xray /var/log/xray 2>/dev/null || true")
+    sh("rm -f /etc/systemd/system/xray.service 2>/dev/null; rm -rf /etc/systemd/system/haproxy.service.d 2>/dev/null || true")
+    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog' | crontab - 2>/dev/null || true")
     _remove_nft("xray"); sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_v2ray():
     if sh("command -v v2ray 2>/dev/null") != "": return
     sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)' 2>/dev/null || true")
+    V2RAY_CONFIG = Path("/etc/v2ray/config.json")
+    if not V2RAY_CONFIG.exists():
+        V2RAY_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        v2cfg = {
+            "log": {"loglevel": "warning"},
+            "inbounds": [{
+                "port": 5401, "listen": "127.0.0.1", "protocol": "vless",
+                "settings": {"clients": [], "decryption": "none"},
+                "streamSettings": {"network": "tcp", "security": "none"}
+            }],
+            "outbounds": [{"protocol": "freedom", "settings": {}}],
+            "stats": {},
+            "policy": {"levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}}, "system": {"statsInboundUplink": True, "statsInboundDownlink": True}},
+            "api": {"tag": "api", "services": ["HandlerService", "StatsService"]},
+            "routing": {"rules": [{"type": "field", "inboundTag": "api", "outboundTag": "api"}]}
+        }
+        V2RAY_CONFIG.write_text(json.dumps(v2cfg, indent=2))
+    if not V2RAY_USERS.exists():
+        V2RAY_USERS.write_text('{"vless":[]}')
     _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; udp dport 5354 accept; }; }')
+    sh("systemctl restart v2ray 2>/dev/null || true")
 
 def uninstall_v2ray():
     sh("systemctl disable --now v2ray 2>/dev/null || true")
@@ -633,6 +998,8 @@ def install_all_missing():
 def uninstall_all_active():
     for fn in [uninstall_zivpn, uninstall_hysteria, uninstall_slowdns, uninstall_udp_custom, uninstall_badvpn, uninstall_v2ray, uninstall_xray, uninstall_sshws, uninstall_ssl_tls, uninstall_dropbear]:
         fn()
+    # Stop haproxy if it was installed as xray dependency
+    sh("systemctl disable --now haproxy 2>/dev/null || true")
 
 def install_telegram_bot():
     os.system("clear")
