@@ -310,6 +310,24 @@ def v2raydns_apply():
 
 # ── Protocol install/uninstall functions (self-contained) ────────────────
 def _ensure_nft_base():
+    sh("systemctl enable --now nftables 2>/dev/null || true")
+    Path("/etc/nftables").mkdir(parents=True, exist_ok=True)
+    # Create nftables-tunnel service template for reboot persistence
+    svc = """[Unit]
+Description=nftables tunnel %i
+Before=nftables.service
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables/%i.nft
+ExecStop=/usr/sbin/nft delete table inet %i
+[Install]
+WantedBy=multi-user.target
+"""
+    Path("/etc/systemd/system/nftables-tunnel@.service").write_text(svc)
+    sh("systemctl daemon-reload 2>/dev/null || true")
     if sh("nft list table inet kighmu 2>/dev/null") != "": return
     for c in [
         "add table inet kighmu",
@@ -324,19 +342,40 @@ def _deploy_nft(name, nft_src):
     Path(f"/etc/nftables/{name}.nft").write_text(nft_src)
     if sh(f"nft -c -f /etc/nftables/{name}.nft 2>/dev/null") != "":
         sh(f"nft -f /etc/nftables/{name}.nft 2>/dev/null || true")
+    sh(f"systemctl enable --now nftables-tunnel@{name}.service 2>/dev/null || true")
 
 def _remove_nft(name):
+    sh(f"systemctl disable --now nftables-tunnel@{name}.service 2>/dev/null || true")
     Path(f"/etc/nftables/{name}.nft").unlink(missing_ok=True)
     sh(f"nft delete table inet {name} 2>/dev/null || true")
 
-def install_ssh_stack():
+def install_openssh():
     sh("apt-get install -y -qq openssh-server 2>/dev/null || true")
     sh("systemctl enable ssh 2>/dev/null || true; systemctl restart ssh 2>/dev/null || true")
     for line in ["PermitTunnel yes", "AllowTcpForwarding yes"]:
         key = line.split()[0]
         sh(f"sed -i 's/^#{key}.*/{line}/' /etc/ssh/sshd_config 2>/dev/null || echo '{line}' >> /etc/ssh/sshd_config")
     sh("systemctl restart ssh 2>/dev/null || true")
+
+def install_ssh_stack():
+    install_openssh()
     install_dropbear()
+
+def install_ws_stack():
+    install_sshws()
+    install_ssl_tls()
+
+def uninstall_ws_stack():
+    uninstall_sshws()
+    uninstall_ssl_tls()
+
+def install_udp_stack():
+    install_badvpn()
+    install_udp_custom()
+
+def uninstall_udp_stack():
+    uninstall_badvpn()
+    uninstall_udp_custom()
 
 def install_dropbear():
     if sh("command -v /usr/local/sbin/dropbear 2>/dev/null") != "": return
@@ -632,12 +671,38 @@ WantedBy=multi-user.target
     sh("systemctl daemon-reload 2>/dev/null || true")
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
 
+def configure_slowdns():
+    DIR = Path("/etc/slowdns")
+    if not DIR.exists(): return
+    ns4_cur = (DIR / "ns.conf").read_text().strip() if (DIR / "ns.conf").exists() else "non défini"
+    nv4_cur = (DIR / "nv4/ns.conf").read_text().strip() if (DIR / "nv4/ns.conf").exists() else "non défini"
+    print(f"NS4 actuel: {ns4_cur}")
+    print(f"NV4 actuel: {nv4_cur}")
+    new_ns4 = input("Nouveau NS4 (vide = inchangé): ").strip()
+    new_nv4 = input("Nouveau NV4 (vide = inchangé): ").strip()
+    if new_ns4 and new_ns4 != ns4_cur:
+        (DIR / "ns.conf").write_text(new_ns4 + "\n")
+        n4s = f"#!/bin/bash\nNS=$(cat {DIR}/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5353 -privkey-file {DIR}/server.key $NS 127.0.0.1:109\n"
+        Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
+        Path("/usr/local/bin/slowdns-ns4-start.sh").chmod(0o755)
+        sh("systemctl restart slowdns-ns4 2>/dev/null || true")
+        print(f"NS4 mis à jour: {new_ns4}")
+    if new_nv4 and new_nv4 != nv4_cur:
+        (DIR / "nv4/ns.conf").write_text(new_nv4 + "\n")
+        nv4s = f"#!/bin/bash\nNV4=$(cat {DIR}/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5354 -privkey-file {DIR}/server.key $NV4 127.0.0.1:5401\n"
+        Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
+        Path("/usr/local/bin/slowdns-nv4-start.sh").chmod(0o755)
+        sh("systemctl restart slowdns-nv4 2>/dev/null || true")
+        print(f"NV4 mis à jour: {new_nv4}")
+
 def uninstall_slowdns():
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]:
         sh(f"systemctl disable --now {s}.service 2>/dev/null || true")
         Path(f"/etc/systemd/system/{s}.service").unlink(missing_ok=True)
-    sh("rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-*-start.sh 2>/dev/null; rm -rf /etc/slowdns 2>/dev/null || true")
-    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-router /usr/local/bin/slowdns-*-start.sh 2>/dev/null || true")
+    sh("rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router 2>/dev/null || true")
+    _remove_nft("slowdns")
+    sh("chattr -i /etc/resolv.conf 2>/dev/null; systemctl daemon-reload 2>/dev/null || true")
 
 def xray_gen_config():
     XRAY_CONFIG = Path("/etc/xray/config.json")
@@ -822,6 +887,20 @@ def xray_build_config():
         XRAY_CONFIG.write_text(json.dumps(config, indent=2))
     except: pass
     sh("systemctl restart xray 2>/dev/null || true")
+
+def xray_add_user(proto, user, cred, exp, quota):
+    XRAY_USERS.parent.mkdir(parents=True, exist_ok=True)
+    if not XRAY_USERS.exists():
+        XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
+    idkey = {"vmess":"id","vless":"id","trojan":"password"}.get(proto, "id")
+    sh(f"jq '.{proto} += [{{\"{idkey}\":\"{cred}\",\"email\":\"{user}\",\"level\":0,\"expire\":\"{exp}\",\"quota\":{float(quota or 0)}}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
+
+def xray_del_user(user):
+    if not XRAY_USERS.exists(): return
+    sh(f"jq '.vmess |= map(select(.email!=\"{user}\")) | .vless |= map(select(.email!=\"{user}\")) | .trojan |= map(select(.email!=\"{user}\"))' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
+
+def xray_reload():
+    xray_build_config()
 
 def install_xray():
     if sh("command -v xray 2>/dev/null") != "": return
@@ -1240,9 +1319,10 @@ def scr_protocol_installer():
     L+=[pil(f"{i+1:02d}",pl[i],sv[i] if i<len(sv) else False,pw) for i in range(10)]
     L+=["%SEP%",f" {C['GREEN']}[11]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}{pl[10]}{C['RST']}",
         f" {C['GREEN']}[12]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{pl[11]:<{pw}}{C['RST']}  {C['RED']}[!]{C['RST']}"]
+    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if proto_on("haproxy") else f"{C['RED']}[OFF]{C['RST']}"
     L+=[pil("13",pl[12],st["bot"],pw),"%SEP%",
         f" {C['YELLOW']}○{C['RST']} {C['GRAY']}Dependencies (auto-installed with Xray):{C['RST']}",
-        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HAProxy{C['RST']} {f'{C['GREEN']}[ON]{C['RST']}' if proto_on('haproxy') else f'{C['RED']}[OFF]{C['RST']}'}          {C['GRAY']}(TLS 443 / NTLS 8880){C['RST']}",
+        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HAProxy{C['RST']} {haproxy_st}          {C['GRAY']}(TLS 443 / NTLS 8880){C['RST']}",
         "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
     render_screen(L);print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}",end="")
 
@@ -1739,7 +1819,8 @@ if BOT_AVAILABLE:
             l.append(f"\n✅ {ok}/{len(SERVICES)} active")
             await q.edit_message_text("\n".join(l),reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="server":
-            t=f"🖥 *SERVER INFO*\n━━━━━━━━━━━━━━━━━━━━━\n• OS: `{get_os()}`\n• Arch: `{sh_bot('uname -m')}`\n• Cores: `{sh_bot('nproc 2>/dev/null || echo 1')}`\n• Uptime: `{sh_bot('uptime -p 2>/dev/null | sed \"s/up //\"')}`\n• IP: `{get_ip()}`"
+            upt=sh_bot("uptime -p 2>/dev/null | sed 's/up //'") or "N/A"
+            t=f"🖥 *SERVER INFO*\n━━━━━━━━━━━━━━━━━━━━━\n• OS: `{get_os()}`\n• Arch: `{sh_bot('uname -m')}`\n• Cores: `{sh_bot('nproc 2>/dev/null || echo 1')}`\n• Uptime: `{upt}`\n• IP: `{get_ip()}`"
             await q.edit_message_text(t,reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="cr_xray": await q.edit_message_text("Select Xray protocol:",reply_markup=xray_proto_kb(),parse_mode="Markdown")
         elif d.startswith("cr_"):
