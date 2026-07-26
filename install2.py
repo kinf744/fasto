@@ -1999,6 +1999,16 @@ if __name__ == "__main__":
         elif arg == "--watchdog":
             _license_watchdog()
             sys.exit(0)
+        elif arg == "--install-all":
+            self_install()
+            _verify_license()
+            install_all_missing()
+            print("Installation complete. Use --menu for interactive menu.")
+            sys.exit(0)
+        elif arg == "--menu":
+            self_install()
+            _verify_license()
+            main_menu()
         elif arg == "--auto-uninstall":
             _auto_uninstall_all()
             sys.exit(0)
