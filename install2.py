@@ -526,8 +526,8 @@ def install_slowdns():
     (DIR / "server.pub").write_text(pub + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
     sh("curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
-    ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null") or "ns4.kighmu.local"
-    nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null") or "nv4.kighmu.local"
+    ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null") or "ns4.kingom.ggff.net"
+    nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null") or "nv4.kingom.ggff.net"
     (DIR / "ns.conf").write_text(ns4 + "\n")
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     # dnstt-server start scripts
@@ -583,7 +583,7 @@ func getEnvInt(key string, fallback int) int {
 }
 func main() {
     listen := getEnv("LISTEN", ":5300")
-    routesStr := getEnv("ROUTES", "ns4.kighmu.local=127.0.0.1:5353,nv4.kighmu.local=127.0.0.1:5354")
+    routesStr := getEnv("ROUTES", "ns4.kingom.ggff.net=127.0.0.1:5353,nv4.kingom.ggff.net=127.0.0.1:5354")
     timeout := getEnvInt("TIMEOUT", 5)
     var routes []route
     for _, part := range strings.Split(routesStr, ",") {
