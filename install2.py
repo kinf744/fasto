@@ -1719,26 +1719,31 @@ def get_slowdns_info():
     return sh_bot("cat /etc/slowdns/server.pub 2>/dev/null")or"N/A",sh_bot("cat /etc/slowdns/ns.conf 2>/dev/null")or"N/A",sh_bot("cat /etc/slowdns/nv4/ns.conf 2>/dev/null")or"N/A"
 def get_xray_traffic(email):
     try:
-        r=subprocess.run(["/usr/local/bin/xray","api","statsquery","--server=127.0.0.1:10085",f"-pattern=user>>>{email}>>>"],capture_output=True,text=True,timeout=10)
+        r=subprocess.run(["/usr/local/bin/xray","api","statsquery","--server=127.0.0.1:10085","-pattern=user>>>"+email+">>>"],capture_output=True,text=True,timeout=10)
         d=json.loads(r.stdout)if r.stdout.strip()else{}
-        return sum(s.get("value",0)for s in d.get("stat",[])if"uplink"in s.get("name",""))+sum(s.get("value",0)for s in d.get("stat",[])if"downlink"in s.get("name",""))
+        up=sum(s.get("value",0)for s in d.get("stat",[])if"uplink"in s.get("name",""))
+        down=sum(s.get("value",0)for s in d.get("stat",[])if"downlink"in s.get("name",""))
+        return up+down
     except: return 0
 def get_v2ray_traffic(email):
     try:
         r=subprocess.run(["/usr/local/bin/v2ray","api","stats","--server=127.0.0.1:10086"],capture_output=True,text=True,timeout=10)
         up=down=0;mul={"B":1,"KB":1024,"MB":1024**2,"GB":1024**3,"TB":1024**4}
         for l in r.stdout.splitlines():
-            m=re.search(r'([\d.]+)\s*(B|KB|MB|GB|TB)\s+.*user>>>'+re.escape(email)+r'>>>traffic>>>(uplink|downlink)',l)
-            if m:v=int(float(m.group(1))*mul[m.group(2)]);exec(f"up+=v"if m.group(3)=="uplink"else"down+=v")
+            m=re.search(r"([\d.]+)\s*(B|KB|MB|GB|TB)\s+.*user>>>"+re.escape(email)+r">>>traffic>>>(uplink|downlink)",l)
+            if m:
+                v=int(float(m.group(1))*mul[m.group(2)])
+                if m.group(3)=="uplink":up+=v
+                else:down+=v
         return up+down
     except: return 0
 def fmt_bytes(b):
     for u in["B","KB","MB","GB","TB"]:
-        if b<1024:return f"{b:.1f} {u}"
+        if b<1024:return "{:.1f} {}".format(b,u)
         b/=1024
-    return f"{b:.1f} PB"
+    return "{:.1f} PB".format(b)
 SERVICES={"SSH":"sshd","Dropbear":"dropbear","SSH-WS":"sshws","SSL/TLS":"ssl_tls","Xray":"xray","V2Ray-DNS":"v2ray","SlowDNS":"slowdns-ns4","ZIVPN":"zivpn","Hysteria":"hysteria","UDP-Custom":"udp-custom","BadVPN 7100":"badvpn@7100","BadVPN 7200":"badvpn@7200","BadVPN 7300":"badvpn@7300","HAProxy":"haproxy","Nginx":"nginx","MySQL":"mysql"}
-def svc_active_bot(n):return subprocess.run(f"systemctl is-active {n} 2>/dev/null",shell=True,capture_output=True,text=True).stdout.strip()=="active"
+def svc_active_bot(n):return subprocess.run("systemctl is-active "+n+" 2>/dev/null",shell=True,capture_output=True,text=True).stdout.strip()=="active"
 def count_users_bot(p):
     n=0
     if USERDIR.exists():
@@ -1768,6 +1773,78 @@ def get_users_by_proto(proto):
         for f in sorted(USERDIR.iterdir()):
             if f.is_file()and _meta_get(f.name,"proto")==r:users.append((f.name,_meta_get(f.name,"exp")))
     return users
+
+def build_ssh_details(user, pwd, exp, quota):
+    dom = get_domain(); ip = get_ip(); pub, ns, nv4 = get_slowdns_info()
+    return ("🔑 *SSH USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 IP: `"+ip+"`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\n"
+        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
+        "2\ufe0f\u20e3 SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
+        "3\ufe0f\u20e3 PROXY WS\n`"+dom+":9090@"+user+":"+pwd+"`\n\n"
+        "4\ufe0f\u20e3 SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
+        "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
+        "*FASTDNS (PORT 5300)*\n\u2022 Public Key: `"+pub+"`\n\u2022 NameServer: `"+ns+"`\n\n"
+        "*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN")
+
+def build_vless_details(user, uuid, exp, quota):
+    dom = get_domain()
+    return ("\uD83D\uDD17 *VLESS USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Protocol: `VLESS`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 UUID: `"+uuid+"`\n\n"
+        "*PATHS:*\n\u2022 WS: `/vless`\n\u2022 XHTTP: `/vless-xhttp`\n\u2022 HTTPUpgrade: `/vless-hupgrade`\n\u2022 gRPC: `/vless-grpc`\n\n"
+        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 TLS/WS :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=ws&path=/vless&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "2\ufe0f\u20e3 NTLS/WS :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=ws&path=/vless&host="+dom+"#"+user+"`\n\n"
+        "3\ufe0f\u20e3 TLS/XHTTP :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=xhttp&path=/vless-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "4\ufe0f\u20e3 TLS/HTTPUpgrade :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=httpupgrade&path=/vless-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "5\ufe0f\u20e3 TLS/gRPC :443\n`vless://"+uuid+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=vless-grpc&sni="+dom+"#"+user+"`\n\n"
+        "6\ufe0f\u20e3 NTLS/TCP :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
+        "7\ufe0f\u20e3 TLS/TCP :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+
+def build_trojan_details(user, pwd, exp, quota):
+    dom = get_domain()
+    return ("\uD83D\uDD17 *TROJAN USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Protocol: `TROJAN`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\n"
+        "*PATHS:*\n\u2022 WS: `/trojan`\n\u2022 XHTTP: `/trojan-xhttp`\n\u2022 HTTPUpgrade: `/trojan-hupgrade`\n\u2022 gRPC: `/trojan-grpc`\n\n"
+        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 TLS/WS :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=ws&path=/trojan&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "2\ufe0f\u20e3 NTLS/WS :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=ws&path=/trojan&host="+dom+"#"+user+"`\n\n"
+        "3\ufe0f\u20e3 TLS/XHTTP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=xhttp&path=/trojan-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "4\ufe0f\u20e3 TLS/HTTPUpgrade :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "5\ufe0f\u20e3 TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
+        "6\ufe0f\u20e3 NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
+        "7\ufe0f\u20e3 TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+
+def build_vmess_details(user, uuid, exp, quota):
+    dom = get_domain()
+    l1 = vmess_link_b64(uuid, dom, 8880, "ws", "none", "/vmess", user, "")
+    l2 = vmess_link_b64(uuid, dom, 443, "ws", "tls", "/vmess", user, dom)
+    l3 = vmess_link_b64(uuid, dom, 443, "grpc", "tls", "vmess-grpc", user, dom)
+    return ("\uD83D\uDD17 *VMESS USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Protocol: `VMESS`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 UUID: `"+uuid+"`\n\n"
+        "*PATHS:*\n\u2022 WS: `/vmess`\n\u2022 gRPC: `/vmess-grpc`\n\n"
+        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 NTLS/WS :8880\n`"+l1+"`\n\n"
+        "2\ufe0f\u20e3 TLS/WS :443\n`"+l2+"`\n\n"
+        "3\ufe0f\u20e3 TLS/gRPC :443\n`"+l3+"`")
+
+def build_hysteria_details(user, pwd, exp, quota):
+    dom = get_domain()
+    return ("\u26A1 *HYSTERIA USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Obfs: `hysteria`\n\u2022 Expires: `"+exp+"`\n"
+        "\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\u2022 Port Range: `20000-50000`\n\n"
+        "Use a Hysteria client with the above details.")
+
+def build_zivpn_details(user, pwd, exp, quota):
+    dom = get_domain()
+    return ("\uD83D\uDD0C *ZIVPN USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Obfs: `zivpn`\n\u2022 Expires: `"+exp+"`\n"
+        "\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\u2022 Port: `5667`\n\n"
+        "Use a ZIVPN client with the above details.")
+
+def build_v2raydns_details(user, uuid, exp, quota):
+    dom = get_domain(); pub, ns, nv4 = get_slowdns_info()
+    return ("\uD83C\uDF10 *V2RAY DNS USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 UUID: `"+uuid+"`\n\n"
+        "*PORTS*\n\u2022 FastDNS UDP: `5354`\n\u2022 V2Ray TCP: `5401`\n\n"
+        "*SLOWDNS (PORT 5354)*\n\u2022 Public Key: `"+pub+"`\n\u2022 NameServer: `"+nv4+"`\n\n"
+        "*V2RAY-DNS LINK*\n`vless://"+uuid+"@"+dom+":5401?type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS`")
 
 if BOT_AVAILABLE:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -1900,15 +1977,12 @@ if BOT_AVAILABLE:
             user=text
             if not (USERDIR/user).exists():await reply_cls(update,ctx,f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear();return
             p=_meta_get(user,"proto");e=_meta_get(user,"exp");pw=_meta_get(user,"pass");u=_meta_get(user,"uuid");q=_meta_get(user,"quota")or"0"
-            bd={"ssh":lambda u,pw,e,q:f"🔑 *SSH*\nUser: `{u}`\nDomain: `{get_domain()}`\nIP: `{get_ip()}`\nExp: `{e}`\nQuota: `{q} GB`\nPass: `{pw}`\n\n`{get_domain()}:80@{u}:{pw}`",
-                "vless":lambda u,pw,e,q:f"🔗 *VLESS*\nUser: `{u}`\nUUID: `{pw}`\nExp: `{e}`\n\n`vless://{pw}@{get_domain()}:443?security=tls&type=ws&path=/vless&sni={get_domain()}#{u}`",
-                "trojan":lambda u,pw,e,q:f"🔗 *TROJAN*\nUser: `{u}`\nPass: `{pw}`\nExp: `{e}`\n\n`trojan://{pw}@{get_domain()}:443?security=tls&type=ws&path=/trojan&sni={get_domain()}#{u}`",
-                "vmess":lambda u,pw,e,q:f"🔗 *VMESS*\nUser: `{u}`\nUUID: `{pw}`\nExp: `{e}`\n\n`{vmess_link_b64(pw,get_domain(),443,'ws','tls','/vmess',u,get_domain())}`",
-                "zivpn":lambda u,pw,e,q:f"🔌 *ZIVPN*\nUser: `{u}`\nPass: `{pw}`\nExp: `{e}`\nPort: 5667",
-                "hysteria":lambda u,pw,e,q:f"⚡ *HYSTERIA*\nUser: `{u}`\nPass: `{pw}`\nExp: `{e}`\nPort: 20000-50000",
-                "v2raydns":lambda u,pw,e,q:f"🌐 *V2RAY DNS*\nUser: `{u}`\nUUID: `{pw}`\nExp: `{e}`\n\n`vless://{pw}@{get_domain()}:5401?type=tcp`"}
+            bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
             fn=bd.get(p)
-            txt=fn(user,pw or u,e,q)if fn else f"👤 *User: {user}*\nProto: `{p}`\nExp: `{e}`"
+            if fn:
+                if p in("vless","vmess","v2raydns"):txt=fn(user,u or "?",e,q)
+                else:txt=fn(user,pw or user,e,q)
+            else:txt=f"👤 *User: {user}*\nProto: `{p}`\nExp: `{e}`"
             await reply_cls(update,ctx,txt,reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
         elif step=="del_choose":
             users=ctx.user_data.get("del_users",[])
@@ -1916,8 +1990,9 @@ if BOT_AVAILABLE:
             nums=set()
             for pt in text.replace(" ","").split(","):
                 if not pt:continue
-                if"-"in pt:a,b=pt.split("-",1)
-                if a.isdigit()and b.isdigit():nums.update(range(int(a),int(b)+1))
+                if"-"in pt:
+                    a,b=pt.split("-",1)
+                    if a.isdigit()and b.isdigit():nums.update(range(int(a),int(b)+1))
                 elif pt.isdigit():nums.add(int(pt))
             td=[users[n-1][0]for n in sorted(nums)if 1<=n<=len(users)]
             if not td:await update.message.reply_text("❌ No valid numbers.");return
@@ -1961,15 +2036,12 @@ if BOT_AVAILABLE:
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=back_kb("users"),parse_mode="Markdown")
             ctx.user_data.clear();return
         apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or ""
-        bd={"ssh":lambda:f"🔑 *SSH CREATED*\nUser: `{user}`\nPass: `{apw}`\nExp: `{exp}`\n\n`{get_domain()}:80@{user}:{apw}`",
-            "vless":lambda:f"🔗 *VLESS CREATED*\nUser: `{user}`\nUUID: `{uuid}`\nExp: `{exp}`\n\n`vless://{uuid}@{get_domain()}:443?security=tls&type=ws&sni={get_domain()}#{user}`",
-            "trojan":lambda:f"🔗 *TROJAN CREATED*\nUser: `{user}`\nPass: `{apw}`\nExp: `{exp}`\n\n`trojan://{apw}@{get_domain()}:443?security=tls&type=ws&sni={get_domain()}#{user}`",
-            "vmess":lambda:f"🔗 *VMESS CREATED*\nUser: `{user}`\nUUID: `{uuid}`\nExp: `{exp}`\n\n`{vmess_link_b64(uuid,get_domain(),443,'ws','tls','/vmess',user,get_domain())}`",
-            "zivpn":lambda:f"🔌 *ZIVPN CREATED*\nUser: `{user}`\nPass: `{apw}`\nExp: `{exp}`",
-            "hysteria":lambda:f"⚡ *HYSTERIA CREATED*\nUser: `{user}`\nPass: `{apw}`\nExp: `{exp}`",
-            "v2raydns":lambda:f"🌐 *V2RAY DNS CREATED*\nUser: `{user}`\nUUID: `{uuid}`\nExp: `{exp}`"}
+        bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
         fn=bd.get(rp)
-        txt=fn()if fn else f"✅ *{pn} created!*\\nUser: `{user}`\\nExp: `{exp}`"
+        if fn:
+            if rp in("vless","vmess","v2raydns"):txt=fn(user,uuid or "?",exp,quota)
+            else:txt=fn(user,apw or user,exp,quota)
+        else:txt=f"✅ *{pn} created!*\nUser: `{user}`\nExp: `{exp}`"
         await reply_cls(update,ctx,txt,reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
 
     async def error_handler(update,ctx):
