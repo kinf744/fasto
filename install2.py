@@ -418,9 +418,9 @@ def uninstall_sshws():
 
 def install_badvpn():
     if sh("command -v badvpn-udpgw 2>/dev/null") != "": return
-    sh("apt-get install -y -qq cmake make gcc build-essential wget 2>/dev/null")
-    sh("cd /usr/local/src && wget -q 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/badvpn.tar.gz' -O badvpn.tar.gz 2>/dev/null")
-    sh("cd /usr/local/src && tar -xzf badvpn.tar.gz 2>/dev/null && cd badvpn && cmake . >/dev/null 2>&1 && make >/dev/null 2>&1 && install -m 0755 udpgw/badvpn-udpgw /usr/local/bin/badvpn-udpgw 2>/dev/null || true")
+    sh("apt-get install -y -qq cmake build-essential git 2>/dev/null")
+    sh("cd /tmp && rm -rf badvpn && git clone --depth 1 https://github.com/ambrop72/badvpn.git 2>/dev/null")
+    sh("cd /tmp/badvpn && mkdir -p build && cd build && cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null 2>&1 && make -j$(nproc) >/dev/null 2>&1 && cp udpgw/badvpn-udpgw /usr/local/bin/ && chmod +x /usr/local/bin/badvpn-udpgw")
     for port in ["7100","7200","7300"]:
         svc = f"""{{Unit]
 Description=BadVPN UDPGW {port}
@@ -546,56 +546,84 @@ def uninstall_v2ray():
 
 def install_hysteria():
     if sh("command -v hysteria-linux-amd64 2>/dev/null") != "": return
-    sh("curl -fsSL 'https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64' -o /usr/local/bin/hysteria-linux-amd64 2>/dev/null && chmod +x /usr/local/bin/hysteria-linux-amd64 2>/dev/null")
-    hy_cfg = {"listen":":20000-50000","protocol":"udp","auth":{"mode":"passwords","config":["kighmu"]},"up_mbps":100,"down_mbps":100}
+    sh("curl -fsSL 'https://github.com/apernet/hysteria/releases/download/v1.3.4/hysteria-linux-amd64' -o /usr/local/bin/hysteria-linux-amd64 2>/dev/null && chmod +x /usr/local/bin/hysteria-linux-amd64 2>/dev/null")
     Path("/etc/hysteria").mkdir(parents=True, exist_ok=True)
-    Path("/etc/hysteria/config.json").write_text(json.dumps(hy_cfg, indent=2))
+    DOMAIN = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or "hysteria.local"
+    sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    sh("chmod 600 /etc/hysteria/hysteria.key 2>/dev/null; chmod 644 /etc/hysteria/hysteria.crt 2>/dev/null || true")
+    hy_cfg = '{\"listen\":\":20000\",\"cert\":\"/etc/hysteria/hysteria.crt\",\"key\":\"/etc/hysteria/hysteria.key\",\"obfs\":\"hysteria\",\"up_mbps\":150,\"down_mbps\":150,\"recv_window_conn\":33554432,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,5667,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
+    Path("/etc/hysteria/config.json").write_text(hy_cfg)
     svc = """[Unit]
-Description=Hysteria Tunnel
-After=network.target
+Description=Hysteria Tunnel (v1.3.4)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/hysteria-linux-amd64 -c /etc/hysteria/config.json
+ExecStart=/usr/local/bin/hysteria-linux-amd64 server -c /etc/hysteria/config.json
+WorkingDirectory=/etc/hysteria
 Restart=always
-RestartSec=2
+RestartSec=10
+StartLimitBurst=0
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitMEMLOCK=infinity
+StandardOutput=append:/var/log/hysteria.log
+StandardError=append:/var/log/hysteria.log
 [Install]
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/hysteria.service").write_text(svc)
+    _deploy_nft("hysteria", 'table inet hysteria { chain input { type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }; }')
     sh("systemctl daemon-reload && systemctl enable --now hysteria.service 2>/dev/null || true")
 
 def uninstall_hysteria():
     sh("systemctl disable --now hysteria.service 2>/dev/null || true")
     for f in ["/etc/systemd/system/hysteria.service"]: Path(f).unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/hysteria-linux-amd64 2>/dev/null; rm -rf /etc/hysteria 2>/dev/null || true")
+    _remove_nft("hysteria")
     sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_zivpn():
     if sh("command -v zivpn 2>/dev/null") != "": return
-    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/zivpn' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null")
-    zi_cfg = {"listen":":5667","protocol":"udp","auth":{"mode":"passwords","config":["zi"]},"up_mbps":50,"down_mbps":100}
+    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-zivpn-linux-amd64' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null")
     Path("/etc/zivpn").mkdir(parents=True, exist_ok=True)
-    Path("/etc/zivpn/config.json").write_text(json.dumps(zi_cfg, indent=2))
+    DOMAIN = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or "zivpn.local"
+    sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/zivpn/zivpn.key -out /etc/zivpn/zivpn.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    sh("chmod 600 /etc/zivpn/zivpn.key 2>/dev/null; chmod 644 /etc/zivpn/zivpn.crt 2>/dev/null || true")
+    zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
+    Path("/etc/zivpn/config.json").write_text(zi_cfg)
     svc = """[Unit]
-Description=ZIVPN Tunnel
-After=network.target
+Description=ZIVPN UDP Server (High-Speed)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/zivpn -c /etc/zivpn/config.json
+ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
+WorkingDirectory=/etc/zivpn
 Restart=always
-RestartSec=2
+RestartSec=10
+StartLimitBurst=0
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitMEMLOCK=infinity
+StandardOutput=append:/var/log/zivpn.log
+StandardError=append:/var/log/zivpn.log
 [Install]
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/zivpn.service").write_text(svc)
+    _deploy_nft("zivpn", 'table inet zivpn { chain input { type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }; chain prerouting { type nat hook prerouting priority -100; udp dport 6000-19999 dnat to :5667; }; }')
     sh("systemctl daemon-reload && systemctl enable --now zivpn.service 2>/dev/null || true")
 
 def uninstall_zivpn():
     sh("systemctl disable --now zivpn.service 2>/dev/null || true")
     for f in ["/etc/systemd/system/zivpn.service"]: Path(f).unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/zivpn 2>/dev/null; rm -rf /etc/zivpn 2>/dev/null || true")
+    _remove_nft("zivpn")
     sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_all_missing():
