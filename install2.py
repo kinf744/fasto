@@ -301,12 +301,7 @@ def v2raydns_apply():
             q = float(_meta_get(f.name, "quota") or "0")
             clients.append({"id": uuid, "email": f.name, "level": 0, "quota": q})
     USERS_JSON.write_text(json.dumps({"vless": clients}, indent=2))
-    try:
-        data = json.loads(V2RAY_CONFIG.read_text())
-        data["inbounds"][0]["settings"]["clients"] = clients
-        V2RAY_CONFIG.write_text(json.dumps(data, indent=2))
-        sh("systemctl restart v2ray 2>/dev/null || true")
-    except: pass
+    sh("systemctl restart v2ray 2>/dev/null || true")
 
 # ── Protocol install/uninstall functions (self-contained) ────────────────
 def _ensure_nft_base():
@@ -340,7 +335,7 @@ def _deploy_nft(name, nft_src):
     _ensure_nft_base()
     Path("/etc/nftables").mkdir(parents=True, exist_ok=True)
     Path(f"/etc/nftables/{name}.nft").write_text(nft_src)
-    if sh(f"nft -c -f /etc/nftables/{name}.nft 2>/dev/null") != "":
+    if sh(f"nft -c -f /etc/nftables/{name}.nft 2>/dev/null") == "":
         sh(f"nft -f /etc/nftables/{name}.nft 2>/dev/null || true")
     sh(f"systemctl enable --now nftables-tunnel@{name}.service 2>/dev/null || true")
 
@@ -962,25 +957,19 @@ def install_v2ray():
     if sh("command -v v2ray 2>/dev/null") != "": return
     sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)' 2>/dev/null || true")
     V2RAY_CONFIG = Path("/etc/v2ray/config.json")
-    if not V2RAY_CONFIG.exists():
-        V2RAY_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        v2cfg = {
-            "log": {"loglevel": "warning"},
-            "inbounds": [{
-                "port": 5401, "listen": "0.0.0.0", "protocol": "vless",
-                "settings": {"clients": [], "decryption": "none"},
-                "streamSettings": {"network": "tcp", "security": "none"}
-            }],
-            "outbounds": [{"protocol": "freedom", "settings": {}}],
-            "stats": {},
-            "policy": {"levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}}, "system": {"statsInboundUplink": True, "statsInboundDownlink": True}},
-            "api": {"tag": "api", "services": ["HandlerService", "StatsService"]},
-            "routing": {"rules": [{"type": "field", "inboundTag": "api", "outboundTag": "api"}]}
-        }
-        V2RAY_CONFIG.write_text(json.dumps(v2cfg, indent=2))
+    V2RAY_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    v2cfg = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [{
+            "port": 5401, "protocol": "dokodemo-door", "tag": "dns-in",
+            "settings": {"address": "8.8.8.8", "port": 53, "network": "tcp", "timeout": 0}
+        }],
+        "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+    }
+    V2RAY_CONFIG.write_text(json.dumps(v2cfg, indent=2))
     if not V2RAY_USERS.exists():
         V2RAY_USERS.write_text('{"vless":[]}')
-    _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; udp dport 5354 accept; }; }')
+    _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; }')
     sh("systemctl restart v2ray 2>/dev/null || true")
 
 def uninstall_v2ray():
@@ -1843,9 +1832,10 @@ def build_v2raydns_details(user, uuid, exp, quota):
     B = chr(0x2501); D = chr(0x2022)
     return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
-        "*PORTS*\n" + D + " FastDNS UDP: `5354`\n" + D + " V2Ray TCP: `5401`\n\n"
+        "*PORTS*\n" + D + " FastDNS UDP: `5354`\n" + D + " V2Ray DNS TCP: `5401`\n\n"
         "*SLOWDNS (PORT 5354)*\n" + D + " Public Key: `"+pub+"`\n" + D + " NameServer: `"+nv4+"`\n\n"
-        "*V2RAY-DNS LINK*\n`vless://"+uuid+"@"+dom+":5401?type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS`")
+        "*DNS OVER TCP (PORT 5401)*\n" + D + " Server: `"+dom+"`\n" + D + " Port: `5401`\n" + D + " Protocol: `DNS-over-TCP`\n"
+        + D + " Configure your device: `tcp://"+dom+":5401`")
 
 if BOT_AVAILABLE:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
