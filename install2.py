@@ -967,7 +967,7 @@ def install_v2ray():
         v2cfg = {
             "log": {"loglevel": "warning"},
             "inbounds": [{
-                "port": 5401, "listen": "127.0.0.1", "protocol": "vless",
+                "port": 5401, "listen": "0.0.0.0", "protocol": "vless",
                 "settings": {"clients": [], "decryption": "none"},
                 "streamSettings": {"network": "tcp", "security": "none"}
             }],
