@@ -1776,74 +1776,75 @@ def get_users_by_proto(proto):
 
 def build_ssh_details(user, pwd, exp, quota):
     dom = get_domain(); ip = get_ip(); pub, ns, nv4 = get_slowdns_info()
-    return ("🔑 *SSH USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 IP: `"+ip+"`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\n"
-        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
-        "2\ufe0f\u20e3 SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
-        "3\ufe0f\u20e3 PROXY WS\n`"+dom+":9090@"+user+":"+pwd+"`\n\n"
-        "4\ufe0f\u20e3 SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
+    return ("🔑 *SSH USER DETAILS*\n" + chr(0x2501)*20 + "\n"
+        + chr(0x2022) + " User: `"+user+"`\n" + chr(0x2022) + " Domain: `"+dom+"`\n" + chr(0x2022) + " IP: `"+ip+"`\n" + chr(0x2022) + " Expires: `"+exp+"`\n" + chr(0x2022) + " Quota: `"+quota+" GB`\n" + chr(0x2022) + " Password: `"+pwd+"`\n\n"
+        "*CONNECTION LINKS*\n\n1" + chr(0xFE0F) + chr(0x20E3) + " SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
+        "2" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
+        "3" + chr(0xFE0F) + chr(0x20E3) + " PROXY WS\n`"+dom+":9090@"+user+":"+pwd+"`\n\n"
+        "4" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
         "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
-        "*FASTDNS (PORT 5300)*\n\u2022 Public Key: `"+pub+"`\n\u2022 NameServer: `"+ns+"`\n\n"
+        "*FASTDNS (PORT 5300)*\n" + chr(0x2022) + " Public Key: `"+pub+"`\n" + chr(0x2022) + " NameServer: `"+ns+"`\n\n"
         "*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN")
 
 def build_vless_details(user, uuid, exp, quota):
-    dom = get_domain()
-    return ("\uD83D\uDD17 *VLESS USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Protocol: `VLESS`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 UUID: `"+uuid+"`\n\n"
-        "*PATHS:*\n\u2022 WS: `/vless`\n\u2022 XHTTP: `/vless-xhttp`\n\u2022 HTTPUpgrade: `/vless-hupgrade`\n\u2022 gRPC: `/vless-grpc`\n\n"
-        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 TLS/WS :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=ws&path=/vless&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "2\ufe0f\u20e3 NTLS/WS :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=ws&path=/vless&host="+dom+"#"+user+"`\n\n"
-        "3\ufe0f\u20e3 TLS/XHTTP :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=xhttp&path=/vless-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "4\ufe0f\u20e3 TLS/HTTPUpgrade :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=httpupgrade&path=/vless-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "5\ufe0f\u20e3 TLS/gRPC :443\n`vless://"+uuid+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=vless-grpc&sni="+dom+"#"+user+"`\n\n"
-        "6\ufe0f\u20e3 NTLS/TCP :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
-        "7\ufe0f\u20e3 TLS/TCP :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+    dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
+    return (chr(0x1F517) + " *VLESS USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `VLESS`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        "*PATHS:*\n" + D + " WS: `/vless`\n" + D + " XHTTP: `/vless-xhttp`\n" + D + " HTTPUpgrade: `/vless-hupgrade`\n" + D + " gRPC: `/vless-grpc`\n\n"
+        "*CONNECTION LINKS*\n\n1" + KE + " TLS/WS :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=ws&path=/vless&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "2" + KE + " NTLS/WS :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=ws&path=/vless&host="+dom+"#"+user+"`\n\n"
+        "3" + KE + " TLS/XHTTP :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=xhttp&path=/vless-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "4" + KE + " TLS/HTTPUpgrade :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=httpupgrade&path=/vless-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "5" + KE + " TLS/gRPC :443\n`vless://"+uuid+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=vless-grpc&sni="+dom+"#"+user+"`\n\n"
+        "6" + KE + " NTLS/TCP :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
+        "7" + KE + " TLS/TCP :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
 
 def build_trojan_details(user, pwd, exp, quota):
-    dom = get_domain()
-    return ("\uD83D\uDD17 *TROJAN USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Protocol: `TROJAN`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\n"
-        "*PATHS:*\n\u2022 WS: `/trojan`\n\u2022 XHTTP: `/trojan-xhttp`\n\u2022 HTTPUpgrade: `/trojan-hupgrade`\n\u2022 gRPC: `/trojan-grpc`\n\n"
-        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 TLS/WS :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=ws&path=/trojan&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "2\ufe0f\u20e3 NTLS/WS :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=ws&path=/trojan&host="+dom+"#"+user+"`\n\n"
-        "3\ufe0f\u20e3 TLS/XHTTP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=xhttp&path=/trojan-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "4\ufe0f\u20e3 TLS/HTTPUpgrade :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "5\ufe0f\u20e3 TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
-        "6\ufe0f\u20e3 NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
-        "7\ufe0f\u20e3 TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+    dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
+    return (chr(0x1F517) + " *TROJAN USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `TROJAN`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " Password: `"+pwd+"`\n\n"
+        "*PATHS:*\n" + D + " WS: `/trojan`\n" + D + " XHTTP: `/trojan-xhttp`\n" + D + " HTTPUpgrade: `/trojan-hupgrade`\n" + D + " gRPC: `/trojan-grpc`\n\n"
+        "*CONNECTION LINKS*\n\n1" + KE + " TLS/WS :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=ws&path=/trojan&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "2" + KE + " NTLS/WS :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=ws&path=/trojan&host="+dom+"#"+user+"`\n\n"
+        "3" + KE + " TLS/XHTTP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=xhttp&path=/trojan-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "4" + KE + " TLS/HTTPUpgrade :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "5" + KE + " TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
+        "6" + KE + " NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
+        "7" + KE + " TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
 
 def build_vmess_details(user, uuid, exp, quota):
-    dom = get_domain()
+    dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
     l1 = vmess_link_b64(uuid, dom, 8880, "ws", "none", "/vmess", user, "")
     l2 = vmess_link_b64(uuid, dom, 443, "ws", "tls", "/vmess", user, dom)
     l3 = vmess_link_b64(uuid, dom, 443, "grpc", "tls", "vmess-grpc", user, dom)
-    return ("\uD83D\uDD17 *VMESS USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Protocol: `VMESS`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 UUID: `"+uuid+"`\n\n"
-        "*PATHS:*\n\u2022 WS: `/vmess`\n\u2022 gRPC: `/vmess-grpc`\n\n"
-        "*CONNECTION LINKS*\n\n1\ufe0f\u20e3 NTLS/WS :8880\n`"+l1+"`\n\n"
-        "2\ufe0f\u20e3 TLS/WS :443\n`"+l2+"`\n\n"
-        "3\ufe0f\u20e3 TLS/gRPC :443\n`"+l3+"`")
+    return (chr(0x1F517) + " *VMESS USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `VMESS`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        "*PATHS:*\n" + D + " WS: `/vmess`\n" + D + " gRPC: `/vmess-grpc`\n\n"
+        "*CONNECTION LINKS*\n\n1" + KE + " NTLS/WS :8880\n`"+l1+"`\n\n"
+        "2" + KE + " TLS/WS :443\n`"+l2+"`\n\n"
+        "3" + KE + " TLS/gRPC :443\n`"+l3+"`")
 
 def build_hysteria_details(user, pwd, exp, quota):
-    dom = get_domain()
-    return ("\u26A1 *HYSTERIA USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Obfs: `hysteria`\n\u2022 Expires: `"+exp+"`\n"
-        "\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\u2022 Port Range: `20000-50000`\n\n"
+    dom = get_domain(); B = chr(0x2501); D = chr(0x2022)
+    return (chr(0x26A1) + " *HYSTERIA USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Obfs: `hysteria`\n" + D + " Expires: `"+exp+"`\n"
+        + D + " Quota: `"+quota+" GB`\n" + D + " Password: `"+pwd+"`\n" + D + " Port Range: `20000-50000`\n\n"
         "Use a Hysteria client with the above details.")
 
 def build_zivpn_details(user, pwd, exp, quota):
-    dom = get_domain()
-    return ("\uD83D\uDD0C *ZIVPN USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Obfs: `zivpn`\n\u2022 Expires: `"+exp+"`\n"
-        "\u2022 Quota: `"+quota+" GB`\n\u2022 Password: `"+pwd+"`\n\u2022 Port: `5667`\n\n"
+    dom = get_domain(); B = chr(0x2501); D = chr(0x2022)
+    return (chr(0x1F50C) + " *ZIVPN USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Obfs: `zivpn`\n" + D + " Expires: `"+exp+"`\n"
+        + D + " Quota: `"+quota+" GB`\n" + D + " Password: `"+pwd+"`\n" + D + " Port: `5667`\n\n"
         "Use a ZIVPN client with the above details.")
 
 def build_v2raydns_details(user, uuid, exp, quota):
     dom = get_domain(); pub, ns, nv4 = get_slowdns_info()
-    return ("\uD83C\uDF10 *V2RAY DNS USER DETAILS*\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        "\u2022 User: `"+user+"`\n\u2022 Domain: `"+dom+"`\n\u2022 Expires: `"+exp+"`\n\u2022 Quota: `"+quota+" GB`\n\u2022 UUID: `"+uuid+"`\n\n"
-        "*PORTS*\n\u2022 FastDNS UDP: `5354`\n\u2022 V2Ray TCP: `5401`\n\n"
-        "*SLOWDNS (PORT 5354)*\n\u2022 Public Key: `"+pub+"`\n\u2022 NameServer: `"+nv4+"`\n\n"
+    B = chr(0x2501); D = chr(0x2022)
+    return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        "*PORTS*\n" + D + " FastDNS UDP: `5354`\n" + D + " V2Ray TCP: `5401`\n\n"
+        "*SLOWDNS (PORT 5354)*\n" + D + " Public Key: `"+pub+"`\n" + D + " NameServer: `"+nv4+"`\n\n"
         "*V2RAY-DNS LINK*\n`vless://"+uuid+"@"+dom+":5401?type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS`")
 
 if BOT_AVAILABLE:
