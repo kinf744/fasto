@@ -211,7 +211,7 @@ get_domain() {
     d=$(cat /etc/kighmu/domain.txt 2>/dev/null)
     [[ -z "$d" ]] && d=$(cat /etc/xray/domain 2>/dev/null)
     [[ -z "$d" ]] && d=$(cat /etc/v2ray/domain.txt 2>/dev/null)
-    [[ -z "$d" ]] && d=$(get_ip)
+    [[ -z "$d" ]] && d=$(get_primary_ip)
     printf '%s' "$d"
 }
 # Leader pointillé : "LABEL ........" complété jusqu'à largeur W
@@ -260,7 +260,7 @@ get_ipv4()    {
     ip=$(curl -4 -s --max-time 2 ifconfig.me 2>/dev/null)
     [[ -z "$ip" ]] && ip=$(curl -4 -s --max-time 2 ipinfo.io/ip 2>/dev/null)
     [[ -z "$ip" ]] && ip=$(ip -4 addr show 2>/dev/null | grep -oP 'inet \K[\d.]+' | grep -v '^127\.' | head -1)
-    [[ -z "$ip" ]] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [[ -z "$ip" ]] && ip=$(hostname -I 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
     printf '%s' "${ip:-N/A}"
 }
 get_ipv6()    {
@@ -303,49 +303,7 @@ cpu_pct() {
 # Colore un pourcentage : rouge si > 90, sinon jaune vif
 pct_color() { local p=$1; if (( p > 90 )); then echo -e "${RED}${p}%${RESET}"; else echo -e "${YELLOW}${p}%${RESET}"; fi; }
 
-# --- Comptage utilisateurs / connexions ---
-# ONLINE fiable : compte les sessions authentifiées réelles, pas les sockets.
-#   OpenSSH  → processus enfant "sshd: <user>" ou "sshd: <user>@pts" (exclut
-#              les lignes [priv]/[listener]/[net]/[accepted] et le master -D).
-#   Dropbear → processus enfants (total dropbear - 1 master).
-# Couvre WS/SSL/SlowDNS qui aboutissent tous sur sshd(22) ou dropbear(109),
-# donc aucun double comptage.
-_openssh_sessions() {
-    ps -eo cmd= 2>/dev/null | grep -cE '^sshd(-session)?: [^ ]+@'
-}
-_dropbear_sessions() {
-    local t; t=$(pgrep -x dropbear 2>/dev/null | wc -l)
-    (( t > 1 )) && echo $(( t - 1 )) || echo 0
-}
-_sshws_sessions() {
-    who 2>/dev/null | awk '$2 ~ /pts\//' | wc -l
-}
-count_ssh_online() {
-    local o d w; o=$(_openssh_sessions); d=$(_dropbear_sessions); w=$(_sshws_sessions)
-    local total=$(( o + d ))
-    (( total < w )) && total=$w
-    echo $total
-}
-count_udpcustom_online() {
-    local c=0
-    c=$(conntrack -L -p udp --dport 36712 2>/dev/null | grep -cF 'ESTABLISHED')
-    if (( c == 0 )); then
-        c=$(ss -unp "( dport = :36712 )" 2>/dev/null | awk 'NR>1{print $5}' | grep -cv ':36712$' 2>/dev/null || echo 0)
-    fi
-    echo $c
-}
-count_total_online() {
-    echo $(( $(count_ssh_online) + $(count_udpcustom_online) ))
-}
-# Détail par utilisateur (username|source_ip|since_epoch), une ligne par session
-ssh_online_detail() {
-    who 2>/dev/null | awk '
-        /^[a-zA-Z0-9._-]/ {
-            user=$1; tty=$2; src=""; for(i=3;i<=NF;i++){if($i ~ /\(.*\)/){src=substr($i,2,length($i)-2); break}}
-            if (src=="") src="local"
-            if (tty ~ /^pts\//) print user"|"src
-        }'
-}
+# --- Comptage utilisateurs ---
 count_ssh_total() { awk -F: '$3>=1000 && $7 ~ /(bash|sh)$/ {n++} END{print n+0}' /etc/passwd; }
 count_xray_total(){ jq '[.vmess,.vless,.trojan]|map(length)|add' /etc/xray/users.json 2>/dev/null || echo 0; }
 
@@ -431,11 +389,6 @@ last_optimized() {
 }
 
 # Intervalle de rafraîchissement du compteur online (secondes), défaut 5
-refresh_interval() {
-    local f="$STATEDIR/refresh_interval" v
-    v=$(cat "$f" 2>/dev/null)
-    [[ "$v" =~ ^[0-9]+$ && "$v" -gt 0 ]] && echo "$v" || echo 5
-}
 
 # ---- Détection réelle d'installation d'un protocole -------------------------
 # proto_on <candidat...> : vrai si un des services systemd est actif OU si un
@@ -468,9 +421,11 @@ scr_main() {
     clear
 
     # -- Données réelles recalculées à chaque affichage --
-    local ONL EXP KILL TOT OS ARCH CORES IP DT
-    ONL=$(count_total_online); EXP=$(count_expired); KILL=$(count_locked); TOT=$(count_total_users)
-    OS=$(get_os); ARCH=$(get_arch); CORES=$(get_cores); IP=$(get_ip); DT=$(get_datetime)
+    local EXP KILL TOT OS ARCH CORES IP DT
+    EXP=$(count_expired); KILL=$(count_locked); TOT=$(count_total_users)
+    OS=$(get_os); ARCH=$(get_arch); CORES=$(get_cores); DT=$(get_datetime)
+    local IPV4 IPV6
+    IPV4=$(get_ipv4); IPV6=$(get_ipv6)
 
     local RT RF RU RPCT CPCT BUF
     RT=$(ram_total_g); RF=$(ram_free_g); RU=$(ram_used_g)
@@ -551,27 +506,24 @@ _svc_ready() {
     [[ -n "$row" ]] && pg+=("$row")
 
     # -- Statuts dynamiques des options --
-    local ST_OPT ST_ONL ST_AUTO
+    local ST_OPT ST_AUTO
     ST_OPT=$(flag_status optimized)
-    ST_ONL=$(flag_status online_counter)
     ST_AUTO=$(flag_status autostart)
 
     # -- Lignes de menu : padding dynamique pour aligner les statuts --
     local m_labels=(
         "MANAGE USERS (SSH/XRAY/V2RAY/ZIVPN/HYSTERIA)"
         "OPTIMIZE VPS"
-        "ONLINE USERS COUNTER"
         "AUTO-START SCRIPT"
         "PROTOCOL INSTALLER"
     )
     local mw=0 lbl
     for lbl in "${m_labels[@]}"; do (( ${#lbl} > mw )) && mw=${#lbl}; done
-    local menu1 menu2 menu3 menu4 menu5
+    local menu1 menu2 menu3 menu4
     menu1=$(printf " ${GREEN}[01]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${m_labels[0]}")
     menu2=$(printf " ${GREEN}[02]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$mw" "${m_labels[1]}" "$ST_OPT")
-    menu3=$(printf " ${GREEN}[03]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$mw" "${m_labels[2]}" "$ST_ONL")
-    menu4=$(printf " ${GREEN}[04]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$mw" "${m_labels[3]}" "$ST_AUTO")
-    menu5=$(printf " ${GREEN}[05]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${m_labels[4]}")
+    menu3=$(printf " ${GREEN}[03]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$mw" "${m_labels[2]}" "$ST_AUTO")
+    menu4=$(printf " ${GREEN}[04]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${m_labels[3]}")
 
     # -- Construction de l'écran --
     local L=( "%SEP%" )
@@ -579,7 +531,7 @@ _svc_ready() {
     for bl in "${BANNER_LINES[@]}"; do L+=( "${CYAN}${bl}${RESET}" ); done
     L+=(
         "%SEP%"
-        " ${YELLOW}○${RESET} ${WHITE}ONLINES:${RESET} ${GREEN}[${ONL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}EXP:${RESET} ${RED}[${EXP}]${RESET}  ${GRAY}•${RESET}  ${WHITE}KILL:${RESET} ${RED}[${KILL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}TOTAL:${RESET} ${WHITE}[${TOT}]${RESET}"
+        " ${YELLOW}○${RESET} ${WHITE}EXP:${RESET} ${RED}[${EXP}]${RESET}  ${GRAY}•${RESET}  ${WHITE}KILL:${RESET} ${RED}[${KILL}]${RESET}  ${GRAY}•${RESET}  ${WHITE}TOTAL:${RESET} ${WHITE}[${TOT}]${RESET}"
         " ${YELLOW}○${RESET} ${WHITE}S.O:${RESET} ${WHITE}${OS}${RESET}  ${GRAY}•${RESET}  ${WHITE}Base:${RESET} ${WHITE}${ARCH}${RESET}  ${GRAY}•${RESET}  ${WHITE}CPU's:${RESET} ${WHITE}${CORES}${RESET}"
         " ${YELLOW}○${RESET} ${WHITE}IP:${RESET} ${WHITE}${IP}${RESET}  ${GRAY}•${RESET}  ${WHITE}TIME:${RESET} ${WHITE}${DT}${RESET}"
         "%SEP%"
@@ -596,9 +548,8 @@ _svc_ready() {
         "$menu2"
         "$menu3"
         "$menu4"
-        "$menu5"
         "%SEP%"
-        " ${GREEN}[06]${RESET} ${YELLOW}⇨${RESET} ${WHITE}UPDATE / REMOVE${RESET}     ${GRAY}|${RESET}     ${BTNBG} [0] ⇦ [ EXIT ] ${RESET}"
+        " ${GREEN}[05]${RESET} ${YELLOW}⇨${RESET} ${WHITE}UPDATE / REMOVE${RESET}     ${GRAY}|${RESET}     ${BTNBG} [0] ⇦ [ EXIT ] ${RESET}"
         "%SEP%"
     )
     render_screen L
@@ -627,12 +578,12 @@ push_header() {
 # ==============================================================================
 scr_manage_users() {
     clear
-    local TOT ONL EXP
-    TOT=$(count_total_users); ONL=$(count_total_online); EXP=$(count_expired)
+    local TOT EXP
+    TOT=$(count_total_users); EXP=$(count_expired)
     local L=()
     push_header L full " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}MANAGE USERS${RESET}"
     L+=(
-        " ${YELLOW}○${RESET} ${WHITE}TOTAL USERS:${RESET} ${WHITE}[${TOT}]${RESET}        ${YELLOW}○${RESET} ${WHITE}ONLINE NOW:${RESET} ${GREEN}[${ONL}]${RESET}        ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}"
+        " ${YELLOW}○${RESET} ${WHITE}TOTAL USERS:${RESET} ${WHITE}[${TOT}]${RESET}        ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}"
         "%SEP%"
         " ${GREEN}[01]${RESET} ${YELLOW}⇨${RESET} ${WHITE}SSH (WS/SSL/SlowDNS/UDP-Custom/BadVPN)${RESET}"
         " ${GREEN}[02]${RESET} ${YELLOW}⇨${RESET} ${WHITE}XRAY (Vmess/Vless/Trojan)${RESET}"
@@ -652,24 +603,18 @@ scr_manage_users() {
 #  Générateur de sous-panneau de gestion (SSH / XRAY / V2RAY-DNS / ZIVPN / HYST.)
 # ------------------------------------------------------------------------------
 # $1 titre-court (SSH/XRAY/...)  $2 sous-titre (2e ligne ○)  $3 label back
-# $4 show_online (1/0)  $5 label du bandeau (ex: "SSH")  $6.. protos comptés
+# $4 label du bandeau (ex: "SSH")  $5.. protos comptés
 _user_subpanel() {
     clear
-    local short="$1" subtitle="$2" back="$3" show_online="$4" statlabel="$5"; shift 5
+    local short="$1" subtitle="$2" back="$3" statlabel="$4"; shift 4
     local -a protos=("$@")
-    local TOT EXP ONL
+    local TOT EXP
     TOT=$(fam_total "${protos[@]}"); EXP=$(fam_expired "${protos[@]}")
     local L=()
     push_header L full \
         " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}MANAGE USERS ▸ ${short}${RESET}" \
         " ${YELLOW}○${RESET} ${subtitle}"
-    # Bandeau de stats (avec ou sans ONLINE)
-    if [[ "$show_online" == "1" ]]; then
-ONL=$(count_total_online)
-        L+=( " ${YELLOW}○${RESET} ${WHITE}TOTAL ${statlabel} USERS:${RESET} ${WHITE}[${TOT}]${RESET}     ${YELLOW}○${RESET} ${WHITE}ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}     ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}" )
-    else
-        L+=( " ${YELLOW}○${RESET} ${WHITE}TOTAL ${statlabel} USERS:${RESET} ${WHITE}[${TOT}]${RESET}     ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}" )
-    fi
+    L+=( " ${YELLOW}○${RESET} ${WHITE}TOTAL ${statlabel} USERS:${RESET} ${WHITE}[${TOT}]${RESET}     ${YELLOW}○${RESET} ${WHITE}EXPIRED:${RESET} ${RED}[${EXP}]${RESET}" )
     L+=(
         "%SEP%"
         " ${GREEN}[01]${RESET} ${YELLOW}⇨${RESET} ${WHITE}CREATE USER${RESET}"
@@ -692,31 +637,31 @@ ONL=$(count_total_online)
 scr_users_ssh() {
     _user_subpanel "SSH" \
         "${WHITE}TUNNELS: WS / SSL / SlowDNS / UDP-Custom / BadVPN${RESET}" \
-        "BACK TO MANAGE USERS" 1 "SSH" \
+        "BACK TO MANAGE USERS" "SSH" \
         ssh
 }
 scr_users_xray() {
     _user_subpanel "XRAY" \
         "${WHITE}PROTO: Vmess / Vless / Trojan${RESET}" \
-        "BACK TO MANAGE USERS" 0 "XRAY" \
+        "BACK TO MANAGE USERS" "XRAY" \
         vmess vless trojan
 }
 scr_users_v2raydns() {
     _user_subpanel "V2RAY-DNS" \
         "${WHITE}VLESS over DNS (SlowDNS NV4)${RESET}" \
-        "BACK TO MANAGE USERS" 0 "V2RAY-DNS" \
+        "BACK TO MANAGE USERS" "V2RAY-DNS" \
         v2raydns
 }
 scr_users_zivpn() {
     _user_subpanel "ZIVPN" \
         "${WHITE}UDP obfuscated tunnel${RESET}" \
-        "BACK TO MANAGE USERS" 0 "ZIVPN" \
+        "BACK TO MANAGE USERS" "ZIVPN" \
         zivpn
 }
 scr_users_hysteria() {
     _user_subpanel "HYSTERIA" \
         "${WHITE}UDP high-speed tunnel${RESET}" \
-        "BACK TO MANAGE USERS" 0 "HYSTERIA" \
+        "BACK TO MANAGE USERS" "HYSTERIA" \
         hysteria
 }
 
@@ -762,6 +707,7 @@ scr_optimize() {
         "SWAP CONFIGURATION"
         "CLEAN CACHE / TEMP FILES"
         "LIMIT LOG SIZE (JOURNALCTL)"
+        "CLEAN TUNNEL LOGS"
         "DISABLE UNUSED SERVICES"
         "NETWORK / SYSCTL TUNING"
         "RUN FULL OPTIMIZATION (ALL ABOVE)"
@@ -770,16 +716,17 @@ scr_optimize() {
     local ow=0 lbl
     for lbl in "${o_labels[@]}"; do (( ${#lbl} > ow )) && ow=${#lbl}; done
 
-    local o1 o2 o3 o4 o5 o6 o7 o8 o9
+    local o1 o2 o3 o4 o5 o6 o7 o8 o9 o10
     o1=$(printf " ${GREEN}[01]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$ow" "${o_labels[0]}" "$ST_GLOBAL")
     o2=$(printf " ${GREEN}[02]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$ow" "${o_labels[1]}" "$ST_BBR")
     o3=$(printf " ${GREEN}[03]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${o_labels[2]}")
     o4=$(printf " ${GREEN}[04]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${o_labels[3]}")
     o5=$(printf " ${GREEN}[05]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$ow" "${o_labels[4]}" "$ST_LOG")
     o6=$(printf " ${GREEN}[06]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${o_labels[5]}")
-    o7=$(printf " ${GREEN}[07]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$ow" "${o_labels[6]}" "$ST_SYS")
-    o8=$(printf " ${GREEN}[08]${RESET} ${YELLOW}⇨${RESET} ${GREEN}%s${RESET}" "${o_labels[7]}")
-    o9=$(printf " ${GREEN}[09]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  ${RED}[!]${RESET}" "$ow" "${o_labels[8]}")
+    o7=$(printf " ${GREEN}[07]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${o_labels[6]}")
+    o8=$(printf " ${GREEN}[08]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$ow" "${o_labels[7]}" "$ST_SYS")
+    o9=$(printf " ${GREEN}[09]${RESET} ${YELLOW}⇨${RESET} ${GREEN}%s${RESET}" "${o_labels[8]}")
+    o10=$(printf " ${GREEN}[10]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  ${RED}[!]${RESET}" "$ow" "${o_labels[9]}")
 
     local L=()
     push_header L full " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}OPTIMIZE VPS${RESET}"
@@ -793,9 +740,10 @@ scr_optimize() {
         "$o5"
         "$o6"
         "$o7"
-        "%SEP%"
         "$o8"
+        "%SEP%"
         "$o9"
+        "$o10"
         "%SEP%"
         " ${BTNBG} [0] ⇦ [ BACK TO MAIN MENU ] ${RESET}"
         "%SEP%"
@@ -807,105 +755,1082 @@ scr_optimize() {
 
 
 # ==============================================================================
-#  SECTION 6 — ONLINE USERS COUNTER
+#  SECTION 6 — PROTOCOL INSTALLER
 # ==============================================================================
-# NB : seul SSH a un comptage online fiable → pas de détail Xray/V2Ray/Zivpn/Hyst.
-scr_online_counter() {
+# Chaque ligne = bascule Install/Uninstall selon l'état réel détecté.
+install_telegram_bot() {
     clear
-    local ONL ITV ST_AUTO
-    ONL=$(count_total_online)
-    ITV=$(refresh_interval)
-    ST_AUTO=$(flag_status online_counter)
+    echo -e " ${CYAN}━━━ TELEGRAM BOT ━━━${RESET}"
+    echo -e " ${LAV}Configuration du bot Telegram pour gérer le serveur${RESET}\n"
 
-    local c_labels=(
-        "VIEW DETAILS (SSH USERS + IP)"
-        "REFRESH NOW"
-        "TOGGLE AUTO-REFRESH"
-        "SET REFRESH INTERVAL"
-        "KICK / DISCONNECT USER"
-        "EXPORT LOG (ONLINE HISTORY)"
-    )
-    local cw=0 lbl
-    for lbl in "${c_labels[@]}"; do (( ${#lbl} > cw )) && cw=${#lbl}; done
+    local token admin_id
+    read -rp " Telegram Bot Token (from @BotFather): " token
+    token="${token// /}"
+    [[ -z "$token" ]] && { _msg_err "Token required"; press_enter; return; }
 
-    local c1 c2 c3 c4 c5 c6
-    c1=$(printf " ${GREEN}[01]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${c_labels[0]}")
-    c2=$(printf " ${GREEN}[02]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${c_labels[1]}")
-    c3=$(printf " ${GREEN}[03]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  %b" "$cw" "${c_labels[2]}" "$ST_AUTO")
-    c4=$(printf " ${GREEN}[04]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${c_labels[3]}")
-    c5=$(printf " ${GREEN}[05]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${c_labels[4]}")
-    c6=$(printf " ${GREEN}[06]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%s${RESET}" "${c_labels[5]}")
+    read -rp " Your Telegram User ID (numeric): " admin_id
+    admin_id="${admin_id// /}"
+    [[ -z "$admin_id" || ! "$admin_id" =~ ^[0-9]+$ ]] && { _msg_err "Valid numeric ID required"; press_enter; return; }
 
-    # Bandeau REFRESH : AUTO (Xs) si activé, sinon MANUAL
-    local refline
-    if [[ "$ST_AUTO" == *"[ON]"* ]]; then
-        refline=" ${YELLOW}○${RESET} ${WHITE}DEVICES ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}          ${YELLOW}○${RESET} ${WHITE}REFRESH:${RESET} ${GREEN}AUTO (${ITV}s)${RESET}"
-    else
-        refline=" ${YELLOW}○${RESET} ${WHITE}DEVICES ONLINE:${RESET} ${GREEN}[${ONL}]${RESET}          ${YELLOW}○${RESET} ${WHITE}REFRESH:${RESET} ${GRAY}MANUAL${RESET}"
-    fi
+    # Install python3 + pip + python-telegram-bot
+    apt-get install -y -qq python3 python3-pip 2>/dev/null
+    pip3 install python-telegram-bot --quiet 2>/dev/null || true
 
-    local L=()
-    push_header L full " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}DEVICES ONLINE COUNTER${RESET}"
-    L+=(
-        "$refline"
-        "%SEP%"
-        "$c1"
-        "$c2"
-        "$c3"
-        "$c4"
-        "$c5"
-        "$c6"
-        "%SEP%"
-        " ${BTNBG} [0] ⇦ [ BACK TO MAIN MENU ] ${RESET}"
-        "%SEP%"
-    )
-    render_screen L
-    echo
-    echo -ne " ${YELLOW}►${RESET} ${WHITE}Option : ${RESET}"
+    mkdir -p /etc/kighmu/bot /root/bot-telegram
+    cat > /etc/kighmu/bot/config.json << BOTCFG
+{
+  "token": "$token",
+  "admin_id": $admin_id
+}
+BOTCFG
+
+    cat > /usr/local/bin/kighmu-bot << 'BOTPYEOF'
+#!/usr/bin/env python3
+import os, sys, json, subprocess, sqlite3, re, asyncio, logging, base64, shlex
+from datetime import datetime, date, timedelta
+from pathlib import Path
+
+try:
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+except ImportError:
+    os.system("pip3 install python-telegram-bot --quiet --break-system-packages 2>/dev/null")
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+
+logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
+log = logging.getLogger(__name__)
+
+BOT_DIR = Path("/etc/kighmu/bot")
+BOT_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = BOT_DIR / "config.json"
+USERDIR = Path("/etc/kighmu/users")
+XRAY_USERS = Path("/etc/xray/users.json")
+V2RAY_USERS = Path("/etc/v2ray/users.json")
+DOMAIN_FILE = Path("/etc/kighmu/domain.txt")
+SLOWDNS_NS = Path("/etc/slowdns/ns.conf")
+SLOWDNS_PUB = Path("/etc/slowdns/server.pub")
+SLOWDNS_NV4 = Path("/etc/slowdns/nv4/ns.conf")
+
+CONFIG = {"token": "", "admin_id": 0}
+if CONFIG_FILE.exists():
+    CONFIG.update(json.loads(CONFIG_FILE.read_text()))
+
+TOKEN = CONFIG.get("token", "")
+ADMIN_ID = CONFIG.get("admin_id", 0)
+SCRIPT = "/root/install2.sh"
+
+def is_authorized(user_id):
+    return user_id == ADMIN_ID
+
+def sh(cmd):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        return r.stdout.strip()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+def sh_json(cmd):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        if r.stdout.strip():
+            return json.loads(r.stdout)
+    except: pass
+    return {}
+
+def call_script(func, *args):
+    cmd = f"source {SCRIPT} 2>/dev/null; {func} {' '.join(shlex.quote(str(a)) for a in args)}"
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=60)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+def get_domain():
+    d = sh("cat /etc/kighmu/domain.txt 2>/dev/null || cat /etc/xray/domain 2>/dev/null || curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'")
+    return d or "N/A"
+
+def get_ip():
+    return sh("curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'") or "N/A"
+
+def get_os():
+    try:
+        with open("/etc/os-release") as f:
+            for l in f:
+                if l.startswith("PRETTY_NAME="):
+                    return l.split("=",1)[1].strip().strip('"')
+    except: pass
+    return sh("uname -s") or "N/A"
+
+def get_slowdns_info():
+    pub = sh("cat /etc/slowdns/server.pub 2>/dev/null") or "N/A"
+    ns = sh("cat /etc/slowdns/ns.conf 2>/dev/null") or "N/A"
+    nv4 = sh("cat /etc/slowdns/nv4/ns.conf 2>/dev/null") or "N/A"
+    return pub, ns, nv4
+
+def get_xray_traffic(email):
+    try:
+        r = subprocess.run(
+            ["/usr/local/bin/xray", "api", "statsquery", "--server=127.0.0.1:10085",
+             f"-pattern=user>>>{email}>>>"],
+            capture_output=True, text=True, timeout=10
+        )
+        data = json.loads(r.stdout) if r.stdout.strip() else {}
+        up, down = 0, 0
+        for stat in data.get("stat", []):
+            name = stat.get("name", "")
+            value = stat.get("value", 0)
+            if "uplink" in name:
+                up += value
+            elif "downlink" in name:
+                down += value
+        return up + down
+    except:
+        return 0
+
+def get_v2ray_traffic(email):
+    try:
+        r = subprocess.run(
+            ["/usr/local/bin/v2ray", "api", "stats", "--server=127.0.0.1:10086"],
+            capture_output=True, text=True, timeout=10
+        )
+        up, down = 0, 0
+        mul = {"B":1,"KB":1024,"MB":1024**2,"GB":1024**3,"TB":1024**4}
+        for line in r.stdout.splitlines():
+            m = re.search(r'([\d.]+)\s*(B|KB|MB|GB|TB)\s+.*user>>>' + re.escape(email) + r'>>>traffic>>>(uplink|downlink)', line)
+            if m:
+                val = int(float(m.group(1)) * mul[m.group(2)])
+                if m.group(3) == "uplink":
+                    up += val
+                else:
+                    down += val
+        return up + down
+    except:
+        return 0
+
+def fmt_bytes(b):
+    for u in ["B","KB","MB","GB","TB"]:
+        if b < 1024:
+            return f"{b:.1f} {u}"
+        b /= 1024
+    return f"{b:.1f} PB"
+
+def vmess_link_b64(uuid, host, port, net, tls, path_or_svc, ps, sni):
+    if net == "grpc":
+        obj = {"v":"2","ps":ps,"add":host,"port":str(port),"id":uuid,"aid":"0","scy":"auto",
+               "net":"grpc","type":"multi","path":path_or_svc,"tls":tls,"sni":sni}
+    else:
+        obj = {"v":"2","ps":ps,"add":host,"port":str(port),"id":uuid,"aid":"0","scy":"auto",
+               "net":"ws","type":"none","host":host,"path":path_or_svc,"tls":tls,"sni":sni}
+    raw = json.dumps(obj, separators=(',',':')).encode()
+    return "vmess://" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+# --- User management helpers ---
+def get_meta(user, field):
+    f = USERDIR / user
+    if f.exists():
+        for line in f.read_text().splitlines():
+            if line.startswith(f"{field}="):
+                return line.split("=",1)[1]
+    return ""
+
+def set_meta(user, field, value):
+    f = USERDIR / user
+    if f.exists():
+        lines = f.read_text().splitlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.startswith(f"{field}="):
+                new_lines.append(f"{field}={value}")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"{field}={value}")
+        f.write_text("\n".join(new_lines) + "\n")
+
+def del_user(user):
+    f = USERDIR / user
+    if f.exists():
+        proto = get_meta(user, "proto")
+        if proto == "ssh":
+            subprocess.run(f"userdel -f {user} 2>/dev/null", shell=True)
+            subprocess.run(f"sed -i '/^{user}|/d' /etc/kighmu/users.list 2>/dev/null || true", shell=True)
+        elif proto in ("vmess","vless","trojan"):
+            subprocess.run(["bash","-c",f"source /root/install2.sh 2>/dev/null; xray_del_user {user}; xray_reload"], timeout=30)
+        elif proto == "zivpn":
+            f.unlink(missing_ok=True)
+            subprocess.run(["bash","-c",f"source /root/install2.sh 2>/dev/null; zivpn_apply"], timeout=30)
+        elif proto == "hysteria":
+            f.unlink(missing_ok=True)
+            subprocess.run(["bash","-c",f"source /root/install2.sh 2>/dev/null; hysteria_apply"], timeout=30)
+        elif proto == "v2raydns":
+            f.unlink(missing_ok=True)
+            subprocess.run(["bash","-c",f"source /root/install2.sh 2>/dev/null; v2raydns_apply"], timeout=30)
+        if f.exists(): f.unlink()
+
+def get_users_by_proto(proto):
+    proto_map = {"ssh":"ssh","xray":None,"v2ray":"v2raydns","zivpn":"zivpn","hyst":"hysteria"}
+    real = proto_map.get(proto, proto)
+    users = []
+    if proto == "xray":
+        for p in ("vmess","vless","trojan","shadow"):
+            try:
+                with open(XRAY_USERS) as f:
+                    d = json.load(f)
+                users.extend((u.get("email","?").split("@")[0], u.get("expire","?")) for u in d.get(p, []))
+            except: pass
+    elif proto == "v2ray":
+        try:
+            with open(V2RAY_USERS) as f:
+                d = json.load(f)
+            users.extend((u.get("email","?").split("@")[0], u.get("expire","?")) for u in d.get("vless", []))
+        except: pass
+    else:
+        if USERDIR.exists():
+            for f in sorted(USERDIR.iterdir()):
+                if f.is_file() and get_meta(f.name, "proto") == real:
+                    users.append((f.name, get_meta(f.name, "exp")))
+    return users
+
+def gen_pass(n=12):
+    return sh(f"openssl rand -base64 20 | tr -d '=/+' | head -c {n}") or "Kighmu2026!"
+
+def exp_in_days(days):
+    return sh(f"date -d '+{days}days' +%Y-%m-%d")
+
+# --- Protocol user counts ---
+def count_users(proto):
+    n = 0
+    if USERDIR.exists():
+        for f in USERDIR.iterdir():
+            if f.is_file() and get_meta(f.name, "proto") == proto:
+                n += 1
+    return n
+
+
+def xray_user_count():
+    try:
+        with open(XRAY_USERS) as f:
+            d = json.load(f)
+        return len(d.get("vmess",[])) + len(d.get("vless",[])) + len(d.get("trojan",[])) + len(d.get("shadow",[]))
+    except: return 0
+
+SERVICES = {
+    "SSH": "sshd", "Dropbear": "dropbear", "SSH-WS": "sshws",
+    "SSL/TLS": "ssl_tls", "Xray": "xray", "V2Ray-DNS": "v2ray",
+    "SlowDNS": "slowdns-ns4", "ZIVPN": "zivpn", "Hysteria": "hysteria",
+    "UDP-Custom": "udp-custom", "BadVPN 7100": "badvpn@7100",
+    "BadVPN 7200": "badvpn@7200", "BadVPN 7300": "badvpn@7300",
+    "HAProxy": "haproxy", "Nginx": "nginx", "MySQL": "mysql",
 }
 
-# ---- 6.1 VIEW DETAILS : tableau aligné USERNAME / CONNECTIONS / SINCE --------
-scr_online_details() {
-    clear
-    local L=()
-    push_header L simple " ${YELLOW}○${RESET} ${WHITE}MENU :${RESET} ${WHITE}ONLINE USERS ▸ DETAILS${RESET}"
+def svc_active(name):
+    r = subprocess.run(f"systemctl is-active {name} 2>/dev/null", shell=True, capture_output=True, text=True)
+    return r.stdout.strip() == "active"
 
-    # En-têtes de colonnes (largeurs fixes alignées)
-    L+=(
-        "$(printf " ${WHITE}%-15s %-18s %-10s${RESET}" "USERNAME" "CONNECTIONS" "SINCE")"
-        "$(printf " ${GRAY}%-15s %-18s %-10s${RESET}" "────────" "───────────" "─────")"
+# --- Build keyboards ---
+def main_kb():
+    kb = [
+        [InlineKeyboardButton("📊 Dashboard", callback_data="dash"),
+         InlineKeyboardButton("👥 Users", callback_data="users")],
+        [InlineKeyboardButton("🔧 Services", callback_data="services"),
+         InlineKeyboardButton("📈 Server", callback_data="server")],
+        [InlineKeyboardButton("❓ Help", callback_data="help")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+def users_kb():
+    kb = [
+        [InlineKeyboardButton("➕ Create SSH", callback_data="cr_ssh"),
+         InlineKeyboardButton("➕ Create Xray", callback_data="cr_xray")],
+        [InlineKeyboardButton("➕ Create V2Ray DNS", callback_data="cr_v2ray"),
+         InlineKeyboardButton("➕ Create ZIVPN", callback_data="cr_zivpn")],
+        [InlineKeyboardButton("➕ Create Hysteria", callback_data="cr_hyst")],
+        [InlineKeyboardButton("📋 List SSH", callback_data="ls_ssh"),
+         InlineKeyboardButton("📋 List Xray", callback_data="ls_xray")],
+        [InlineKeyboardButton("📋 List V2Ray DNS", callback_data="ls_v2ray"),
+         InlineKeyboardButton("📋 List ZIVPN", callback_data="ls_zivpn")],
+        [InlineKeyboardButton("📋 List Hysteria", callback_data="ls_hyst")],
+        [InlineKeyboardButton("🔍 Info User", callback_data="info_user"),
+         InlineKeyboardButton("🗑 Delete User", callback_data="del_user")],
+        [InlineKeyboardButton("🔄 Renew User", callback_data="renew_user"),
+         InlineKeyboardButton("🔒 Lock/Unlock", callback_data="lock_user")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="main")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+def xray_proto_kb():
+    kb = [
+        [InlineKeyboardButton("VMESS", callback_data="cr_vmess"),
+         InlineKeyboardButton("VLESS", callback_data="cr_vless")],
+        [InlineKeyboardButton("Trojan", callback_data="cr_trojan")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="users")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+def del_proto_kb():
+    kb = [
+        [InlineKeyboardButton("🗑 SSH", callback_data="del_proto_ssh"),
+         InlineKeyboardButton("🗑 Xray", callback_data="del_proto_xray")],
+        [InlineKeyboardButton("🗑 V2Ray DNS", callback_data="del_proto_v2ray"),
+         InlineKeyboardButton("🗑 ZIVPN", callback_data="del_proto_zivpn")],
+        [InlineKeyboardButton("🗑 Hysteria", callback_data="del_proto_hyst")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="users")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+def back_kb(target="main"):
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=target)]])
+
+def yesno_kb(action, data):
+    kb = [
+        [InlineKeyboardButton("✅ Yes", callback_data=f"{action}_y:{data}"),
+         InlineKeyboardButton("❌ No", callback_data=f"{action}_n:{data}")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+async def reply_cls(update, ctx, text, **kw):
+    """Send reply, delete previous bot msg, store new msg id."""
+    last_id = ctx.user_data.get("last_msg_id")
+    if last_id:
+        try:
+            await ctx.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_id)
+        except:
+            pass
+    msg = await update.message.reply_text(text, **kw)
+    ctx.user_data["last_msg_id"] = msg.message_id
+    return msg
+
+# --- Detail message builders ---
+def build_ssh_details(user, pwd, exp, quota):
+    dom = get_domain()
+    ip = get_ip()
+    pub, ns, nv4 = get_slowdns_info()
+    ua = "Mozilla/5.0"
+    txt = (
+        f"🔑 *SSH USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• IP: `{ip}`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• Password: `{pwd}`\n\n"
+        f"*CONNECTION LINKS*\n\n"
+        f"1️⃣ SSH WS\n`{dom}:80@{user}:{pwd}`\n\n"
+        f"2️⃣ SSL/TLS\n`{dom}:444@{user}:{pwd}`\n\n"
+        f"3️⃣ PROXY WS\n`{dom}:9090@{user}:{pwd}`\n\n"
+        f"4️⃣ SSH UDP\n`{dom}:1-65535@{user}:{pwd}`\n\n"
+        f"*WS PAYLOAD*\n"
+        f"`GET / HTTP/1.1[crlf]Host: {dom}[crlf]Connection: Upgrade[crlf]User-Agent: {ua}[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
+        f"*FASTDNS (PORT 5300)*\n"
+        f"• Public Key: `{pub}`\n"
+        f"• NameServer: `{ns}`\n\n"
+        f"*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN"
     )
+    return txt
 
-    # Lignes de données : agréger les sessions par utilisateur
-    local rows; rows=$(ssh_online_detail 2>/dev/null)
-    if [[ -z "$rows" ]]; then
-        L+=( " ${GRAY}(no active SSH session)${RESET}" )
+def build_vless_details(user, uuid, exp, quota):
+    dom = get_domain()
+    txt = (
+        f"🔗 *VLESS USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• Protocol: `VLESS`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• UUID: `{uuid}`\n\n"
+        f"*PATHS:*\n"
+        f"• WS: `/vless`\n"
+        f"• XHTTP: `/vless-xhttp`\n"
+        f"• HTTPUpgrade: `/vless-hupgrade`\n"
+        f"• gRPC: `/vless-grpc`\n\n"
+        f"*CONNECTION LINKS*\n\n"
+        f"1️⃣ TLS/WS :443\n`vless://{uuid}@{dom}:443?security=tls&type=ws&path=/vless&host={dom}&sni={dom}#{user}`\n\n"
+        f"2️⃣ NTLS/WS :8880\n`vless://{uuid}@{dom}:8880?security=none&type=ws&path=/vless&host={dom}#{user}`\n\n"
+        f"3️⃣ TLS/XHTTP :443\n`vless://{uuid}@{dom}:443?security=tls&type=xhttp&path=/vless-xhttp&host={dom}&sni={dom}#{user}`\n\n"
+        f"4️⃣ TLS/HTTPUpgrade :443\n`vless://{uuid}@{dom}:443?security=tls&type=httpupgrade&path=/vless-hupgrade&host={dom}&sni={dom}#{user}`\n\n"
+        f"5️⃣ TLS/gRPC :443\n`vless://{uuid}@{dom}:443?mode=grpc&security=tls&type=grpc&serviceName=vless-grpc&sni={dom}#{user}`\n\n"
+        f"6️⃣ NTLS/TCP :8880\n`vless://{uuid}@{dom}:8880?security=none&type=tcp#{user}`\n\n"
+        f"7️⃣ TLS/TCP :443\n`vless://{uuid}@{dom}:443?security=tls&type=tcp&sni={dom}#{user}`"
+    )
+    return txt
+
+def build_trojan_details(user, pwd, exp, quota):
+    dom = get_domain()
+    txt = (
+        f"🔗 *TROJAN USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• Protocol: `TROJAN`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• Password: `{pwd}`\n\n"
+        f"*PATHS:*\n"
+        f"• WS: `/trojan`\n"
+        f"• XHTTP: `/trojan-xhttp`\n"
+        f"• HTTPUpgrade: `/trojan-hupgrade`\n"
+        f"• gRPC: `/trojan-grpc`\n\n"
+        f"*CONNECTION LINKS*\n\n"
+        f"1️⃣ TLS/WS :443\n`trojan://{pwd}@{dom}:443?security=tls&type=ws&path=/trojan&host={dom}&sni={dom}#{user}`\n\n"
+        f"2️⃣ NTLS/WS :8880\n`trojan://{pwd}@{dom}:8880?security=none&type=ws&path=/trojan&host={dom}#{user}`\n\n"
+        f"3️⃣ TLS/XHTTP :443\n`trojan://{pwd}@{dom}:443?security=tls&type=xhttp&path=/trojan-xhttp&host={dom}&sni={dom}#{user}`\n\n"
+        f"4️⃣ TLS/HTTPUpgrade :443\n`trojan://{pwd}@{dom}:443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host={dom}&sni={dom}#{user}`\n\n"
+        f"5️⃣ TLS/gRPC :443\n`trojan://{pwd}@{dom}:443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni={dom}#{user}`\n\n"
+        f"6️⃣ NTLS/TCP :8880\n`trojan://{pwd}@{dom}:8880?security=none&type=tcp#{user}`\n\n"
+        f"7️⃣ TLS/TCP :443\n`trojan://{pwd}@{dom}:443?security=tls&type=tcp&sni={dom}#{user}`"
+    )
+    return txt
+
+def build_vmess_details(user, uuid, exp, quota):
+    dom = get_domain()
+    l1 = vmess_link_b64(uuid, dom, 8880, "ws", "none", "/vmess", user, "")
+    l2 = vmess_link_b64(uuid, dom, 443, "ws", "tls", "/vmess", user, dom)
+    l3 = vmess_link_b64(uuid, dom, 443, "grpc", "tls", "vmess-grpc", user, dom)
+    txt = (
+        f"🔗 *VMESS USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• Protocol: `VMESS`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• UUID: `{uuid}`\n\n"
+        f"*PATHS:*\n"
+        f"• WS: `/vmess`\n"
+        f"• gRPC: `/vmess-grpc`\n\n"
+        f"*CONNECTION LINKS*\n\n"
+        f"1️⃣ NTLS/WS :8880\n`{l1}`\n\n"
+        f"2️⃣ TLS/WS :443\n`{l2}`\n\n"
+        f"3️⃣ TLS/gRPC :443\n`{l3}`"
+    )
+    return txt
+
+def build_hysteria_details(user, pwd, exp, quota):
+    dom = get_domain()
+    txt = (
+        f"⚡ *HYSTERIA USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• Obfs: `hysteria`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• Password: `{pwd}`\n"
+        f"• Port Range: `20000-50000`\n\n"
+        f"Use a Hysteria client with the above details."
+    )
+    return txt
+
+def build_zivpn_details(user, pwd, exp, quota):
+    dom = get_domain()
+    txt = (
+        f"🔌 *ZIVPN USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• Obfs: `zivpn`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• Password: `{pwd}`\n"
+        f"• Port: `5667`\n\n"
+        f"Use a ZIVPN client with the above details."
+    )
+    return txt
+
+def build_v2raydns_details(user, uuid, exp, quota):
+    dom = get_domain()
+    pub, ns, nv4 = get_slowdns_info()
+    txt = (
+        f"🌐 *V2RAY DNS USER DETAILS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• User: `{user}`\n"
+        f"• Domain: `{dom}`\n"
+        f"• Expires: `{exp}`\n"
+        f"• Quota: `{quota} GB`\n"
+        f"• UUID: `{uuid}`\n\n"
+        f"*PORTS*\n"
+        f"• FastDNS UDP: `5354`\n"
+        f"• V2Ray TCP: `5401`\n\n"
+        f"*SLOWDNS (PORT 5354)*\n"
+        f"• Public Key: `{pub}`\n"
+        f"• NameServer: `{nv4}`\n\n"
+        f"*V2RAY-DNS LINK*\n"
+        f"`vless://{uuid}@{dom}:5401?type=tcp&encryption=none&host={dom}#{user}-V2RAY-DNS`"
+    )
+    return txt
+
+# --- Bot Handlers ---
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_authorized(uid):
+        await update.message.reply_text("⛔ Unauthorized. You are not allowed to use this bot.")
+        return
+    await show_main(update, ctx)
+
+async def show_main(update: Update, ctx: ContextTypes.DEFAULT_TYPE, edit=False):
+    u = xray_user_count() + count_users("ssh") + count_users("zivpn") + count_users("hysteria") + count_users("v2raydns")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ip = get_ip()
+    dom = get_domain()
+    txt = (
+        f"🤖 *KIGHMU PANEL BOT*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 Total Users: `{u}`\n"
+        f"🌐 IP: `{ip}`\n"
+        f"📌 Domain: `{dom}`\n"
+        f"🕐 {now}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━"
+    )
+    if edit:
+        await update.callback_query.edit_message_text(txt, reply_markup=main_kb(), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(txt, reply_markup=main_kb(), parse_mode="Markdown")
+
+async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    ctx.user_data["last_msg_id"] = q.message.message_id
+    uid = q.from_user.id
+    if not is_authorized(uid):
+        await q.edit_message_text("⛔ Unauthorized.")
+        return
+    data = q.data
+
+    if data == "main":
+        await show_main(update, ctx, edit=True)
+
+    elif data == "dash":
+        ux = xray_user_count()
+        us = count_users("ssh")
+        uz = count_users("zivpn")
+        uh = count_users("hysteria")
+        uv = count_users("v2raydns")
+        rt = sh("free -m | awk '/^Mem:/{printf \"%.1f\", $2/1024}'")
+        ru = sh("free -m | awk '/^Mem:/{printf \"%.1f\", $3/1024}'")
+        rp = sh("free -m | awk '/^Mem:/{printf \"%d\", $3*100/$2}'")
+        cp = sh("top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d. -f1")
+        txt = (
+            f"📊 *DASHBOARD*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"*USERS*\n"
+            f"• SSH: `{us}`\n"
+            f"• Xray: `{ux}`\n"
+            f"• ZIVPN: `{uz}`\n"
+            f"• Hysteria: `{uh}`\n"
+            f"• V2Ray-DNS: `{uv}`\n\n"
+            f"*RESOURCES*\n"
+            f"• RAM: `{ru}G / {rt}G` ({rp}%)\n"
+            f"• CPU: `{cp}%`\n"
+        )
+        await q.edit_message_text(txt, reply_markup=back_kb("main"), parse_mode="Markdown")
+
+    elif data == "users":
+        await q.edit_message_text("👥 *User Management*\nSelect an option:", reply_markup=users_kb(), parse_mode="Markdown")
+
+    elif data == "services":
+        lines = ["🔧 *SERVICES STATUS*\n"]
+        ok = 0
+        for name, svc in SERVICES.items():
+            a = svc_active(svc)
+            icon = "🟢" if a else "🔴"
+            lines.append(f"{icon} {name}")
+            if a: ok += 1
+        lines.append(f"\n✅ {ok}/{len(SERVICES)} services active")
+        await q.edit_message_text("\n".join(lines), reply_markup=back_kb("main"), parse_mode="Markdown")
+
+    elif data == "server":
+        os_ = get_os()
+        arch = sh("uname -m")
+        cores = sh("nproc 2>/dev/null || echo 1")
+        uptime = sh("uptime -p 2>/dev/null | sed 's/up //'")
+        load = sh("cat /proc/loadavg | awk '{print $1, $2, $3}'")
+        disk = sh("df -h / | awk 'NR==2{print $3 \"/\" $2 \" (\" $5 \")\"}'")
+        rt = sh("free -m | awk '/^Mem:/{printf \"%.1f GB\", $2/1024}'")
+        ru = sh("free -m | awk '/^Mem:/{printf \"%.1f GB\", $3/1024}'")
+        rf = sh("free -m | awk '/^Mem:/{printf \"%.1f GB\", $7/1024}'")
+        sw = sh("free -m | awk '/^Swap:/{printf \"%d MB\", $3}'")
+        ip = get_ip()
+        txt = (
+            f"🖥 *SERVER INFO*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• OS: `{os_}`\n"
+            f"• Arch: `{arch}`\n"
+            f"• CPU Cores: `{cores}`\n"
+            f"• RAM: `{ru} / {rt}`\n"
+            f"• RAM Free: `{rf}`\n"
+            f"• Swap Used: `{sw}`\n"
+            f"• Disk: `{disk}`\n"
+            f"• IP: `{ip}`\n"
+            f"• Uptime: `{uptime}`\n"
+            f"• Load: `{load}`"
+        )
+        await q.edit_message_text(txt, reply_markup=back_kb("main"), parse_mode="Markdown")
+
+    elif data == "cr_xray":
+        await q.edit_message_text("Select Xray protocol:", reply_markup=xray_proto_kb(), parse_mode="Markdown")
+
+    elif data.startswith("cr_"):
+        proto = data[3:]
+        if proto in ("vmess","vless","trojan"):
+            ctx.user_data["cr_proto"] = proto
+            ctx.user_data["step"] = "cr_user"
+            await q.edit_message_text(f"✏️ Enter username for *{proto.upper()}*:", parse_mode="Markdown")
+        elif proto in ("ssh","v2ray","zivpn","hyst"):
+            pname = {"ssh":"SSH","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}.get(proto, proto)
+            ctx.user_data["cr_proto"] = proto
+            ctx.user_data["step"] = "cr_user"
+            await q.edit_message_text(f"✏️ Enter username for *{pname}*:", parse_mode="Markdown")
+
+    elif data.startswith("ls_"):
+        proto = data[3:]
+        log.info(f"Listing users for proto={proto}")
+        pnames = {"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+        pname = pnames.get(proto, proto)
+        rows = []
+        if proto == "xray":
+            for p in ("vmess","vless","trojan","shadow"):
+                try:
+                    with open(XRAY_USERS) as f:
+                        d = json.load(f)
+                    for u in d.get(p, []):
+                        email = u.get("email","?").split("@")[0]
+                        exp = get_meta(email, "exp") or u.get("expire","?")
+                        qv = float(get_meta(email, "quota") or "0")
+                        used = get_xray_traffic(u.get("email",""))
+                        rows.append((email, p.upper(), exp, qv, used))
+                except Exception as e:
+                    log.error(f"Error listing xray {p}: {e}")
+        elif proto == "v2ray":
+            for p in ("vless",):
+                try:
+                    with open(V2RAY_USERS) as f:
+                        d = json.load(f)
+                    for u in d.get(p, []):
+                        email = u.get("email","?").split("@")[0]
+                        exp = get_meta(email, "exp") or u.get("expire","?")
+                        qv = float(get_meta(email, "quota") or "0")
+                        used = get_v2ray_traffic(u.get("email",""))
+                        rows.append((email, "V2RAY", exp, qv, used))
+                except Exception as e:
+                    log.error(f"Error listing v2ray: {e}")
+        else:
+            if USERDIR.exists():
+                for f in sorted(USERDIR.iterdir()):
+                    if f.is_file():
+                        p = get_meta(f.name, "proto")
+                        if (proto == "ssh" and p == "ssh") or \
+                           (proto == "zivpn" and p == "zivpn") or \
+                           (proto == "hyst" and p == "hysteria"):
+                            exp = get_meta(f.name, "exp")
+                            qv = float(get_meta(f.name, "quota") or "0")
+                            rows.append((f.name, p.upper(), exp, qv, 0))
+
+        log.info(f"Found {len(rows)} {pname} users")
+        if not rows:
+            txt = f"📋 *No {pname} users found.*"
+        else:
+            header = f"📋 *{pname}*  ({len(rows)})\n\n"
+            sep = "─" * 54
+            lines = [header, f"`  User      Proto    Exp         Traffic`", f"`{sep}`"]
+            for r in rows:
+                name, p, exp, qv, used = r
+                used_s = fmt_bytes(used)
+                if qv > 0:
+                    traffic = f"{used_s} / {qv} GB"
+                else:
+                    traffic = f"{used_s} / Unlimited"
+                lines.append(f"`  {name:<10}{p:<9}{exp:<11}{traffic}`")
+            txt = "\n".join(lines)
+        log.info(f"Editing message with list text ({len(txt)} chars)")
+        try:
+            await q.edit_message_text(txt, reply_markup=back_kb("users"), parse_mode="Markdown")
+        except Exception as e:
+            log.error(f"Failed to edit message: {e}")
+            # Fallback without markdown
+            await q.edit_message_text(txt.replace('*','').replace('`',''), reply_markup=back_kb("users"))
+
+    elif data == "info_user":
+        ctx.user_data["step"] = "info_user"
+        await q.edit_message_text("🔍 Enter the username to get full connection details:", reply_markup=back_kb("users"))
+
+    elif data == "del_user":
+        ctx.user_data["step"] = "del_sel_proto"
+        await q.edit_message_text("🗑 Select protocol to delete users:", reply_markup=del_proto_kb(), parse_mode="Markdown")
+
+    elif data.startswith("del_proto_"):
+        proto = data[10:]
+        ctx.user_data["del_proto"] = proto
+        ctx.user_data["step"] = "del_choose"
+        # Show numbered user list
+        users = get_users_by_proto(proto)
+        if not users:
+            await q.edit_message_text(f"📋 *No users for {proto.upper()}.*", reply_markup=back_kb("del_user"), parse_mode="Markdown")
+            ctx.user_data.clear()
+            return
+        lines = [f"🗑 *{proto.upper()} USERS*\nEnter numbers (e.g. 1,3 or 1-3):\n"]
+        for i, (name, exp) in enumerate(users, 1):
+            lines.append(f"`{i}.` {name} – expires: {exp}")
+        await q.edit_message_text("\n".join(lines), reply_markup=back_kb("del_user"), parse_mode="Markdown")
+        ctx.user_data["del_users"] = users
+
+    elif data == "renew_user":
+        ctx.user_data["step"] = "renew_user"
+        await q.edit_message_text("🔄 Enter username to renew:", reply_markup=back_kb("users"))
+
+    elif data == "lock_user":
+        ctx.user_data["step"] = "lock_user"
+        await q.edit_message_text("🔒 Enter username to lock/unlock:", reply_markup=back_kb("users"))
+
+    elif data.startswith("confirm_del_"):
+        user = data[12:]
+        del_user(user)
+        await q.edit_message_text(f"✅ User `{user}` deleted.", reply_markup=back_kb("users"), parse_mode="Markdown")
+
+    elif data.startswith("confirm_lock_"):
+        user = data[13:]
+        f = USERDIR / user
+        if f.exists():
+            locked = get_meta(user, "locked")
+            if locked == "1":
+                set_meta(user, "locked", "0")
+                proto = get_meta(user, "proto")
+                if proto == "ssh":
+                    subprocess.run(f"passwd -u {user} 2>/dev/null", shell=True)
+                await q.edit_message_text(f"🔓 User `{user}` unlocked.", reply_markup=back_kb("users"), parse_mode="Markdown")
+            else:
+                set_meta(user, "locked", "1")
+                proto = get_meta(user, "proto")
+                if proto == "ssh":
+                    subprocess.run(f"passwd -l {user} 2>/dev/null", shell=True)
+                await q.edit_message_text(f"🔒 User `{user}` locked.", reply_markup=back_kb("users"), parse_mode="Markdown")
+        else:
+            await q.edit_message_text(f"❌ User `{user}` not found.", reply_markup=back_kb("users"), parse_mode="Markdown")
+
+    elif data == "help":
+        txt = (
+            "🤖 *KIGHMU BOT HELP*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "*Commands:*\n"
+            "• `/start` – Show main menu\n\n"
+            "*Main Menu:*\n"
+            "• 📊 Dashboard – Server & users stats\n"
+            "• 👥 Users – Manage all users\n"
+            "• 🔧 Services – Check service status\n"
+            "• 📈 Server – System resources\n"
+            "• ❓ Help – This menu\n\n"
+            "*User Management:*\n"
+            "• Create users for SSH, Xray, V2Ray-DNS, ZIVPN, Hysteria\n"
+            "• List users by protocol\n"
+            "• Get user info (full connection configs)\n"
+            "• Delete, Renew, Lock/Unlock users\n\n"
+            "*Tips:*\n"
+            "• Passwords are auto-generated if not provided\n"
+            "• User info shows complete connection details\n"
+            "• Locked users cannot connect\n"
+        )
+        await q.edit_message_text(txt, reply_markup=back_kb("main"), parse_mode="Markdown")
+
+async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_authorized(uid):
+        await update.message.reply_text("⛔ Unauthorized.")
+        return
+    text = update.message.text.strip()
+    step = ctx.user_data.get("step", "")
+    cr_proto = ctx.user_data.get("cr_proto", "")
+
+    # Delete previous bot message and user message
+    last_id = ctx.user_data.get("last_msg_id")
+    if last_id:
+        try:
+            await ctx.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_id)
+        except:
+            pass
+    try:
+        await update.message.delete()
+    except:
+        pass
+
+    if step == "cr_user":
+        if not re.match(r'^[a-zA-Z0-9._-]+$', text):
+            await update.message.reply_text("❌ Invalid username. Use letters, numbers, . _ -")
+            return
+        ctx.user_data["cr_username"] = text
+        ctx.user_data["step"] = "cr_days"
+        await reply_cls(update, ctx, f"✏️ Enter expiry in *days* (e.g. 30):", parse_mode="Markdown")
+
+    elif step == "cr_days":
+        if not text.isdigit() or int(text) < 1:
+            await update.message.reply_text("❌ Enter a valid number of days (>= 1):")
+            return
+        ctx.user_data["cr_days"] = text
+        proto = cr_proto
+        if proto in ("ssh","zivpn","hyst"):
+            ctx.user_data["step"] = "cr_pass"
+            await reply_cls(update, ctx, "✏️ Enter password (or type `auto` for random):", parse_mode="Markdown")
+        elif proto == "trojan":
+            ctx.user_data["step"] = "cr_pass"
+            await reply_cls(update, ctx, "✏️ Enter password (or type `auto` for random):", parse_mode="Markdown")
+        elif proto in ("vmess","vless","v2ray"):
+            ctx.user_data["step"] = "cr_quota"
+            await reply_cls(update, ctx, "✏️ Enter data quota in GB (0 = unlimited):", parse_mode="Markdown")
+        else:
+            ctx.user_data["cr_pass"] = ""
+            ctx.user_data["step"] = "cr_quota"
+            await reply_cls(update, ctx, "✏️ Enter data quota in GB (0 = unlimited):", parse_mode="Markdown")
+
+    elif step == "cr_pass":
+        p = text if text != "auto" else gen_pass()
+        ctx.user_data["cr_pass"] = p
+        proto = cr_proto
+        if proto in ("trojan",):
+            ctx.user_data["step"] = "cr_quota"
+            await reply_cls(update, ctx, "✏️ Enter data quota in GB (0 = unlimited):", parse_mode="Markdown")
+        else:
+            ctx.user_data["cr_quota"] = "0"
+            await do_create(update, ctx)
+
+    elif step == "cr_quota":
+        q = text.strip()
+        if not re.match(r'^[0-9]+\.?[0-9]*$', q):
+            await update.message.reply_text("❌ Enter a valid number (e.g. 10 or 10.5):")
+            return
+        ctx.user_data["cr_quota"] = q if float(q) > 0 else "0"
+        await do_create(update, ctx)
+
+    elif step == "info_user":
+        user = text
+        f = USERDIR / user
+        if not f.exists():
+            await update.message.reply_text(f"❌ User `{user}` not found.", reply_markup=back_kb("users"), parse_mode="Markdown")
+            ctx.user_data.clear()
+            return
+        proto = get_meta(user, "proto")
+        exp = get_meta(user, "exp")
+        pwd = get_meta(user, "pass")
+        uuid = get_meta(user, "uuid")
+        quota = get_meta(user, "quota") or "0"
+
+        if proto == "ssh":
+            txt = build_ssh_details(user, pwd, exp, quota)
+        elif proto == "vless":
+            txt = build_vless_details(user, uuid, exp, quota)
+        elif proto == "trojan":
+            txt = build_trojan_details(user, pwd, exp, quota)
+        elif proto == "vmess":
+            txt = build_vmess_details(user, uuid, exp, quota)
+        elif proto == "hysteria":
+            txt = build_hysteria_details(user, pwd, exp, quota)
+        elif proto == "zivpn":
+            txt = build_zivpn_details(user, pwd, exp, quota)
+        elif proto == "v2raydns":
+            txt = build_v2raydns_details(user, uuid, exp, quota)
+        else:
+            txt = f"👤 *User: {user}*\n• Protocol: `{proto}`\n• Expires: `{exp}`"
+
+        await reply_cls(update, ctx, txt, reply_markup=back_kb("users"), parse_mode="Markdown")
+        ctx.user_data.clear()
+
+    elif step == "del_choose":
+        users = ctx.user_data.get("del_users", [])
+        if not users:
+            await reply_cls(update, ctx, "❌ No users loaded. Try again.", reply_markup=back_kb("users"))
+            ctx.user_data.clear()
+            return
+        nums = set()
+        for part in text.replace(" ", "").split(","):
+            part = part.strip()
+            if not part: continue
+            if "-" in part:
+                a, b = part.split("-", 1)
+                if a.isdigit() and b.isdigit():
+                    nums.update(range(int(a), int(b)+1))
+            elif part.isdigit():
+                nums.add(int(part))
+        to_del = []
+        for n in sorted(nums):
+            if 1 <= n <= len(users):
+                to_del.append(users[n-1][0])
+        if not to_del:
+            await update.message.reply_text("❌ No valid numbers entered.")
+            return
+        deleted = []
+        for uname in to_del:
+            del_user(uname)
+            deleted.append(uname)
+        await reply_cls(update, ctx, f"🗑 Deleted `{len(deleted)}` user(s):\n" + "\n".join(f"• `{u}`" for u in deleted), reply_markup=back_kb("users"), parse_mode="Markdown")
+        ctx.user_data.clear()
+
+    elif step == "del_user":
+        user = text
+        f = USERDIR / user
+        if not f.exists():
+            await reply_cls(update, ctx, f"❌ User `{user}` not found.", reply_markup=back_kb("users"), parse_mode="Markdown")
+        else:
+            await reply_cls(update, ctx, f"🗑 Delete `{user}`?", reply_markup=yesno_kb("confirm_del", user), parse_mode="Markdown")
+        ctx.user_data.clear()
+
+    elif step == "renew_user":
+        user = text
+        f = USERDIR / user
+        if not f.exists():
+            await reply_cls(update, ctx, f"❌ User `{user}` not found.", reply_markup=back_kb("users"), parse_mode="Markdown")
+            ctx.user_data.clear()
+            return
+        ctx.user_data["renew_user"] = user
+        ctx.user_data["step"] = "renew_days"
+        await reply_cls(update, ctx, "✏️ Enter additional *days* to add:", parse_mode="Markdown")
+
+    elif step == "renew_days":
+        if not text.isdigit() or int(text) < 1:
+            await update.message.reply_text("❌ Enter a valid number of days:")
+            return
+        user = ctx.user_data.get("renew_user", "")
+        days = int(text)
+        old_exp = get_meta(user, "exp")
+        if old_exp and old_exp != "permanent":
+            try:
+                old = datetime.strptime(old_exp, "%Y-%m-%d")
+                new_exp = (old + timedelta(days=days)).strftime("%Y-%m-%d")
+            except:
+                new_exp = sh(f"date -d '+{days}days' +%Y-%m-%d")
+        else:
+            new_exp = sh(f"date -d '+{days}days' +%Y-%m-%d")
+        set_meta(user, "exp", new_exp)
+        proto = get_meta(user, "proto")
+        if proto == "ssh":
+            subprocess.run(f"chage -E {new_exp} {user} 2>/dev/null", shell=True)
+        await reply_cls(update, ctx, f"✅ `{user}` renewed to `{new_exp}`", reply_markup=back_kb("users"), parse_mode="Markdown")
+        ctx.user_data.clear()
+
+    elif step in ("del_sel_proto",):
+        await update.message.reply_text("⚠️ Please select a protocol from the buttons above.")
+        ctx.user_data.clear()
+
+    elif step == "lock_user":
+        user = text
+        f = USERDIR / user
+        if not f.exists():
+            await reply_cls(update, ctx, f"❌ User `{user}` not found.", reply_markup=back_kb("users"), parse_mode="Markdown")
+        else:
+            await reply_cls(update, ctx, f"🔒 Toggle lock for `{user}`?", reply_markup=yesno_kb("confirm_lock", user), parse_mode="Markdown")
+        ctx.user_data.clear()
+
+async def do_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    proto = ctx.user_data.get("cr_proto", "")
+    user = ctx.user_data.get("cr_username", "")
+    days = ctx.user_data.get("cr_days", "30")
+    pwd = ctx.user_data.get("cr_pass", "")
+    quota_user = ctx.user_data.get("cr_quota", "0")
+
+    proto_map = {"ssh":"ssh","vmess":"vmess","vless":"vless","trojan":"trojan",
+                 "v2ray":"v2raydns","zivpn":"zivpn","hyst":"hysteria"}
+    pmap = {"ssh":"SSH","vmess":"VMESS","vless":"VLESS","trojan":"Trojan",
+            "v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+    real_proto = proto_map.get(proto, proto)
+    pname = pmap.get(proto, real_proto.upper())
+    exp = exp_in_days(days)
+
+    limit = "1"
+    rc, out, err = call_script("create_user", real_proto, user, days, pwd, limit, quota_user)
+
+    if rc != 0:
+        if rc == 1:
+            await update.message.reply_text(f"❌ Invalid username `{user}`.", reply_markup=back_kb("users"), parse_mode="Markdown")
+        elif rc == 2:
+            await update.message.reply_text(f"❌ User `{user}` already exists.", reply_markup=back_kb("users"), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"❌ Error creating user (code {rc}): {err}", reply_markup=back_kb("users"), parse_mode="Markdown")
+        ctx.user_data.clear()
+        return
+
+    # Get actual stored values after creation (script may have generated UUID/pass)
+    actual_pwd = get_meta(user, "pass") or pwd
+    uuid = get_meta(user, "uuid") or ""
+
+    if real_proto == "ssh":
+        txt = build_ssh_details(user, actual_pwd, exp, quota_user)
+    elif real_proto == "vless":
+        txt = build_vless_details(user, uuid, exp, quota_user)
+    elif real_proto == "trojan":
+        txt = build_trojan_details(user, actual_pwd, exp, quota_user)
+    elif real_proto == "vmess":
+        txt = build_vmess_details(user, uuid, exp, quota_user)
+    elif real_proto == "hysteria":
+        txt = build_hysteria_details(user, actual_pwd, exp, quota_user)
+    elif real_proto == "zivpn":
+        txt = build_zivpn_details(user, actual_pwd, exp, quota_user)
+    elif real_proto == "v2raydns":
+        txt = build_v2raydns_details(user, uuid, exp, quota_user)
+    else:
+        txt = f"✅ *{pname} user created!*\n• Username: `{user}`\n• Expires: `{exp}`"
+
+    await reply_cls(update, ctx, txt, reply_markup=back_kb("users"), parse_mode="Markdown")
+    ctx.user_data.clear()
+
+async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    log.error(f"Update {update} caused error {ctx.error}")
+
+def main():
+    if not TOKEN:
+        log.error("No bot token configured. Run the installer first.")
+        sys.exit(1)
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_error_handler(error_handler)
+    log.info("Kighmu Bot started")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
+BOTPYEOF
+    chmod +x /usr/local/bin/kighmu-bot
+
+    cat > /etc/systemd/system/kighmu-bot.service << BOTSVCEOF
+[Unit]
+Description=Kighmu Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/kighmu-bot
+WorkingDirectory=/etc/kighmu/bot
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/kighmu-bot.log
+StandardError=append:/var/log/kighmu-bot.log
+User=root
+
+[Install]
+WantedBy=multi-user.target
+BOTSVCEOF
+
+    systemctl daemon-reload
+    systemctl enable --now kighmu-bot 2>/dev/null || true
+    sleep 2
+    if systemctl is-active --quiet kighmu-bot 2>/dev/null; then
+        echo -e " ${GREEN}[✓]${RESET} Bot Telegram actif"
+        echo -e " ${LAV}Ouvre Telegram et envoie /start à ton bot${RESET}"
     else
-        # compter connexions par user + garder la 1re heure "since"
-        local data
-        data=$(echo "$rows" | awk -F'|' '
-            { cnt[$1]++; if(!($1 in first)) first[$1]=$2 }
-            END { for(u in cnt) print u"|"cnt[u]"|"first[u] }' | sort)
-        local u c s hhmm
-        while IFS='|' read -r u c s; do
-            [[ -z "$u" ]] && continue
-            # extraire HH:MM:SS depuis "Www Mmm dd HH:MM:SS YYYY"
-            hhmm=$(echo "$s" | awk '{print $4}')
-            [[ -z "$hhmm" ]] && hhmm="$s"
-            L+=( "$(printf " ${GREEN}%-15s${RESET} ${YELLOW}%-18s${RESET} ${WHITE}%-10s${RESET}" "$u" "[$c]" "$hhmm")" )
-        done <<< "$data"
+        echo -e " ${RED}[✗]${RESET} Le bot n'a pas démarré — vérifie /var/log/kighmu-bot.log"
     fi
-
-    L+=( "%SEP%" )
-    render_screen L
     press_enter
 }
 
+uninstall_telegram_bot() {
+    systemctl stop kighmu-bot 2>/dev/null || true
+    systemctl disable kighmu-bot 2>/dev/null || true
+    rm -f /etc/systemd/system/kighmu-bot.service /usr/local/bin/kighmu-bot
+    rm -rf /etc/kighmu/bot
+    systemctl daemon-reload
+    echo -e " ${GREEN}[✓]${RESET} Bot Telegram supprimé"
+    press_enter
+}
 
-# ==============================================================================
-#  SECTION 7 — PROTOCOL INSTALLER
-# ==============================================================================
-# Chaque ligne = bascule Install/Uninstall selon l'état réel détecté.
 # HAProxy = dépendance auto de Xray (TLS 443 / NTLS 8880) → bloc informatif, non sélectionnable.
 scr_protocol_installer() {
     clear
@@ -922,6 +1847,8 @@ scr_protocol_installer() {
     proto_on zivpn                    && s_zivpn=on  || s_zivpn=off
     proto_on slowdns-router slowdns-ns4 slowdns-nv4 && s_slowdns=on || s_slowdns=off
     proto_on haproxy && s_haproxy=on || s_haproxy=off
+    s_bot=off
+    [[ -f /usr/local/bin/kighmu-bot && -f /etc/systemd/system/kighmu-bot.service ]] && systemctl is-active --quiet kighmu-bot 2>/dev/null && s_bot=on
 
     # rend une paire "[STATUT] ⇨ [Action]" alignée
     _pi_line() {
@@ -948,11 +1875,12 @@ scr_protocol_installer() {
         "ZIVPN"
         "INSTALL ALL MISSING"
         "UNINSTALL ALL ACTIVE"
+        "TELEGRAM BOT"
     )
     local pw=0 lbl
     for lbl in "${p_labels[@]}"; do (( ${#lbl} > pw )) && pw=${#lbl}; done
 
-    local p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12
+    local p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13
     p1=$(_pi_line 01 "${p_labels[0]}" "$s_ssh"    "$pw")
     p2=$(_pi_line 02 "${p_labels[1]}" "$s_ws"     "$pw")
     p3=$(_pi_line 03 "${p_labels[2]}" "$s_ssl"    "$pw")
@@ -965,6 +1893,7 @@ scr_protocol_installer() {
     p10=$(_pi_line 10 "${p_labels[9]}" "$s_zivpn"  "$pw")
     p11=$(printf " ${GREEN}[11]${RESET} ${YELLOW}⇨${RESET} ${GREEN}%s${RESET}" "${p_labels[10]}")
     p12=$(printf " ${GREEN}[12]${RESET} ${YELLOW}⇨${RESET} ${WHITE}%-*s${RESET}  ${RED}[!]${RESET}" "$pw" "${p_labels[11]}")
+    p13=$(_pi_line 13 "${p_labels[12]}" "$s_bot" "$pw")
     unset -f _pi_line
 
     local L=()
@@ -983,6 +1912,7 @@ scr_protocol_installer() {
         "%SEP%"
         "$p11"
         "$p12"
+        "$p13"
         "%SEP%"
         " ${YELLOW}○${RESET} ${GRAY}Dependencies (auto-installed with Xray):${RESET}"
         " ${YELLOW}○${RESET} ${WHITE}HAProxy${RESET} $([[ "$s_haproxy" == "on" ]] && echo "${GREEN}[ON]${RESET}" || echo "${RED}[OFF]${RESET}")          ${GRAY}(TLS 443 / NTLS 8880)${RESET}"
@@ -1451,7 +2381,7 @@ _xray_init_json() {
 }
 # ajoute {email,id/password,expiry} dans le tableau du protocole
 xray_add_user() {
-    local proto="$1" user="$2" cred="$3" exp="$4" tmp
+    local proto="$1" user="$2" cred="$3" exp="$4" quota="$5" tmp
     _xray_init_json
     local key idkey
     case "$proto" in
@@ -1460,8 +2390,8 @@ xray_add_user() {
         *) return 1 ;;
     esac
     tmp=$(mktemp)
-    jq --arg u "$user" --arg c "$cred" --arg e "$exp" --arg ik "$idkey" \
-       ".$proto += [{(\$ik):\$c, \"email\":\$u, \"level\":0, \"expire\":\$e}]" \
+    jq --arg u "$user" --arg c "$cred" --arg e "$exp" --arg q "${quota:-0}" --arg ik "$idkey" \
+       ".$proto += [{(\$ik):\$c, \"email\":\$u, \"level\":0, \"expire\":\$e, \"quota\":(\$q|tonumber)}]" \
        "$XRAY_USERS" > "$tmp" 2>/dev/null && mv "$tmp" "$XRAY_USERS" || rm -f "$tmp"
 }
 xray_del_user() {
@@ -1509,13 +2439,13 @@ create_user() {
             ;;
         vmess|vless)
             uuid=$(gen_uuid)
-            xray_add_user "$proto" "$user" "$uuid" "$exp"
+            xray_add_user "$proto" "$user" "$uuid" "$exp" "$quota"
             write_meta "$user" "$proto" "$exp" "" "" "$uuid" "$quota"
             xray_reload
             ;;
         trojan)
             [[ -z "$pass" ]] && pass=$(gen_pass)
-            xray_add_user trojan "$user" "$pass" "$exp"
+            xray_add_user trojan "$user" "$pass" "$exp" "$quota"
             write_meta "$user" trojan "$exp" "" "$pass" "" "$quota"
             xray_reload
             ;;
@@ -1705,11 +2635,11 @@ ui_create() {
         pass=$(_ask "Password (empty = auto)")
     }
     [[ "$proto" == "ssh" ]] && { limit=$(_ask "Connection limit (default 1)"); [[ "$limit" =~ ^[0-9]+$ ]] || limit=1; }
-    {
+    if [[ "$proto" == "vmess" || "$proto" == "vless" || "$proto" == "trojan" || "$proto" == "shadow" || "$proto" == "v2raydns" ]]; then
         local q
         q=$(_ask "Data quota in GB (0 = unlimited, e.g. 10.5)")
         [[ "$q" =~ ^[0-9]+\.?[0-9]*$ ]] && quota="$q" || quota=0
-    }
+    fi
 
     create_user "$proto" "$user" "$days" "$pass" "$limit" "$quota"
     case $? in
@@ -1936,7 +2866,7 @@ v2raydns_apply() {
         exp=$(grep -oP '^exp=\K.*' "$f" 2>/dev/null); [[ -n "$exp" && "$exp" < "$today" ]] && continue
         grep -q '^locked=1' "$f" 2>/dev/null && continue
         uuid=$(grep -oP '^uuid=\K.*' "$f" 2>/dev/null); [[ -z "$uuid" ]] && continue
-        clients=$(echo "$clients" | jq --arg id "$uuid" --arg em "$(basename "$f")" '. += [{"id":$id,"email":$em,"level":0}]' 2>/dev/null)
+        clients=$(echo "$clients" | jq --arg id "$uuid" --arg em "$(basename "$f")" --arg q "$(grep -oP '^quota=\K.*' "$f" 2>/dev/null || echo 0)" '. += [{"id":$id,"email":$em,"level":0,"quota":($q|tonumber)}]' 2>/dev/null)
     done
     echo "{\"vless\":$(echo "$clients" | jq '.')}" > "$users_json" 2>/dev/null || true
     tmp=$(mktemp)
@@ -2587,6 +3517,8 @@ v2ray_gen_config() {
     "settings": {"clients": [{"id":"$uuid","email":"default@v2ray","level":0}],"decryption":"none"},
     "streamSettings": {"network":"tcp","security":"none"},
     "tag": "VLESS-TCP"
+  },{
+    "tag":"api","port":10086,"listen":"127.0.0.1","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}
   }],
   "outbounds": [{"protocol":"freedom","settings":{}}],
   "stats": {},
@@ -2673,7 +3605,8 @@ xray_gen_config() {
     {"tag":"VMess-gRPC","port":10015,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"vmess-grpc"}}},
     {"tag":"Trojan-XHTTP","port":10016,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/trojan-xhttp"}}},
     {"tag":"Trojan-gRPC","port":10017,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"trojan-grpc"}}},
-    {"tag":"VLESS-HUpgrade","port":10018,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"httpupgrade","security":"none","httpupgradeSettings":{"path":"/vless-hupgrade"}}}
+    {"tag":"VLESS-HUpgrade","port":10018,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"httpupgrade","security":"none","httpupgradeSettings":{"path":"/vless-hupgrade"}}},
+    {"tag":"api","port":10085,"listen":"127.0.0.1","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}
   ],
   "outbounds": [{"tag":"direct","protocol":"freedom","settings":{}}],
   "stats": {},
@@ -3071,7 +4004,89 @@ opt_loglimit() {
     log "Taille des logs limitée à 200 Mo"
 }
 
-# --- [06] désactive quelques services inutiles s'ils sont présents ---
+# --- [06] installe le nettoyage automatique hebdomadaire des logs tunnels ---
+opt_logclean() {
+    # 1. Installer le cron quotidien (nettoie les logs de + de 7 jours)
+    cat > /etc/cron.daily/kighmu-log-clean << 'CRONEOF'
+#!/bin/bash
+LOGFILE=/var/log/kighmu/auto-clean.log
+MAX_SIZE=51200
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] === Kighmu Log Auto-Clean ===" >> "$LOGFILE"
+TUNNEL_LOGS=(
+    /var/log/xray/access.log /var/log/xray/error.log
+    /var/log/v2ray/access.log /var/log/v2ray/error.log
+    /var/log/slowdns/slowdns-ns4.log /var/log/slowdns/slowdns-nv4.log
+    /var/log/slowdns/healthcheck.log /var/log/sshws/sshws.log
+    /var/log/ssl_tls/ssl_tls.log /var/log/zivpn.log
+    /var/log/hysteria.log /var/log/udp-custom.log
+    /var/log/proxy--ws.log /var/log/kighmu-bot.log
+    /var/log/kighmu-panel.log /var/log/kighmu-install.log
+    /var/log/kighmu/auto-clean.log /var/log/xray-watchdog.log
+    /var/log/v2ray_watchdog.log /var/log/haproxy-watchdog.log /var/log/haproxy.log
+)
+for log in "${TUNNEL_LOGS[@]}"; do
+    if [[ -f "$log" ]]; then
+        size_kb=$(du -k "$log" | cut -f1)
+        if (( size_kb > MAX_SIZE )); then
+            tail -n 500 "$log" > "${log}.tmp" 2>/dev/null && mv "${log}.tmp" "$log"
+            echo "  TRUNCATED $log (was ${size_kb}KB)" >> "$LOGFILE"
+        fi
+    fi
+done
+# Supprime les logs archivés vieux de plus de 7 jours
+find /var/log -name "*.gz" -mtime +6 -delete 2>/dev/null
+find /var/log -name "*.1" -mtime +6 -delete 2>/dev/null
+find /var/log -name "*.old" -mtime +6 -delete 2>/dev/null
+journalctl --vacuum-time=7d 2>/dev/null || true
+if [[ -f "$LOGFILE" ]]; then
+    total=$(wc -l < "$LOGFILE")
+    (( total > 500 )) && tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] === Done ===" >> "$LOGFILE"
+CRONEOF
+    chmod +x /etc/cron.daily/kighmu-log-clean
+    rm -f /etc/cron.weekly/kighmu-log-clean
+
+    # 2. Installer logrotate config pour tous les logs tunnels
+    cat > /etc/logrotate.d/kighmu-tunnels << 'ROTEOF'
+/var/log/xray/*.log
+/var/log/v2ray/*.log
+/var/log/slowdns/*.log
+/var/log/sshws/*.log
+/var/log/ssl_tls/*.log
+/var/log/zivpn.log
+/var/log/hysteria.log
+/var/log/udp-custom.log
+/var/log/proxy--ws.log
+/var/log/kighmu-bot.log
+/var/log/kighmu-panel.log
+/var/log/kighmu-install.log
+/var/log/kighmu/auto-clean.log
+/var/log/xray-watchdog.log
+/var/log/v2ray_watchdog.log
+/var/log/haproxy-watchdog.log
+/var/log/haproxy.log
+/var/log/kighmu-bandwidth.log
+/var/log/kighmu-traffic.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+ROTEOF
+
+    # 3. Supprimer l'ancien cron.d qui tournait toutes les 5 min (s'il existe)
+    rm -f /etc/cron.d/kighmu-traffic
+
+    # 4. Exécuter le nettoyage une première fois
+    /etc/cron.weekly/kighmu-log-clean 2>/dev/null || true
+    log "Nettoyage automatique des logs tunnels installé (cron hebdo + logrotate)"
+}
+
+# --- [07] désactive quelques services inutiles s'ils sont présents ---
 opt_disable_services() {
     local s; local svcs=(apache2 avahi-daemon cups bluetooth modemmanager whoopsie)
     for s in "${svcs[@]}"; do
@@ -3090,7 +4105,7 @@ opt_enable() {
 # --- [08] optimisation complète ---
 opt_full() {
     clear; echo -e " ${CYAN}${WHITE}RUN FULL OPTIMIZATION${RESET}\n"
-    opt_sysctl; opt_bbr; opt_loglimit; opt_swap 1G; opt_disable_services; opt_clean
+    opt_sysctl; opt_bbr; opt_loglimit; opt_logclean; opt_swap 1G; opt_disable_services; opt_clean
     opt_stamp; : > "$STATEDIR/optimized_flag"
     _msg_ok "Optimisation complète appliquée."; press_enter
 }
@@ -3110,40 +4125,6 @@ opt_restore() {
 
 # petit wrapper : exécute une action d'optimisation puis pause
 opt_run() { clear; echo -e " ${CYAN}${WHITE}$1${RESET}\n"; "$2"; opt_stamp; press_enter; }
-
-# ------------------------------------------------------------------------------
-#  ONLINE COUNTER — actions
-# ------------------------------------------------------------------------------
-oc_set_interval() {
-    clear; echo -e " ${YELLOW}○${RESET} ${WHITE}SET REFRESH INTERVAL${RESET}\n"
-    local v; v=$(_ask "Interval (secondes, 1-60)")
-    if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 && "$v" -le 60 ]]; then
-        mkdir -p "$STATEDIR"; echo "$v" > "$STATEDIR/refresh_interval"; _msg_ok "Intervalle réglé à ${v}s."
-    else _msg_err "Valeur invalide (1-60)."; fi
-    press_enter
-}
-
-oc_kick() {
-    clear; echo -e " ${YELLOW}○${RESET} ${WHITE}KICK / DISCONNECT USER${RESET}\n"
-    local u; u=$(_ask "Username à déconnecter")
-    [[ -z "$u" ]] && { _msg_err "Aucun utilisateur."; press_enter; return; }
-    if id "$u" &>/dev/null || _meta_exists "$u"; then
-        pkill -KILL -u "$u" 2>/dev/null || true
-        pkill -KILL -f "sshd:.*$u" 2>/dev/null || true
-        _msg_ok "Sessions de '$u' terminées."
-    else _msg_err "Utilisateur '$u' introuvable."; fi
-    press_enter
-}
-
-oc_export() {
-    clear; echo -e " ${YELLOW}○${RESET} ${WHITE}EXPORT LOG (ONLINE HISTORY)${RESET}\n"
-    local dir="/var/log/kighmu" f
-    mkdir -p "$dir"; f="$dir/online-$(date '+%Y%m%d-%H%M%S').log"
-    { echo "# Kighmu online snapshot $(date '+%Y-%m-%d %H:%M:%S')";
-      echo "# SSH online: $(count_total_online 2>/dev/null || echo 0)";
-      ssh_online_detail 2>/dev/null || true; } > "$f"
-    _msg_ok "Export écrit : $f"; press_enter
-}
 
 # ------------------------------------------------------------------------------
 #  UPDATE / REMOVE — actions
@@ -3264,10 +4245,9 @@ main_menu() {
         case "$CH" in
             1|01) menu_manage_users ;;
             2|02) menu_optimize ;;
-            3|03) menu_online_counter ;;
-            4|04) toggle_autostart ;;
-            5|05) menu_protocol_installer ;;
-            6|06) menu_update_remove ;;
+            3|03) toggle_autostart ;;
+            4|04) menu_protocol_installer ;;
+            5|05) menu_update_remove ;;
             0)    clear; exit 0 ;;
             *)    : ;;   # entrée invalide → réaffiche
         esac
@@ -3356,35 +4336,17 @@ menu_optimize() {
             3|03) opt_run "SWAP CONFIGURATION" opt_swap ;;
             4|04) opt_run "CLEAN CACHE / TEMP FILES" opt_clean ;;
             5|05) opt_run "LIMIT LOG SIZE (JOURNALCTL)" opt_loglimit ;;
-            6|06) opt_run "DISABLE UNUSED SERVICES" opt_disable_services ;;
-            7|07) opt_run "NETWORK / SYSCTL TUNING" opt_sysctl ;;
-            8|08) opt_full ;;
-            9|09) opt_restore ;;
+            6|06) opt_run "CLEAN TUNNEL LOGS" opt_logclean ;;
+            7|07) opt_run "DISABLE UNUSED SERVICES" opt_disable_services ;;
+            8|08) opt_run "NETWORK / SYSCTL TUNING" opt_sysctl ;;
+            9|09) opt_full ;;
+            10|10) opt_restore ;;
             0)    return ;;
             *)    : ;;
         esac
     done
 }
 
-# ------------------------------------------------------------------------------
-#  CONTRÔLEUR — [03] ONLINE USERS COUNTER
-# ------------------------------------------------------------------------------
-menu_online_counter() {
-    while true; do
-        scr_online_counter
-        read -r CH
-        case "$CH" in
-            1|01) scr_online_details ;;
-            2|02) : ;;   # REFRESH NOW → simple ré-affichage de la boucle
-            3|03) toggle_flag online_counter ;;
-            4|04) oc_set_interval ;;
-            5|05) oc_kick ;;
-            6|06) oc_export ;;
-            0)    return ;;
-            *)    : ;;
-        esac
-    done
-}
 
 # ------------------------------------------------------------------------------
 #  CONTRÔLEUR — [05] PROTOCOL INSTALLER
@@ -3501,8 +4463,7 @@ case "${1:-}" in
             hysteria)     scr_users_hysteria ;;
             xray-create)  scr_xray_create_select ;;
             optimize)     scr_optimize ;;
-            online)       scr_online_counter ;;
-            online-details) scr_online_details ;;
+
             installer)    scr_protocol_installer ;;
             update)       scr_update_remove ;;
             vless-detail)     show_vless_details    "${2:-created}" carol   1f8b0c2e-4d5a-4b6c-8e9f-0a1b2c3d4e5f 2026-08-15 50 ;;
