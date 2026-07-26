@@ -560,25 +560,25 @@ WantedBy=multi-user.target
     if not main_go.exists():
         main_go.write_text('''package main
 import (
-    "fmt" "log" "net" "os" "os/signal" "strings" "sync" "syscall" "time"
+    "fmt"
+    "log"
+    "net"
+    "os"
+    "os/signal"
+    "strings"
+    "syscall"
+    "time"
 )
 type route struct {
     domain string
     addr   *net.UDPAddr
-}
-type stats struct {
-    mu      sync.Mutex
-    total   int64
-    routed  map[string]int64
-    refused int64
-    errors  int64
 }
 func getEnv(key, fallback string) string {
     if v := os.Getenv(key); v != "" { return v }
     return fallback
 }
 func getEnvInt(key string, fallback int) int {
-    if v := os.Getenv(key); v != "" { if n, err := fmt.Sscanf(v, "%d", &fallback); n == 1 && err == nil { return fallback } }
+    if v := os.Getenv(key); v != "" { _, err := fmt.Sscanf(v, "%d", &fallback); if err == nil { return fallback } }
     return fallback
 }
 func main() {
@@ -610,7 +610,7 @@ func main() {
         case <-sigCh: log.Println("shutting down"); return
         default:
             conn.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
-            n, src, err := conn.ReadFrom(buf)
+            n, _, err := conn.ReadFrom(buf)
             if err != nil { continue }
             qname := extractQName(buf[:n])
             for _, r := range routes {
