@@ -38,6 +38,11 @@ def sh(cmd, timeout=30):
 def strip_ansi(s): return re.sub(r'\x1b\[[0-9;]*m', '', s)
 def vislen(s): return len(strip_ansi(s))
 
+def clear_screen():
+    sys.stdout.write("\033[2J\033[H\033[3J")
+    sys.stdout.flush()
+    os.system("clear")
+
 def render_screen(lines):
     w = 0
     for l in lines:
@@ -45,13 +50,27 @@ def render_screen(lines):
         v = vislen(l)
         if v > w: w = v
     w += 2; dash = "─" * w
+    out = []
     for l in lines:
-        if l == "%SEP%": print(f"{C['YELLOW']}{dash}{C['RST']}")
-        elif l.startswith("%FREE%"): print(l[6:])
-        else: print(l)
+        if l == "%SEP%": out.append(f"{C['YELLOW']}{dash}{C['RST']}")
+        elif l.startswith("%FREE%"): out.append(l[6:])
+        else: out.append(l)
+    sys.stdout.write("\n".join(out) + "\n")
+    sys.stdout.flush()
+
+def render_panel(lines, prompt=True):
+    clear_screen()
+    render_screen(lines)
+    if prompt:
+        sys.stdout.write(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}")
+        sys.stdout.flush()
 
 def press_enter():
-    print(f"\n{C['GRAY']} Press ENTER to go back...{C['RST']}", end=""); input()
+    sys.stdout.write(f"\n{C['GRAY']} Press ENTER to go back...{C['RST']}")
+    sys.stdout.flush()
+    input()
+    sys.stdout.write("\033[1A\033[2K")
+    sys.stdout.flush()
 
 def dot(lbl, w=18):
     n = w - len(lbl) - 1
@@ -1106,7 +1125,7 @@ def install_all_missing():
     sh("systemctl daemon-reload 2>/dev/null || true")
 
 def uninstall_all_active():
-    os.system("clear")
+    clear_screen()
     print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
     print(f" {C['RED']}║{C['RST']}      {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
     print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
@@ -1132,7 +1151,7 @@ def uninstall_all_active():
     press_enter()
 
 def install_telegram_bot():
-    os.system("clear")
+    clear_screen()
     print(f" {C['CYAN']}━━━ TELEGRAM BOT ━━━{C['RST']}")
     token = input(" Telegram Bot Token (from @BotFather): ").strip()
     if not token: print(f" {C['RED']}✗ Token required{C['RST']}"); press_enter(); return
@@ -1188,7 +1207,7 @@ def upd_reinstall():
     if c == 'y': install_all_missing()
 
 def upd_remove():
-    os.system("clear")
+    clear_screen()
     print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
     print(f" {C['RED']}║{C['RST']}     {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
     print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
@@ -1307,7 +1326,6 @@ def push_header(out, mode, *menu_lines):
 
 # Screen functions
 def scr_main():
-    os.system("clear")
     TOT=count_total_users();EXP=count_expired()
     DW,WW,MW=_vnstat_data()
     OS=get_os();ARCH=get_arch();CORES=get_cores();DT=get_datetime()
@@ -1341,11 +1359,10 @@ def scr_main():
         f" {C['WHITE']}TOTAL:{C['RST']} {C['WHITE']}{RT}G{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}M|LIBRE:{C['RST']} {C['GREEN']}{RF}G{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}EN USO:{C['RST']} {C['YELLOW']}{RU}G{C['RST']}",
         f" {C['WHITE']}U/RAM:{C['RST']} {pct_color(RPCT)}  {C['GRAY']}•{C['RST']}  {C['WHITE']}U/CPU:{C['RST']} {pct_color(CPCT)}  {C['GRAY']}•{C['RST']}  {C['WHITE']}BUFFER:{C['RST']} {C['WHITE']}{BUF}M{C['RST']}","%SEP%"]+mi+[
         "%SEP%",f" {C['GREEN']}[05]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}UPDATE / REMOVE{C['RST']}     {C['GRAY']}|{C['RST']}     {C['BTNBG']} [0] ⇦ [ EXIT ] {C['RST']}","%SEP%"]
-    render_screen(L)
-    print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}", end="")
+    render_panel(L)
 
 def scr_manage_users():
-    os.system("clear");TOT=count_total_users();EXP=count_expired()
+    TOT=count_total_users();EXP=count_expired()
     L=[];push_header(L,"full",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}MANAGE USERS{C['RST']}")
     L+=[f" {C['YELLOW']}○{C['RST']} {C['WHITE']}TOTAL USERS:{C['RST']} {C['WHITE']}[{TOT}]{C['RST']}        {C['YELLOW']}○{C['RST']} {C['WHITE']}EXPIRED:{C['RST']} {C['RED']}[{EXP}]{C['RST']}","%SEP%",
         f" {C['GREEN']}[01]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}SSH (WS/SSL/SlowDNS/UDP-Custom/BadVPN){C['RST']}",
@@ -1354,10 +1371,9 @@ def scr_manage_users():
         f" {C['GREEN']}[04]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}ZIVPN{C['RST']}",
         f" {C['GREEN']}[05]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}HYSTERIA{C['RST']}","%SEP%",
         f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
-    render_screen(L);print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}",end="")
+    render_panel(L)
 
 def scr_optimize():
-    os.system("clear")
     SG=flag_status("optimized");SB=bbr_status();SL=loglimit_status();SS=sysctl_status();LO=last_optimized()
     ol=["ENABLE OPTIMIZATION","BBR (TCP CONGESTION CONTROL)","SWAP CONFIGURATION","CLEAN CACHE / TEMP FILES",
         "LIMIT LOG SIZE (JOURNALCTL)","CLEAN TUNNEL LOGS","DISABLE UNUSED SERVICES","NETWORK / SYSCTL TUNING",
@@ -1377,10 +1393,9 @@ def scr_optimize():
     L+=["%SEP%",f" {C['GREEN']}[09]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}{ol[8]}{C['RST']}",
         f" {C['GREEN']}[10]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ol[9]:<{ow}}{C['RST']}  {C['RED']}[!]{C['RST']}",
         "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
-    render_screen(L);print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}",end="")
+    render_panel(L)
 
 def scr_protocol_installer():
-    os.system("clear")
     st={"ssh":proto_on("sshd","dropbear","dropbear-custom"),"ws":proto_on("sshws","ws-epro"),
         "ssl":proto_on("ssl_tls","stunnel4"),"xray":proto_on("xray"),"v2ray":proto_on("v2ray"),
         "badvpn":proto_on("badvpn-udpgw","badvpn"),"udp":proto_on("udp-custom"),
@@ -1404,10 +1419,10 @@ def scr_protocol_installer():
         f" {C['YELLOW']}○{C['RST']} {C['GRAY']}Dependencies (auto-installed with Xray):{C['RST']}",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HAProxy{C['RST']} {haproxy_st}          {C['GRAY']}(TLS 443 / NTLS 8880){C['RST']}",
         "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
-    render_screen(L);print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}",end="")
+    render_panel(L)
 
 def scr_update_remove():
-    os.system("clear");SB=flag_status("backup_before_update")
+    SB=flag_status("backup_before_update")
     ul=["CHECK FOR UPDATES","UPDATE SCRIPT (LATEST VERSION)","CHANGELOG / VERSION HISTORY",
         "BACKUP BEFORE UPDATE","REINSTALL SCRIPT (CLEAN)","REMOVE SCRIPT (UNINSTALL)"]
     uw=max(len(l) for l in ul)
@@ -1419,7 +1434,7 @@ def scr_update_remove():
         f" {C['GREEN']}[05]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}{ul[4]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
         f" {C['GREEN']}[06]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}{ul[5]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
         "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
-    render_screen(L);print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}",end="")
+    render_panel(L)
 
 # Optimization
 def opt_enable():
@@ -1499,7 +1514,7 @@ def main_menu():
         elif CH in("3","03"): toggle_flag("autostart")
         elif CH in("4","04"): menu_protocol_installer()
         elif CH in("5","05"): menu_update_remove()
-        elif CH in("0",): os.system("clear");break
+        elif CH in("0",): clear_screen();break
 
 def menu_manage_users():
     cleanup_panel_residues()
@@ -1516,7 +1531,7 @@ def menu_manage_users():
 def submenu_family(title,protos):
     cleanup_panel_residues()
     while True:
-        os.system("clear");TOT=fam_total(*protos);EXP=fam_expired(*protos)
+        TOT=fam_total(*protos);EXP=fam_expired(*protos)
         L=[];push_header(L,"full",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}MANAGE USERS ▸ {title}{C['RST']}")
         L+=[f" {C['YELLOW']}○{C['RST']} {C['WHITE']}TOTAL {title} USERS:{C['RST']} {C['WHITE']}[{TOT}]{C['RST']}     {C['YELLOW']}○{C['RST']} {C['WHITE']}EXPIRED:{C['RST']} {C['RED']}[{EXP}]{C['RST']}",
             "%SEP%",
@@ -1529,7 +1544,7 @@ def submenu_family(title,protos):
             f" {C['GREEN']}[07]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}CONNECTION INFO{C['RST']}",
             f" {C['GREEN']}[08]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}DELETE EXPIRED USERS (BULK){C['RST']}          {C['RED']}[!]{C['RST']}",
             "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MANAGE USERS ] {C['RST']}","%SEP%"]
-        render_screen(L);print(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Option : {C['RST']}",end="")
+        render_panel(L)
         CH=input().strip()
         if CH in("1","01"): ui_create_wizard(protos)
         elif CH in("2","02"): ui_list_users(title,protos)
@@ -1584,7 +1599,7 @@ def menu_update_remove():
         elif CH in("0",): return
 
 def ui_create_wizard(protos):
-    cleanup_panel_residues();os.system("clear");proto=protos[0]
+    cleanup_panel_residues();clear_screen();proto=protos[0]
     print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CREATE {proto.upper()} USER{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not valid_name(user): print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter();return
@@ -1602,10 +1617,10 @@ def ui_create_wizard(protos):
     if rc==0:
         exp=_meta_get(user,"exp");p=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");q=_meta_get(user,"quota") or "0"
         if proto=="ssh":
-            os.system("clear")
+            clear_screen()
             show_ssh_details_screen("created",user,p or passwd,exp,q)
         elif proto in("vmess","vless","trojan"):
-            os.system("clear")
+            clear_screen()
             show_detail_screen("created",proto.upper(),user,uuid=uuid,exp=exp,quota=q,passwd=p or passwd)
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
     elif rc==1: print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter()
@@ -1613,7 +1628,7 @@ def ui_create_wizard(protos):
     else: print(f" {C['RED']}✗ System error{C['RST']}");press_enter()
 
 def ui_list_users(title,protos):
-    cleanup_panel_residues();os.system("clear");L=[];today=date.today().isoformat()
+    cleanup_panel_residues();clear_screen();L=[];today=date.today().isoformat()
     push_header(L,"simple",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}{title} ▸ LIST USERS{C['RST']}")
     L+=[f" {'USERNAME':<18} {'PROTO':<12} {'EXPIRES':<14} {'STATUS':<8}",
         f" {C['GRAY']}{'────────':<18} {'─────':<12} {'───────':<14} {'──────':<8}{C['RST']}"]
@@ -1643,7 +1658,7 @@ def ui_delete_wizard(protos=None):
                 entries.append((f.name, p, e))
         if not entries:
             print(f" {C['RED']}✗ No users found.{C['RST']}");press_enter();return
-        cleanup_panel_residues();os.system("clear")
+        cleanup_panel_residues();clear_screen()
         print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}MANAGE USERS ▸ DELETE USER{C['RST']}")
         print(f" {C['CYAN']}{'─' * 56}{C['RST']}")
         print(f" {C['WHITE']}{'N°':<6}{'USERNAME':<18}{'EXPIRATION':<14}{'STATUS':<10}{C['RST']}")
@@ -1685,14 +1700,14 @@ def ui_delete_wizard(protos=None):
         press_enter()
 
 def ui_renew_wizard():
-    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}RENEW{C['RST']}\n")
+    cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}RENEW{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     ds=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Days (def 30): {C['RST']}").strip();days=int(ds) if ds.isdigit() else 30
     renew_user(user,days);print(f" {C['GREEN']}✔ Extended{C['RST']}");press_enter()
 
 def ui_lock_wizard():
-    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}LOCK/UNLOCK{C['RST']}\n")
+    cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}LOCK/UNLOCK{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     if is_locked(user): unlock_user(user);print(f" {C['GREEN']}✔ Unlocked{C['RST']}")
@@ -1700,29 +1715,30 @@ def ui_lock_wizard():
     press_enter()
 
 def ui_passwd_wizard():
-    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CHANGE PASSWORD{C['RST']}\n")
+    cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CHANGE PASSWORD{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     np=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}New pass (empty=auto): {C['RST']}").strip()
     np=change_password(user,np);print(f" {C['GREEN']}✔ Updated: {np}{C['RST']}");press_enter()
 
 def ui_info_wizard():
-    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION INFO{C['RST']}\n")
+    cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION INFO{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     proto=_meta_get(user,"proto");exp=_meta_get(user,"exp");passwd=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");quota=_meta_get(user,"quota") or"0"
     if proto=="ssh": show_ssh_details_screen("details",user,passwd,exp,quota)
     elif proto in("vless","trojan","vmess"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
-    else: os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}User: {user}  Proto: {proto}  Exp: {exp}{C['RST']}");press_enter()
+    else: clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}User: {user}  Proto: {proto}  Exp: {exp}{C['RST']}");press_enter()
 
 def ui_delete_expired_wizard():
-    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}DELETE EXPIRED{C['RST']}\n")
+    cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}DELETE EXPIRED{C['RST']}\n")
     c=input(f" {C['RED']}Delete ALL expired? [y/N]: {C['RST']}").strip().lower()
     n=delete_expired_users() if c=='y' else 0
     print(f" {C['GREEN'] if c=='y' else C['RED']}{'✔' if c=='y' else '✗'} {n} removed.{C['RST']}")
     press_enter()
 
 def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
+    clear_screen()
     dom=get_domain();ip=get_ip()
     pub=sh("cat /etc/slowdns/server.pub 2>/dev/null")or"N/A";ns=sh("cat /etc/slowdns/ns.conf 2>/dev/null")or"N/A"
     ua="Mozilla/5.0"
@@ -1745,6 +1761,7 @@ def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
     render_screen(L);press_enter()
 
 def show_detail_screen(mode,proto,user,**kw):
+    clear_screen()
     dom=get_domain()
     if proto=="VLESS":
         u=kw.get("uuid","");e=kw.get("exp","");q=kw.get("quota","0")
@@ -1821,7 +1838,7 @@ def _verify_license():
                 conn.close()
             except: pass
     for _ in range(3):
-        os.system("clear");        print(f"\n  {C['CYAN']}╔════════════════════════════════════════╗{C['RST']}")
+        clear_screen();        print(f"\n  {C['CYAN']}╔════════════════════════════════════════╗{C['RST']}")
         print(f"  {C['CYAN']}║{C['RST']}     {C['YELLOW']}🔑{C['RST']} {C['WHITE']}VERIFICATION DE LICENCE{C['RST']}      {C['CYAN']}║{C['RST']}")
         print(f"  {C['CYAN']}║{C['RST']}         {C['WHITE']}KIGHMU PANEL{C['RST']} {C['GREEN']}v3.9.9{C['RST']}         {C['CYAN']}║{C['RST']}")
         print(f"  {C['CYAN']}╚════════════════════════════════════════╝{C['RST']}\n")
@@ -2626,7 +2643,7 @@ if __name__ == "__main__":
         arg = sys.argv[1]
         if arg == "--install":
             self_install()
-            os.system("clear")
+            clear_screen()
             _verify_license()
             install_all_missing()
             main_menu()
