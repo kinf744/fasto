@@ -553,103 +553,93 @@ StandardError=append:/var/log/slowdns/{svc_name}.log
 WantedBy=multi-user.target
 """
         Path(f"/etc/systemd/system/{svc_name}.service").write_text(svc)
-    # slowdns-router: compile Go DNS router
-    ROUTER_DIR = Path("/root/Kighmu/slowdns-router")
-    ROUTER_DIR.mkdir(parents=True, exist_ok=True)
-    main_go = ROUTER_DIR / "main.go"
-    if not main_go.exists():
-        main_go.write_text('''package main
-import (
-    "fmt"
-    "log"
-    "net"
-    "os"
-    "os/signal"
-    "strings"
-    "syscall"
-    "time"
-)
-type route struct {
-    domain string
-    addr   *net.UDPAddr
-}
-func getEnv(key, fallback string) string {
-    if v := os.Getenv(key); v != "" { return v }
-    return fallback
-}
-func getEnvInt(key string, fallback int) int {
-    if v := os.Getenv(key); v != "" { _, err := fmt.Sscanf(v, "%d", &fallback); if err == nil { return fallback } }
-    return fallback
-}
-func main() {
-    listen := getEnv("LISTEN", ":5300")
-    routesStr := getEnv("ROUTES", "ns4.kingom.ggff.net=127.0.0.1:5353,nv4.kingom.ggff.net=127.0.0.1:5354")
-    timeout := getEnvInt("TIMEOUT", 5)
-    var routes []route
-    for _, part := range strings.Split(routesStr, ",") {
-        kv := strings.SplitN(part, "=", 2)
-        if len(kv) != 2 { continue }
-        domain := strings.TrimSpace(kv[0])
-        addrStr := strings.TrimSpace(kv[1])
-        if !strings.HasSuffix(domain, ".") { domain += "." }
-        addr, err := net.ResolveUDPAddr("udp", addrStr)
-        if err != nil { log.Printf("Invalid route %s=%s: %v", domain, addrStr, err); continue }
-        routes = append(routes, route{domain: domain, addr: addr})
-    }
-    if len(routes) == 0 { log.Fatal("No valid routes") }
-    conn, err := net.ListenPacket("udp", listen)
-    if err != nil { log.Fatal(err) }
-    defer conn.Close()
-    log.Printf("slowdns-router on %s", listen)
-    for _, r := range routes { log.Printf("  route %s -> %s", r.domain, r.addr) }
-    buf := make([]byte, 65535)
-    sigCh := make(chan os.Signal, 1)
-    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-    for {
-        select {
-        case <-sigCh: log.Println("shutting down"); return
-        default:
-            conn.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
-            n, _, err := conn.ReadFrom(buf)
-            if err != nil { continue }
-            qname := extractQName(buf[:n])
-            for _, r := range routes {
-                if strings.HasSuffix(qname, r.domain) || qname == r.domain[:len(r.domain)-1]+"." {
-                    conn.WriteTo(buf[:n], r.addr); break
-                }
-            }
-        }
-    }
-}
-func extractQName(pkt []byte) string {
-    if len(pkt) < 12 { return "" }
-    var parts []string
-    i := 12
-    for i < len(pkt) {
-        l := int(pkt[i])
-        if l == 0 { break }
-        if i+l+1 > len(pkt) { break }
-        parts = append(parts, string(pkt[i+1:i+1+l]))
-        i += l + 1
-    }
-    return strings.Join(parts, ".") + "."
-}
-''')
-    # Try to compile or use existing binary
-    if not Path("/usr/local/bin/slowdns-router").exists():
-        sh("cd /root/Kighmu/slowdns-router && go mod init slowdns-router 2>/dev/null && go build -o slowdns-router . 2>/dev/null && cp slowdns-router /usr/local/bin/slowdns-router 2>/dev/null") or True
-    if Path("/usr/local/bin/slowdns-router").exists():
-        svc = f"""[Unit]
+    # slowdns-router: Python DNS proxy (forwards query → waits response → relays to client)
+    router_py = """#!/usr/bin/env python3
+import socket, signal, sys, os, struct, threading
+
+LISTEN = int(os.environ.get("LISTEN", 5300))
+TIMEOUT = int(os.environ.get("TIMEOUT", 5))
+ns4 = os.environ.get("NS4", "ns4.kingom.ggff.net")
+nv4 = os.environ.get("NV4", "nv4.kingom.ggff.net")
+R4 = os.environ.get("R4", "127.0.0.1:5353")
+RV4 = os.environ.get("RV4", "127.0.0.1:5354")
+
+ROUTES = [(ns4.rstrip("."), R4), (nv4.rstrip("."), RV4)]
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(("0.0.0.0", LISTEN))
+
+def parse_qname(pkt):
+    if len(pkt) < 12: return None
+    labels, pos = [], 12
+    while pos < len(pkt):
+        l = pkt[pos]
+        if l == 0: break
+        if l & 0xC0: return None
+        pos += 1
+        if pos + l > len(pkt): return None
+        labels.append(pkt[pos:pos+l].decode(errors="replace"))
+        pos += l
+    return ".".join(labels)
+
+def send_refused(conn, addr, req):
+    if len(req) < 12: return
+    resp = bytearray(req)
+    resp[2] = (req[2] & 0x01) | 0x80
+    resp[3] = 0x85
+    for i in range(6, 12): resp[i] = 0
+    conn.sendto(bytes(resp), addr)
+
+def handle(conn, data, addr):
+    qname = parse_qname(data)
+    if not qname: return
+    for domain, backend in ROUTES:
+        if qname == domain or qname.endswith("." + domain) or qname.endswith("." + domain + "."):
+            bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            bc.settimeout(TIMEOUT)
+            try:
+                h, p = backend.split(":", 1)
+                bc.sendto(data, (h, int(p)))
+                resp, _ = bc.recvfrom(4096)
+                conn.sendto(resp, addr)
+            except socket.timeout:
+                send_refused(conn, addr, data)
+            except Exception:
+                send_refused(conn, addr, data)
+            finally:
+                bc.close()
+            return
+    send_refused(conn, addr, data)
+
+for d, _ in ROUTES:
+    sys.stderr.write(f"  route {d} -> ...\n")
+sys.stderr.write(f"slowdns-router on {LISTEN}\n")
+sys.stderr.flush()
+signal.signal(signal.SIGTERM, lambda *_: exit(0))
+
+while True:
+    try:
+        data, addr = sock.recvfrom(4096)
+        threading.Thread(target=handle, args=(sock, data, addr), daemon=True).start()
+    except Exception:
+        continue
+"""
+    Path("/usr/local/bin/slowdns-router").write_text(router_py)
+    Path("/usr/local/bin/slowdns-router").chmod(0o755)
+    svc = f"""[Unit]
 Description=SlowDNS Router (53->5353/5354)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 Type=simple
-Environment=LISTEN=:5300
-Environment=ROUTES={ns4}=127.0.0.1:5353,{nv4}=127.0.0.1:5354
+Environment=LISTEN=5300
+Environment=NS4={ns4}
+Environment=NV4={nv4}
+Environment=R4=127.0.0.1:5353
+Environment=RV4=127.0.0.1:5354
 Environment=TIMEOUT=5
-ExecStart=/usr/local/bin/slowdns-router
+ExecStart=/usr/bin/python3 /usr/local/bin/slowdns-router
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576
@@ -658,7 +648,7 @@ StandardError=append:/var/log/slowdns/slowdns-router.log
 [Install]
 WantedBy=multi-user.target
 """
-        Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
+    Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
     # nftables rules for SlowDNS
     _deploy_nft("slowdns", """table inet slowdns {
     chain prerouting { type nat hook prerouting priority -100; policy accept;
@@ -1434,7 +1424,7 @@ def submenu_family(title,protos):
         CH=input().strip()
         if CH in("1","01"): ui_create_wizard(protos)
         elif CH in("2","02"): ui_list_users(title,protos)
-        elif CH in("3","03"): ui_delete_wizard()
+        elif CH in("3","03"): ui_delete_wizard(protos)
         elif CH in("4","04"): ui_renew_wizard()
         elif CH in("5","05"): ui_lock_wizard()
         elif CH in("6","06"): ui_passwd_wizard()
@@ -1528,14 +1518,59 @@ def ui_list_users(title,protos):
     if n==0: L.append(f" {C['GRAY']}(no {title} user){C['RST']}")
     L.append("%SEP%");render_screen(L);press_enter()
 
-def ui_delete_wizard():
-    os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}DELETE USER{C['RST']}\n")
-    user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
-    if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
-    c=input(f" {C['RED']}Confirm? [y/N]: {C['RST']}").strip().lower()
-    if c=='y': delete_user(user);print(f" {C['GREEN']}✔ Deleted{C['RST']}")
-    else: print(f" {C['RED']}✗ Cancelled{C['RST']}")
-    press_enter()
+def ui_delete_wizard(protos=None):
+    today = date.today().isoformat()
+    while True:
+        entries = []
+        if USERDIR.exists():
+            for f in sorted(USERDIR.iterdir()):
+                if not f.is_file(): continue
+                p = _meta_get(f.name, "proto")
+                if protos and p not in protos: continue
+                e = _meta_get(f.name, "exp")
+                entries.append((f.name, p, e))
+        if not entries:
+            print(f" {C['RED']}✗ No users found.{C['RST']}");press_enter();return
+        os.system("clear")
+        print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}MANAGE USERS ▸ DELETE USER{C['RST']}")
+        print(f" {C['CYAN']}{'─' * 56}{C['RST']}")
+        print(f" {C['WHITE']}{'N°':<6}{'USERNAME':<18}{'EXPIRATION':<14}{'STATUS':<10}{C['RST']}")
+        print(f" {C['GRAY']}{'──':<6}{'────────':<18}{'──────────':<14}{'──────':<10}{C['RST']}")
+        for i, (nm, p, ex) in enumerate(entries, 1):
+            if is_locked(nm): st = f"{C['RED']}LOCKED{C['RST']}"
+            elif ex and ex < today: st = f"{C['RED']}EXPIRED{C['RST']}"
+            elif ex and ex >= today and (date.fromisoformat(ex) - date.today()).days <= 3: st = f"{C['YELLOW']}EXPIRING{C['RST']}"
+            else: st = f"{C['GREEN']}ACTIVE{C['RST']}"
+            print(f" {C['WHITE']}[{i:02d}]{C['RST']}  {C['WHITE']}{nm:<18}{C['RST']} {exp_color(ex):<14} {st}")
+            entries[i-1] = (nm, p, ex)
+        print(f" {C['CYAN']}{'─' * 56}{C['RST']}")
+        print(f" {C['GRAY']}Enter number(s) to delete (ex: 2  or  1,3,5  or  2-4){C['RST']}")
+        print(f" {C['BTNBG']} [0] ⇦ [ CANCEL ] {C['RST']}")
+        sel = input(f"\n {C['YELLOW']}►{C['RST']} {C['WHITE']}Selection : {C['RST']}").strip()
+        if sel == "0": return
+        indices = set()
+        for part in re.split(r'[,\s]+', sel):
+            part = part.strip()
+            if not part: continue
+            if '-' in part:
+                try:
+                    a, b = part.split('-', 1)
+                    for i in range(int(a), int(b) + 1): indices.add(i)
+                except: pass
+            else:
+                try: indices.add(int(part))
+                except: pass
+        indices = sorted(i for i in indices if 1 <= i <= len(entries))
+        if not indices: continue
+        todel = [entries[i-1][0] for i in indices]
+        print(f" {C['RED']}Delete {len(todel)} user(s): {', '.join(todel)}?{C['RST']}")
+        cf = input(f" {C['RED']}Type 'yes' to confirm: {C['RST']}").strip().lower()
+        if cf != "yes": continue
+        for nm in todel:
+            delete_user(nm)
+            print(f" {C['GREEN']}✔ {nm} deleted{C['RST']}")
+        if not entries or all(e[0] in todel for e in entries): break
+        press_enter()
 
 def ui_renew_wizard():
     os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}RENEW{C['RST']}\n")
