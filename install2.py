@@ -39,14 +39,7 @@ def strip_ansi(s): return re.sub(r'\x1b\[[0-9;]*m', '', s)
 def vislen(s): return len(strip_ansi(s))
 
 def clear_screen():
-    try:
-        rows = int(sh("tput lines 2>/dev/null") or "24")
-    except:
-        rows = 24
-    sys.stdout.write("\n" * rows)
-    sys.stdout.write("\033[H\033[2J\033[3J")
-    sys.stdout.flush()
-    os.system("clear")
+    subprocess.run("printf '\\033[H\\033[2J\\033[3J' && clear", shell=True)
 
 def render_screen(lines):
     w = 0
