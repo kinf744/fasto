@@ -1467,8 +1467,28 @@ def toggle_flag(name):
     STATEDIR.mkdir(parents=True,exist_ok=True);f=STATEDIR/name
     f.unlink() if f.exists() else f.write_text("1")
 
-# Menu controllers
+def cleanup_panel_residues():
+    for f in Path("/root").iterdir():
+        if f.is_file() and f.suffix in (".sh",".exp",".py") and f.name not in ("install.sh","install2.py","ventes.sh"):
+            if f.name in ("ssh.sh","udp.sh","xray-v2ray.sh","install-kighmu.exp","install2.sh.backup.original","restart_bins.sh","restart_v2ray.sh","start_bot.sh","restore_users.py","verify.py","uninstall_all.py"):
+                f.unlink(missing_ok=True)
+    for p in ["/root/PPS_TECH","/root/PPS","/root/panel","/etc/PPS_TECH","/etc/PPS"]:
+        d=Path(p)
+        if d.exists(): sh(f"rm -rf {p} 2>/dev/null || true")
+    for svc in ["pps","PPS","PPS_TECH","menu-ssh","menu-ssh-v2"]:
+        f=Path(f"/etc/systemd/system/{svc}.service")
+        if f.exists(): f.unlink(); sh(f"systemctl disable {svc}.service 2>/dev/null || true")
+    for m in ["/usr/local/bin/menu-ssh","/usr/local/bin/menu"]:
+        p=Path(m)
+        if p.exists() and not p.resolve().name.startswith("kighmu"):
+            p.unlink(missing_ok=True)
+    for f in Path("/etc").glob("*.bak"): f.unlink(missing_ok=True)
+    for f in Path("/etc").glob("*_backup"): sh(f"rm -rf {f} 2>/dev/null || true")
+    sh("pkill -f 'PPS_TECH' 2>/dev/null || true")
+    sh("pkill -f 'menu-ssh' 2>/dev/null || true")
+
 def main_menu():
+    cleanup_panel_residues()
     while True:
         scr_main()
         CH=input().strip()
@@ -1480,6 +1500,7 @@ def main_menu():
         elif CH in("0",): os.system("clear");break
 
 def menu_manage_users():
+    cleanup_panel_residues()
     while True:
         scr_manage_users()
         CH=input().strip()
@@ -1518,6 +1539,7 @@ def submenu_family(title,protos):
         elif CH in("0",): return
 
 def menu_optimize():
+    cleanup_panel_residues()
     while True:
         scr_optimize();CH=input().strip()
         if CH in("1","01"): opt_enable()
@@ -1533,6 +1555,7 @@ def menu_optimize():
         elif CH in("0",): return
 
 def menu_protocol_installer():
+    cleanup_panel_residues()
     while True:
         scr_protocol_installer();CH=input().strip()
         acts={"1":install_ssh_stack,"01":install_ssh_stack,"2":install_sshws,"02":install_sshws,
@@ -1546,6 +1569,7 @@ def menu_protocol_installer():
         elif CH=="0": return
 
 def menu_update_remove():
+    cleanup_panel_residues()
     while True:
         scr_update_remove();CH=input().strip()
         if CH in("1","01"): upd_check();press_enter()
