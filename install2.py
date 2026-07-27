@@ -23,11 +23,12 @@ STATEDIR = Path("/etc/kighmu/state")
 XRAY_USERS = Path("/etc/xray/users.json")
 V2RAY_USERS = Path("/etc/v2ray/users.json")
 BANNER = [
-    '     _  _____ ____ _   _ __  __ _   _ ',
-    "    | |/ /_ _/ ___| | | |  \\/  | | | |",
-    "    | ' / | | |  _| |_| | |\\/| | | | |",
-    '    | . \\ | | |_| |  _  | |  | | |_| |',
-    '    |_|\\_\\___\\____|_| |_|_|  |_|\\___/ ',
+    '__     ______  ____        ____  ____   ___  ',
+    r"\ \   / /  _ \/ ___|      |  _ \|  _ \ / _ \ ",
+    r" \ \ / /| |_) \___ \ _____| |_) | |_) | | | |",
+    r"  \ V / |  __/ ___) |_____|  __/|  _ <| |_| |",
+    r"   \_/  |_|   |____/      |_|   |_| \_\\___/ ",
+    '                                             ',
 ]
 
 def sh(cmd, timeout=30):
@@ -119,7 +120,9 @@ def cpu_pct():
 def pct_color(p): return f"{C['RED']}{p}%{C['RST']}" if p > 90 else f"{C['YELLOW']}{p}%{C['RST']}"
 def count_ssh_total(): return int(sh(r"awk -F: '$3>=1000 && $7 ~ /(bash|sh)$/ {n++} END{print n+0}' /etc/passwd") or "0")
 def count_xray_total(): return int(sh("jq '[.vmess,.vless,.trojan]|map(length)|add' /etc/xray/users.json 2>/dev/null") or "0")
-def count_total_users(): return count_ssh_total() + count_xray_total()
+def count_total_users():
+    if not USERDIR.exists(): return 0
+    return sum(1 for f in USERDIR.iterdir() if f.is_file())
 def count_locked(): return int(sh(r"awk -F: '$3>=1000 && $2 ~ /^!/ {n++} END{print n+0}' /etc/shadow 2>/dev/null") or "0")
 
 def _count_family(mode, *protos):
@@ -142,6 +145,36 @@ def count_expired():
     today = date.today().isoformat()
     if not USERDIR.exists(): return 0
     return sum(1 for f in USERDIR.iterdir() if f.is_file() and (e := _meta_get(f.name, "exp")) and e < today)
+
+def _fmt_bytes(b):
+    b = int(b)
+    if b >= 1 << 40: return f"{b/(1<<40):.2f}T"
+    if b >= 1 << 30: return f"{b/(1<<30):.2f}G"
+    if b >= 1 << 20: return f"{b/(1<<20):.0f}M"
+    if b >= 1 << 10: return f"{b/(1<<10):.0f}K"
+    return f"{b}B"
+
+def _vnstat_data():
+    try:
+        r = subprocess.run(["vnstat","--json"], capture_output=True, text=True, timeout=10)
+        d = json.loads(r.stdout)
+        ifaces = d.get("interfaces", [])
+        if not ifaces: return "N/A","N/A","N/A"
+        t = ifaces[0]["traffic"]
+        day = t.get("day", [])
+        month = t.get("month", [])
+        d_rx = day[-1]["rx"] if day else 0
+        d_tx = day[-1]["tx"] if day else 0
+        w_rx = sum(x["rx"] for x in day[-7:]) if len(day)>=7 else d_rx
+        w_tx = sum(x["tx"] for x in day[-7:]) if len(day)>=7 else d_tx
+        m_rx = month[-1]["rx"] if month else 0
+        m_tx = month[-1]["tx"] if month else 0
+        dw = f"{_fmt_bytes(d_rx+d_tx)}"
+        ww = f"{_fmt_bytes(w_rx+w_tx)}"
+        mw = f"{_fmt_bytes(m_rx+m_tx)}"
+        return dw, ww, mw
+    except:
+        return "N/A","N/A","N/A"
 
 def flag_status(name):
     f = STATEDIR / name
@@ -934,7 +967,9 @@ WantedBy=multi-user.target
     sh("systemctl enable --now xray haproxy 2>/dev/null || true; sleep 2")
     crontab_cmds = [
         "*/15 * * * * systemctl is-active --quiet xray || systemctl restart xray >> /var/log/xray-watchdog.log 2>&1",
-        "*/5 * * * * systemctl is-active --quiet haproxy || systemctl restart haproxy >> /var/log/haproxy-watchdog.log 2>&1"
+        "*/5 * * * * systemctl is-active --quiet haproxy || systemctl restart haproxy >> /var/log/haproxy-watchdog.log 2>&1",
+        "0 0 1 * * vnstat --reset 2>/dev/null || true",
+        "0 6 * * * /usr/local/bin/kighmu-bot --reseller-cleanup 2>/dev/null || true"
     ]
     existing = sh("crontab -l 2>/dev/null")
     for cmd in crontab_cmds:
@@ -945,7 +980,7 @@ def uninstall_xray():
     sh("systemctl disable --now xray haproxy 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray /usr/local/bin/xray-* 2>/dev/null; rm -rf /etc/xray /var/log/xray 2>/dev/null || true")
     sh("rm -f /etc/systemd/system/xray.service 2>/dev/null; rm -rf /etc/systemd/system/haproxy.service.d 2>/dev/null || true")
-    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog' | crontab - 2>/dev/null || true")
+    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog\\|vnstat --reset' | crontab - 2>/dev/null || true")
     _remove_nft("xray"); sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_v2ray():
@@ -1070,10 +1105,30 @@ def install_all_missing():
         fn()
 
 def uninstall_all_active():
+    os.system("clear")
+    print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
+    print(f" {C['RED']}║{C['RST']}      {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
+    print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
+    print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer TOUS les tunnels :{C['RST']}")
+    print(f" {C['GRAY']}  • SSH / Dropbear      • WS-EPRO (SSH-WS)      • SSL / TLS{C['RST']}")
+    print(f" {C['GRAY']}  • XRAY                • V2RAY-DNS             • BadVPN{C['RST']}")
+    print(f" {C['GRAY']}  • UDP Custom          • SlowDNS               • Hysteria{C['RST']}")
+    print(f" {C['GRAY']}  • ZIVPN               • HAProxy               • NFTables{C['RST']}\n")
+    c = input(f" {C['RED']}► Tapez 'yes' pour confirmer :{C['RST']} ").strip().lower()
+    if c != "yes":
+        print(f" {C['GREEN']}✔ Annulé.{C['RST']}")
+        press_enter()
+        return
     for fn in [uninstall_zivpn, uninstall_hysteria, uninstall_slowdns, uninstall_udp_custom, uninstall_badvpn, uninstall_v2ray, uninstall_xray, uninstall_sshws, uninstall_ssl_tls, uninstall_dropbear]:
         fn()
-    # Stop haproxy if it was installed as xray dependency
     sh("systemctl disable --now haproxy 2>/dev/null || true")
+    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn@7100","badvpn@7200","badvpn@7300"]:
+        sh(f"systemctl stop --now {svc} 2>/dev/null || true")
+        sh(f"systemctl disable {svc} 2>/dev/null || true")
+    sh("nft flush ruleset 2>/dev/null || true")
+    sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
+    print(f"\n {C['RED']}✔ Tous les tunnels ont été désinstallés.{C['RST']}")
+    press_enter()
 
 def install_telegram_bot():
     os.system("clear")
@@ -1132,12 +1187,25 @@ def upd_reinstall():
     if c == 'y': install_all_missing()
 
 def upd_remove():
-    c = input(f" {C['RED']}UNINSTALL ALL? [y/N]: {C['RST']}").strip().lower()
-    if c == 'y': _auto_uninstall_all()
+    os.system("clear")
+    print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
+    print(f" {C['RED']}║{C['RST']}     {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
+    print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
+    print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer:{C['RST']}")
+    print(f" {C['GRAY']}  • Tous les tunnels et services{C['RST']}")
+    print(f" {C['GRAY']}  • Tous les utilisateurs{C['RST']}")
+    print(f" {C['GRAY']}  • Le panneau de contrôle{C['RST']}\n")
+    c = input(f" {C['RED']}► Tapez 'yes' pour confirmer :{C['RST']} ").strip().lower()
+    if c != "yes":
+        print(f" {C['GREEN']}✔ Annulé.{C['RST']}")
+        press_enter()
+        return
+    _auto_uninstall_all()
 
 def _auto_uninstall_all():
     uninstall_all_active()
     uninstall_telegram_bot()
+    for r in reseller_list():reseller_remove_service(r["id"])
     sh("systemctl stop kighmu-bot slowdns-router slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
     sh("systemctl disable kighmu-bot slowdns-router slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
     for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn@7100","badvpn@7200","badvpn@7300"]:
@@ -1145,10 +1213,16 @@ def _auto_uninstall_all():
         sh(f"systemctl disable {svc} 2>/dev/null || true")
     for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-router.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
         Path(f).unlink(missing_ok=True)
-    sh("rm -rf /etc/kighmu /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/menu /usr/local/bin/install2 /root/fasto /root/backup 2>/dev/null || true")
+    sh("rm -rf /etc/kighmu /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/menu /usr/local/bin/install2 /root/fasto /root/backup /tmp/nuitka-build 2>/dev/null || true")
+    sh("rm -f /etc/kighmu/bot/resellers.db 2>/dev/null || true")
+    sh("rm -rf /etc/kighmu/bot/resellers 2>/dev/null || true")
+    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog\\|vnstat --reset\\|reseller-cleanup' | crontab - 2>/dev/null || true")
     sh("nft flush ruleset 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
-    print(f" {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
+    print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
+    print(f" {C['YELLOW']}Le panneau va se fermer.{C['RST']}")
+    input(f" {C['GRAY']}Appuyez sur Entrée pour quitter...{C['RST']}")
+    sys.exit(0)
 
 def delete_user(user):
     f = USERDIR / user
@@ -1233,7 +1307,8 @@ def push_header(out, mode, *menu_lines):
 # Screen functions
 def scr_main():
     os.system("clear")
-    EXP=count_expired();KILL=count_locked();TOT=count_total_users()
+    TOT=count_total_users();EXP=count_expired()
+    DW,WW,MW=_vnstat_data()
     OS=get_os();ARCH=get_arch();CORES=get_cores();DT=get_datetime()
     IP=get_ipv6() or get_ipv4()
     RT=ram_total_g();RF=ram_free_g();RU=ram_used_g();RPCT=ram_pct();CPCT=cpu_pct();BUF=ram_buffer_m()
@@ -1257,7 +1332,7 @@ def scr_main():
         f" {C['GREEN']}[03]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ml[2]:<{mw}}{C['RST']}  {ST_AUTO}",
         f" {C['GREEN']}[04]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ml[3]}{C['RST']}"]
     L=["%SEP%"]+[f"{C['CYAN']}{b}{C['RST']}" for b in BANNER]+[
-        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}EXP:{C['RST']} {C['RED']}[{EXP}]{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}KILL:{C['RST']} {C['RED']}[{KILL}]{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}TOTAL:{C['RST']} {C['WHITE']}[{TOT}]{C['RST']}",
+        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}USERS:{C['RST']} {C['WHITE']}[{TOT}]{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}EXP:{C['RST']} {C['RED']}[{EXP}]{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}TRAFIC (D/W/M):{C['RST']} {C['GREEN']}{DW}{C['RST']}/{C['YELLOW']}{WW}{C['RST']}/{C['RED']}{MW}{C['RST']}",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}S.O:{C['RST']} {C['WHITE']}{OS}{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}Base:{C['RST']} {C['WHITE']}{ARCH}{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}CPU's:{C['RST']} {C['WHITE']}{CORES}{C['RST']}",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}IP:{C['RST']} {C['WHITE']}{IP}{C['RST']}  {C['GRAY']}•{C['RST']}  {C['WHITE']}TIME:{C['RST']} {C['WHITE']}{DT}{C['RST']}",
         "%SEP%",f" {C['KEYBG']} Key: [ {_client_name()} ] {C['RST']}   {C['GRAY']}({VERSION}){C['RST']}","%SEP%"]
@@ -1477,7 +1552,7 @@ def menu_update_remove():
         elif CH in("3","03"): upd_changelog();press_enter()
         elif CH in("4","04"): toggle_flag("backup_before_update")
         elif CH in("5","05"): upd_reinstall();press_enter()
-        elif CH in("6","06"): upd_remove();press_enter()
+        elif CH in("6","06"): upd_remove()
         elif CH in("0",): return
 
 def ui_create_wizard(protos):
@@ -1718,9 +1793,9 @@ def _verify_license():
                 conn.close()
             except: pass
     for _ in range(3):
-        os.system("clear");print(f"\n  {C['CYAN']}╔════════════════════════════════════════╗{C['RST']}")
-        print(f"  {C['CYAN']}║{C['RST']}     {C['YELLOW']}🔑{C['RST']} {C['WHITE']}VERIFICATION DE LICENCE{C['RST']}     {C['CYAN']}║{C['RST']}")
-        print(f"  {C['CYAN']}║{C['RST']}     {C['WHITE']}KIGHMU PANEL{C['RST']} {C['GREEN']}v3.9.9{C['RST']}          {C['CYAN']}║{C['RST']}")
+        os.system("clear");        print(f"\n  {C['CYAN']}╔════════════════════════════════════════╗{C['RST']}")
+        print(f"  {C['CYAN']}║{C['RST']}     {C['YELLOW']}🔑{C['RST']} {C['WHITE']}VERIFICATION DE LICENCE{C['RST']}      {C['CYAN']}║{C['RST']}")
+        print(f"  {C['CYAN']}║{C['RST']}         {C['WHITE']}KIGHMU PANEL{C['RST']} {C['GREEN']}v3.9.9{C['RST']}         {C['CYAN']}║{C['RST']}")
         print(f"  {C['CYAN']}╚════════════════════════════════════════╝{C['RST']}\n")
         print(f"  {C['YELLOW']}Veuillez saisir votre clé de licence :{C['RST']}")
         print(f"  {C['GRAY']}Exemple :{C['RST']} {C['GREEN']}a137726f21f7360a825fd376a3dfe9bd{C['RST']}\n")
@@ -1765,6 +1840,160 @@ CONFIG_FILE = BOT_DIR / "config.json"
 BOT_CONFIG = {"token": "", "admin_id": 0}
 if CONFIG_FILE.exists(): BOT_CONFIG.update(json.loads(CONFIG_FILE.read_text()))
 TOKEN = BOT_CONFIG.get("token", ""); ADMIN_ID = BOT_CONFIG.get("admin_id", 0)
+
+# ── Reseller System ─────────────────────────────────────────────────────────────
+RESELLER_DB = BOT_DIR / "resellers.db"
+
+def init_reseller_db():
+    conn = sqlite3.connect(str(RESELLER_DB))
+    conn.execute("""CREATE TABLE IF NOT EXISTS resellers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_name TEXT NOT NULL,
+        telegram_id INTEGER DEFAULT 0,
+        access_code TEXT DEFAULT '',
+        bot_token TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        max_users INTEGER NOT NULL DEFAULT 10,
+        data_quota_gb REAL NOT NULL DEFAULT 100.0,
+        tunnels TEXT NOT NULL DEFAULT '["ssh","xray","v2ray","zivpn","hysteria"]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        active INTEGER NOT NULL DEFAULT 1
+    )""")
+    conn.commit(); conn.close()
+
+def reseller_add(name, tg_id, token, exp, max_u, quota, tunnels, access_code=""):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB))
+    c = conn.cursor()
+    c.execute("INSERT INTO resellers (client_name,telegram_id,bot_token,expires_at,max_users,data_quota_gb,tunnels,access_code) VALUES (?,?,?,?,?,?,?,?)",
+              (name, tg_id, token, exp, max_u, quota, json.dumps(tunnels), access_code))
+    rid = c.lastrowid; conn.commit(); conn.close()
+    return rid
+
+def reseller_get(rid):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB)); conn.row_factory = sqlite3.Row
+    r = conn.execute("SELECT * FROM resellers WHERE id=?", (rid,)).fetchone()
+    conn.close(); return dict(r) if r else None
+
+def reseller_get_by_tgid(tgid):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB)); conn.row_factory = sqlite3.Row
+    r = conn.execute("SELECT * FROM resellers WHERE telegram_id=? AND active=1", (tgid,)).fetchone()
+    conn.close(); return dict(r) if r else None
+
+def reseller_list():
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB)); conn.row_factory = sqlite3.Row
+    r = conn.execute("SELECT * FROM resellers ORDER BY created_at DESC").fetchall()
+    conn.close(); return [dict(x) for x in r]
+
+def reseller_delete(rid):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB))
+    conn.execute("DELETE FROM resellers WHERE id=?", (rid,))
+    conn.commit(); conn.close()
+
+def reseller_toggle(rid):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB))
+    conn.execute("UPDATE resellers SET active = CASE WHEN active THEN 0 ELSE 1 END WHERE id=?", (rid,))
+    conn.commit(); conn.close()
+
+def reseller_user_count(rid):
+    if not USERDIR.exists(): return 0
+    return sum(1 for f in USERDIR.iterdir() if f.is_file() and _meta_get(f.name, "reseller") == str(rid))
+
+def _users_by_reseller(proto, rid):
+    users = []
+    pm = {"ssh":"ssh","xray":"xray","v2ray":"v2raydns","zivpn":"zivpn","hyst":"hysteria"}
+    rp = pm.get(proto, proto)
+    if proto == "xray":
+        for p in ("vmess","vless","trojan","shadow"):
+            try:
+                with open(XRAY_USERS) as f: d = json.load(f)
+                for u in d.get(p, []):
+                    e = u.get("email","?").split("@")[0]
+                    if _meta_get(e, "reseller") == str(rid):
+                        users.append((e, p.upper(), _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), 0))
+            except: pass
+    elif proto == "v2ray":
+        try:
+            with open(V2RAY_USERS) as f: d = json.load(f)
+            for u in d.get("vless", []):
+                e = u.get("email","?").split("@")[0]
+                if _meta_get(e, "reseller") == str(rid):
+                    users.append((e, "V2RAY", _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), 0))
+        except: pass
+    elif USERDIR.exists():
+        for f in sorted(USERDIR.iterdir()):
+            if not f.is_file(): continue
+            pp = _meta_get(f.name, "proto")
+            if pp == rp and _meta_get(f.name, "reseller") == str(rid):
+                users.append((f.name, pp.upper(), _meta_get(f.name,"exp"), float(_meta_get(f.name,"quota") or "0"), 0))
+    return users
+
+def reseller_extend_expiry(rid, days):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB))
+    r = conn.execute("SELECT expires_at FROM resellers WHERE id=?", (rid,)).fetchone()
+    if not r: conn.close(); return False
+    try:
+        cur = datetime.strptime(r[0], "%Y-%m-%d").date()
+        new_exp = (cur + timedelta(days=days)).isoformat()
+    except:
+        new_exp = (date.today() + timedelta(days=days)).isoformat()
+    conn.execute("UPDATE resellers SET expires_at=?, active=1 WHERE id=?", (new_exp, rid))
+    conn.commit(); conn.close()
+    return True
+
+def reseller_cleanup_expired(dry_run=False):
+    init_reseller_db()
+    conn = sqlite3.connect(str(RESELLER_DB)); conn.row_factory = sqlite3.Row
+    today = date.today().isoformat()
+    expired = conn.execute("SELECT * FROM resellers WHERE expires_at<? AND active=1", (today,)).fetchall()
+    results = []
+    for r in expired:
+        rid = r["id"]
+        if dry_run:
+            results.append({"id": rid, "name": r["client_name"], "action": "would_clean"})
+            continue
+        uc = reseller_user_count(rid)
+        if USERDIR.exists():
+            for f in USERDIR.iterdir():
+                if f.is_file() and _meta_get(f.name, "reseller") == str(rid):
+                    delete_user(f.name)
+        reseller_remove_service(rid)
+        conn.execute("UPDATE resellers SET active=0 WHERE id=?", (rid,))
+        results.append({"id": rid, "name": r["client_name"], "users_deleted": uc, "action": "cleaned"})
+    conn.commit(); conn.close()
+    return results
+
+def reseller_create_service(rid, token):
+    Path(f"/etc/kighmu/bot/resellers/{rid}").mkdir(parents=True, exist_ok=True)
+    svc = f"""[Unit]
+Description=Kighmu Reseller Bot #{rid}
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/kighmu-bot --reseller-bot {rid}
+WorkingDirectory=/etc/kighmu/bot/resellers/{rid}
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/kighmu-reseller-{rid}.log
+StandardError=append:/var/log/kighmu-reseller-{rid}.log
+[Install]
+WantedBy=multi-user.target
+"""
+    Path(f"/etc/systemd/system/kighmu-reseller-{rid}.service").write_text(svc)
+    sh("systemctl daemon-reload && systemctl enable --now kighmu-reseller-"+str(rid)+" 2>/dev/null || true")
+
+def reseller_remove_service(rid):
+    sh("systemctl stop kighmu-reseller-"+str(rid)+" 2>/dev/null || true")
+    sh("systemctl disable kighmu-reseller-"+str(rid)+" 2>/dev/null || true")
+    Path(f"/etc/systemd/system/kighmu-reseller-{rid}.service").unlink(missing_ok=True)
+    sh("rm -rf /etc/kighmu/bot/resellers/"+str(rid)+" 2>/dev/null || true")
+    sh("systemctl daemon-reload 2>/dev/null || true")
 
 def is_authorized(uid): return uid == ADMIN_ID
 def sh_bot(c): return sh(c)
@@ -1904,8 +2133,9 @@ if BOT_AVAILABLE:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-    def main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("📊 Dashboard",callback_data="dash"),InlineKeyboardButton("👥 Users",callback_data="users")],[InlineKeyboardButton("🔧 Services",callback_data="services"),InlineKeyboardButton("📈 Server",callback_data="server")],[InlineKeyboardButton("❓ Help",callback_data="help")]])
-    def users_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➕ Create SSH",callback_data="cr_ssh"),InlineKeyboardButton("➕ Create Xray",callback_data="cr_xray")],[InlineKeyboardButton("➕ Create V2Ray DNS",callback_data="cr_v2ray"),InlineKeyboardButton("➕ Create ZIVPN",callback_data="cr_zivpn")],[InlineKeyboardButton("➕ Create Hysteria",callback_data="cr_hyst")],[InlineKeyboardButton("📋 List SSH",callback_data="ls_ssh"),InlineKeyboardButton("📋 List Xray",callback_data="ls_xray")],[InlineKeyboardButton("📋 List V2Ray DNS",callback_data="ls_v2ray"),InlineKeyboardButton("📋 List ZIVPN",callback_data="ls_zivpn")],[InlineKeyboardButton("📋 List Hysteria",callback_data="ls_hyst")],[InlineKeyboardButton("🔍 Info User",callback_data="info_user"),InlineKeyboardButton("🗑 Delete User",callback_data="del_user")],[InlineKeyboardButton("🔄 Renew User",callback_data="renew_user"),InlineKeyboardButton("🔒 Lock/Unlock",callback_data="lock_user")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
+    def main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("📊 Dashboard",callback_data="dash"),InlineKeyboardButton("👥 Users",callback_data="users")],[InlineKeyboardButton("🔧 Services",callback_data="services"),InlineKeyboardButton("📈 Server",callback_data="server")],[InlineKeyboardButton("🤝 Resellers",callback_data="resellers"),InlineKeyboardButton("❓ Help",callback_data="help")]])
+    def users_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Create SSH",callback_data="cr_ssh"),InlineKeyboardButton("➡️ Create Xray",callback_data="cr_xray")],[InlineKeyboardButton("➡️ Create V2Ray DNS",callback_data="cr_v2ray"),InlineKeyboardButton("➡️ Create ZIVPN",callback_data="cr_zivpn")],[InlineKeyboardButton("➡️ Create Hysteria",callback_data="cr_hyst")],[InlineKeyboardButton("📋 List SSH",callback_data="ls_ssh"),InlineKeyboardButton("📋 List Xray",callback_data="ls_xray")],[InlineKeyboardButton("📋 List V2Ray DNS",callback_data="ls_v2ray"),InlineKeyboardButton("📋 List ZIVPN",callback_data="ls_zivpn")],[InlineKeyboardButton("📋 List Hysteria",callback_data="ls_hyst")],[InlineKeyboardButton("🔍 Info User",callback_data="info_user"),InlineKeyboardButton("🗑 Delete User",callback_data="del_user")],[InlineKeyboardButton("🔄 Renew User",callback_data="renew_user"),InlineKeyboardButton("🔒 Lock/Unlock",callback_data="lock_user")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
+    def reseller_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
     def xray_proto_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("VMESS",callback_data="cr_vmess"),InlineKeyboardButton("VLESS",callback_data="cr_vless")],[InlineKeyboardButton("Trojan",callback_data="cr_trojan")],[InlineKeyboardButton("⬅️ Back",callback_data="users")]])
     def del_proto_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🗑 SSH",callback_data="del_proto_ssh"),InlineKeyboardButton("🗑 Xray",callback_data="del_proto_xray")],[InlineKeyboardButton("🗑 V2Ray DNS",callback_data="del_proto_v2ray"),InlineKeyboardButton("🗑 ZIVPN",callback_data="del_proto_zivpn")],[InlineKeyboardButton("🗑 Hysteria",callback_data="del_proto_hyst")],[InlineKeyboardButton("⬅️ Back",callback_data="users")]])
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data=t)]])
@@ -2001,7 +2231,67 @@ if BOT_AVAILABLE:
                 await q.edit_message_text(t,reply_markup=back_kb("users"),parse_mode="Markdown")
             else: await q.edit_message_text(f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown")
         elif d=="help":
-            await q.edit_message_text("🤖 *KIGHMU BOT HELP*\n━━━━━━━━━━━━━━━━━━━━━\n/start – Main menu\n\n📊 Dashboard – Stats\n👥 Users – Manage\n🔧 Services – Status\n📈 Server – Resources\n❓ Help\n\nCreate/Lists/Delete/Renew/Lock users\nPasswords auto-generated if empty",reply_markup=back_kb("main"),parse_mode="Markdown")
+            await q.edit_message_text("🤖 *KIGHMU BOT HELP*\n━━━━━━━━━━━━━━━━━━━━━\n/start – Main menu\n\n📊 Dashboard – Stats\n👥 Users – Manage\n🔧 Services – Status\n📈 Server – Resources\n🤝 Resellers – Manage resellers\n❓ Help\n\nCreate/Lists/Delete/Renew/Lock users\nPasswords auto-generated if empty",reply_markup=back_kb("main"),parse_mode="Markdown")
+        elif d=="resellers":
+            rl=reseller_list();l=["🤝 *RESELLERS*\n"]
+            if not rl:l.append("No resellers yet.")
+            else:
+                for r in rl:
+                    status="🟢"if r["active"]else"🔴";u=reseller_user_count(r["id"])
+                    l.append(f"\n{status} *{r['client_name']}* (#{r['id']})")
+                    l.append(f"  👤 {r['telegram_id']}  👥 {u}/{r['max_users']}  📅 {r['expires_at']}")
+            t="\n".join(l);await q.edit_message_text(t,reply_markup=reseller_kb(),parse_mode="Markdown")
+        elif d=="cr_reseller":
+            ctx.user_data["cr_reseller"]={};ctx.user_data["cr_step"]="name"
+            await q.edit_message_text("✏️ Reseller client name:",reply_markup=back_kb("resellers"))
+        elif d.startswith("view_reseller_"):
+            rid=int(d[14:]);r=reseller_get(rid)
+            if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
+            s="🟢 Active"if r["active"]else"🔴 Inactive";u=reseller_user_count(rid)
+            tl=", ".join(json.loads(r["tunnels"]))
+            t=f"🤝 *Reseller #{rid}*\n━━━━━━━━━━━━━━━━\n• Name: `{r['client_name']}`\n• TG ID: `{r['telegram_id']}`\n• Status: {s}\n• Expires: `{r['expires_at']}`\n• Users: `{u}/{r['max_users']}`\n• Data Quota: `{r['data_quota_gb']} GB`\n• Tunnels: `{tl}`"
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Toggle Active",callback_data=f"toggle_reseller_{rid}"),InlineKeyboardButton("🗑 Delete",callback_data=f"del_cfm_reseller_{rid}")],[InlineKeyboardButton("📅 Extend Expiry",callback_data=f"extend_reseller_{rid}"),InlineKeyboardButton("👥 Max Users",callback_data=f"maxu_reseller_{rid}")],[InlineKeyboardButton("💾 Data Quota",callback_data=f"quota_reseller_{rid}"),InlineKeyboardButton("⬅️ Back",callback_data="resellers")]])
+            await q.edit_message_text(t,reply_markup=kb,parse_mode="Markdown")
+        elif d.startswith("toggle_reseller_"):
+            rid=int(d[16:]);reseller_toggle(rid);r=reseller_get(rid)
+            await q.edit_message_text(f"🔄 Reseller #{rid} {'activated' if r['active'] else 'deactivated'}.",reply_markup=back_kb("resellers"))
+        elif d.startswith("del_cfm_reseller_"):
+            rid=int(d[17:]);r=reseller_get(rid)
+            if r:reseller_remove_service(rid);reseller_delete(rid)
+            await q.edit_message_text(f"🗑 Reseller #{rid} deleted.",reply_markup=back_kb("resellers"))
+        elif d.startswith("extend_reseller_"):
+            rid=int(d[16:]);r=reseller_get(rid)
+            if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
+            ctx.user_data["extend_rid"]=rid;ctx.user_data["step"]="extend_reseller"
+            await q.edit_message_text(f"📅 Additional *days* for `{r['client_name']}` (current: {r['expires_at']}):",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+        elif d.startswith("maxu_reseller_"):
+            rid=int(d[14:]);r=reseller_get(rid)
+            if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
+            ctx.user_data["edit_rid"]=rid;ctx.user_data["step"]="edit_maxu"
+            await q.edit_message_text(f"👥 New *max users* for `{r['client_name']}` (current: {r['max_users']}):",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+        elif d.startswith("quota_reseller_"):
+            rid=int(d[15:]);r=reseller_get(rid)
+            if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
+            ctx.user_data["edit_rid"]=rid;ctx.user_data["step"]="edit_quota"
+            await q.edit_message_text(f"💾 New *data quota (GB)* for `{r['client_name']}` (current: {r['data_quota_gb']}):",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+        elif d.startswith("cr_rsel_"):
+            tunnel=d[8:];crd=ctx.user_data.get("cr_reseller",{});sl=crd.get("tunnels",[])
+            if tunnel in sl:sl.remove(tunnel)
+            else:sl.append(tunnel)
+            crd["tunnels"]=sl;ctx.user_data["cr_reseller"]=crd
+            btns=[];all_t=["ssh","xray","v2ray","zivpn","hyst"]
+            for t in all_t:mark="✅"if t in sl else"⬜";btns.append(InlineKeyboardButton(f"{mark} {t.upper()}",callback_data=f"cr_rsel_{t}"))
+            btns.append(InlineKeyboardButton("✅ Done",callback_data="cr_rsel_done"))
+            kb=InlineKeyboardMarkup([btns[i:i+3]for i in range(0,len(btns),3)]+[[btns[-1]]])
+            await q.edit_message_text("Select tunnels for reseller:",reply_markup=kb)
+        elif d=="cr_rsel_done":
+            crd=ctx.user_data.get("cr_reseller",{});tl=crd.get("tunnels",[])
+            if not tl:await q.edit_message_text("❌ Select at least 1 tunnel.",reply_markup=back_kb("resellers"));return
+            ctx.user_data["cr_step"]="done"
+            rid=reseller_add(crd["name"],crd.get("tgid",0),crd["token"],crd["exp"],crd["max_u"],crd["quota"],tl,crd.get("access_code",""))
+            reseller_create_service(rid,crd["token"])
+            await q.edit_message_text(f"✅ Reseller #{rid} `{crd['name']}` created!\nService started.",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+            ctx.user_data.pop("cr_reseller",None);ctx.user_data.pop("cr_step",None)
 
     async def text_handler(update,ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Unauthorized.");return
@@ -2077,6 +2367,60 @@ if BOT_AVAILABLE:
             if not(USERDIR/user).exists():await reply_cls(update,ctx,f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown")
             else:await reply_cls(update,ctx,f"🔒 Toggle `{user}`?",reply_markup=yesno_kb("confirm_lock",user),parse_mode="Markdown")
             ctx.user_data.clear()
+        elif step=="edit_maxu":
+            if not text.isdigit()or int(text)<1:await reply_cls(update,ctx,"❌ Enter a positive number:");return
+            rid=ctx.user_data.get("edit_rid",0);init_reseller_db()
+            conn=sqlite3.connect(str(RESELLER_DB))
+            conn.execute("UPDATE resellers SET max_users=? WHERE id=?",(int(text),rid))
+            conn.commit();conn.close()
+            r=reseller_get(rid);await reply_cls(update,ctx,f"✅ `{r['client_name']}` max users → `{text}`",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+            ctx.user_data.clear()
+        elif step=="edit_quota":
+            if not re.match(r'^[0-9]+\.?[0-9]*$',text):await reply_cls(update,ctx,"❌ Invalid number:");return
+            rid=ctx.user_data.get("edit_rid",0);init_reseller_db()
+            conn=sqlite3.connect(str(RESELLER_DB))
+            conn.execute("UPDATE resellers SET data_quota_gb=? WHERE id=?",(float(text),rid))
+            conn.commit();conn.close()
+            r=reseller_get(rid);await reply_cls(update,ctx,f"✅ `{r['client_name']}` quota → `{text} GB`",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+            ctx.user_data.clear()
+        elif step=="extend_reseller":
+            if not text.isdigit()or int(text)<1:await reply_cls(update,ctx,"❌ Enter a positive number of days:");return
+            rid=ctx.user_data.get("extend_rid",0)
+            if reseller_extend_expiry(rid,int(text)):
+                r=reseller_get(rid);await reply_cls(update,ctx,f"✅ `{r['client_name']}` extended → `{r['expires_at']}`",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+            else:await reply_cls(update,ctx,"❌ Reseller not found.",reply_markup=back_kb("resellers"))
+            ctx.user_data.clear()
+        elif ctx.user_data.get("cr_step")=="name":
+            crd=ctx.user_data.get("cr_reseller",{});crd["name"]=text;ctx.user_data["cr_reseller"]=crd
+            ctx.user_data["cr_step"]="tgid";await reply_cls(update,ctx,"✏️ Reseller Telegram ID (0=public, multiple users):",parse_mode="Markdown")
+        elif ctx.user_data.get("cr_step")=="tgid":
+            if not text.isdigit():await reply_cls(update,ctx,"❌ Must be numeric (0 = public):");return
+            crd=ctx.user_data.get("cr_reseller",{});crd["tgid"]=int(text);ctx.user_data["cr_reseller"]=crd
+            ctx.user_data["cr_step"]="access_code";await reply_cls(update,ctx,"✏️ Access code for public bot (or /skip):",parse_mode="Markdown")
+        elif ctx.user_data.get("cr_step")=="access_code":
+            crd=ctx.user_data.get("cr_reseller",{});crd["access_code"]="" if text=="/skip"else text;ctx.user_data["cr_reseller"]=crd
+            ctx.user_data["cr_step"]="token";await reply_cls(update,ctx,"✏️ Reseller Bot Token (from @BotFather):",parse_mode="Markdown")
+        elif ctx.user_data.get("cr_step")=="token":
+            if len(text)<10:await reply_cls(update,ctx,"❌ Token too short:");return
+            crd=ctx.user_data.get("cr_reseller",{});crd["token"]=text;ctx.user_data["cr_reseller"]=crd
+            ctx.user_data["cr_step"]="exp";await reply_cls(update,ctx,"✏️ Expiry in days (e.g. 30, 365):",parse_mode="Markdown")
+        elif ctx.user_data.get("cr_step")=="exp":
+            if not text.isdigit()or int(text)<1:await reply_cls(update,ctx,"❌ >=1");return
+            crd=ctx.user_data.get("cr_reseller",{});crd["exp"]=exp_in_days(int(text));ctx.user_data["cr_reseller"]=crd
+            ctx.user_data["cr_step"]="max_u";await reply_cls(update,ctx,"✏️ Max users reseller can create:",parse_mode="Markdown")
+        elif ctx.user_data.get("cr_step")=="max_u":
+            if not text.isdigit()or int(text)<1:await reply_cls(update,ctx,"❌ >=1");return
+            crd=ctx.user_data.get("cr_reseller",{});crd["max_u"]=int(text);ctx.user_data["cr_reseller"]=crd
+            ctx.user_data["cr_step"]="quota";await reply_cls(update,ctx,"✏️ Data quota GB per reseller (0=unlimited):",parse_mode="Markdown")
+        elif ctx.user_data.get("cr_step")=="quota":
+            if not re.match(r'^[0-9]+\.?[0-9]*$',text):await reply_cls(update,ctx,"❌ Invalid number.");return
+            crd=ctx.user_data.get("cr_reseller",{});crd["quota"]=float(text)if float(text)>0 else 0;ctx.user_data["cr_reseller"]=crd
+            sl=crd.get("tunnels",[]);all_t=["ssh","xray","v2ray","zivpn","hyst"]
+            btns=[]
+            for t in all_t:btns.append(InlineKeyboardButton(f"⬜ {t.upper()}",callback_data=f"cr_rsel_{t}"))
+            btns.append(InlineKeyboardButton("✅ Done",callback_data="cr_rsel_done"))
+            kb=InlineKeyboardMarkup([btns[i:i+3]for i in range(0,len(btns),3)]+[[btns[-1]]])
+            await reply_cls(update,ctx,"Select tunnels for reseller, then Done:",reply_markup=kb)
 
     async def do_create(update,ctx):
         proto=ctx.user_data.get("cr_proto","");user=ctx.user_data.get("cr_username","")
@@ -2111,7 +2455,143 @@ def run_bot():
     app.add_error_handler(error_handler)
     log.info("Kighmu Bot started");app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-# ── Entry Point ────────────────────────────────────────────────────────────────
+# ── Reseller Bot ─────────────────────────────────────────────────────────────────
+if BOT_AVAILABLE:
+    def _r_auth(update, r):
+        if not r or not r["active"]: return False, "⛔ Reseller account disabled."
+        if r["expires_at"] < date.today().isoformat(): return False, "⛔ Account expired, contact admin."
+        if r["telegram_id"] != 0 and update.effective_user.id != r["telegram_id"]: return False, "⛔ Unauthorized."
+        return True, ""
+
+    async def start_reseller(update,ctx):
+        rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
+        ok,msg=_r_auth(update,r)
+        if not ok:await update.message.reply_text(msg);return
+        await show_main_reseller(update,ctx)
+
+    async def show_main_reseller(update,ctx,edit=False):
+        rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
+        if not r:return
+        u=reseller_user_count(rid);exp=r["expires_at"];tl=", ".join(json.loads(r["tunnels"]))
+        auth_str="👤 Public bot" if r["telegram_id"]==0 else f"👤 Authorized: `{r['telegram_id']}`"
+        t=f"🤝 *Reseller: {r['client_name']}*\n━━━━━━━━━━━━━━━━\n• Users: `{u}/{r['max_users']}`\n• Expires: `{exp}`\n• Tunnels: `{tl}`\n{auth_str}"
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("👥 My Users",callback_data="r_users")],[InlineKeyboardButton("❓ Help",callback_data="r_help")]])
+        if edit:await update.callback_query.edit_message_text(t,reply_markup=kb,parse_mode="Markdown")
+        else:await update.message.reply_text(t,reply_markup=kb,parse_mode="Markdown")
+
+    def reseller_users_kb(rid):
+        r=reseller_get(rid);tl=json.loads(r["tunnels"])if r else[]
+        btns=[]
+        for t in tl:
+            names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+            btns.append(InlineKeyboardButton(f"➡️ Create {names.get(t,t)}",callback_data=f"r_cr_{t}"))
+            btns.append(InlineKeyboardButton(f"📋 List {names.get(t,t)}",callback_data=f"r_ls_{t}"))
+        btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_main"))
+        return InlineKeyboardMarkup([btns[i:i+2]for i in range(0,len(btns),2)])
+
+    async def callback_handler_reseller(update,ctx):
+        q=update.callback_query;await q.answer()
+        rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
+        ok,msg=_r_auth(q,r)
+        if not ok:await q.edit_message_text(msg);return
+        d=q.data
+        if d=="r_main":await show_main_reseller(update,ctx,edit=True)
+        elif d=="r_users":
+            tl=json.loads(r["tunnels"])
+            l=["👥 *MY USERS*\n"]
+            for t in tl:
+                names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+                cnt=len(_users_by_reseller(t,rid))
+                l.append(f"• {names.get(t,t)}: `{cnt}`")
+            l.append(f"\nTotal: `{reseller_user_count(rid)}/{r['max_users']}`")
+            await q.edit_message_text("\n".join(l),reply_markup=reseller_users_kb(rid),parse_mode="Markdown")
+        elif d=="r_cr_xray":
+            await q.edit_message_text("Select Xray protocol:",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("VMESS",callback_data="r_cr_vmess"),InlineKeyboardButton("VLESS",callback_data="r_cr_vless")],[InlineKeyboardButton("Trojan",callback_data="r_cr_trojan")],[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
+        elif d.startswith("r_cr_"):
+            p=d[5:];ctx.user_data["r_proto"]=p;ctx.user_data["r_step"]="r_user";ctx.user_data["r_rid"]=rid
+            await q.edit_message_text(f"✏️ Username:",parse_mode="Markdown")
+        elif d.startswith("r_ls_"):
+            p=d[5:];names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+            users=_users_by_reseller(p,rid);t="\n".join([f"📋 *{names.get(p,p)}* ({len(users)})\n"]+[f"`{i}.` {n} – exp: {e}"for i,(n,e,_,_,_)in enumerate(users,1)])if users else f"📋 No {names.get(p,p)} users."
+            try:await q.edit_message_text(t,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
+            except:await q.edit_message_text(t.replace('*','').replace('`',''),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
+        elif d=="r_help":
+            await q.edit_message_text("🤖 *Reseller Bot Help*\n━━━━━━━━━━━━━━\n👥 My Users – Manage your users\n• Create users for allowed tunnels\n• List users per tunnel\n\nLimits are enforced:\n• Max users: your reseller cap\n• Expiry: your reseller account\n\nContact your admin for support.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
+        elif d.startswith("r_confirm_del_"):
+            user=d[14:];delete_user(user);await q.edit_message_text(f"✅ `{user}` deleted.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
+
+    async def text_handler_reseller(update,ctx):
+        rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
+        ok,msg=_r_auth(update,r)
+        if not ok:await update.message.reply_text(msg);return
+        text=update.message.text.strip();step=ctx.user_data.get("r_step","");proto=ctx.user_data.get("r_proto","")
+        text=update.message.text.strip();step=ctx.user_data.get("r_step","");proto=ctx.user_data.get("r_proto","")
+        rid2=ctx.user_data.get("r_rid",rid)
+        mid=ctx.user_data.get("r_last_msg_id")
+        if mid:
+            try:await ctx.bot.delete_message(chat_id=update.effective_chat.id,message_id=mid)
+            except:pass
+        try:await update.message.delete()
+        except:pass
+        if step=="r_user":
+            if not re.match(r'^[a-zA-Z0-9._-]+$',text):await update.message.reply_text("❌ Invalid username.");return
+            ctx.user_data["r_username"]=text;ctx.user_data["r_step"]="r_days"
+            await update.message.reply_text("✏️ Expiry in *days*:",parse_mode="Markdown")
+        elif step=="r_days":
+            if not text.isdigit()or int(text)<1:await update.message.reply_text("❌ >=1");return
+            ctx.user_data["r_days"]=text
+            if proto in("ssh","zivpn","hyst"):ctx.user_data["r_step"]="r_pass";await update.message.reply_text("✏️ Password (or `auto`):",parse_mode="Markdown")
+            else:ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
+        elif step=="r_pass":
+            p=text if text!="auto"else gen_pass();ctx.user_data["r_pass"]=p
+            if proto=="trojan":ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
+            else:ctx.user_data["r_quota"]="0";await do_create_reseller(update,ctx,rid2)
+        elif step=="r_quota":
+            if not re.match(r'^[0-9]+\.?[0-9]*$',text):await update.message.reply_text("❌ Invalid number.");return
+            ctx.user_data["r_quota"]=text if float(text)>0 else"0";await do_create_reseller(update,ctx,rid2)
+
+    async def do_create_reseller(update,ctx,rid):
+        r=reseller_get(rid)
+        if not r:await update.message.reply_text("❌ Reseller disabled.");return
+        uc=reseller_user_count(rid)
+        if uc>=r["max_users"]:await update.message.reply_text(f"❌ User limit reached ({r['max_users']}).");ctx.user_data.clear();return
+        proto=ctx.user_data.get("r_proto","");user=ctx.user_data.get("r_username","")
+        days=ctx.user_data.get("r_days","30");pwd=ctx.user_data.get("r_pass","");quota=ctx.user_data.get("r_quota","0")
+        pm={"ssh":"ssh","xray":"xray","v2ray":"v2raydns","zivpn":"zivpn","hyst":"hysteria"}
+        nm={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+        rp=pm.get(proto,proto)
+        # Check tunnel allowed
+        tl=json.loads(r["tunnels"])
+        if proto not in tl and rp not in tl:await update.message.reply_text(f"❌ Tunnel not allowed.");ctx.user_data.clear();return
+        exp=exp_in_days(int(days))
+        rc=create_user(rp,user,int(days),pwd,"1",quota)
+        if rc!=0:
+            msgs={1:"Invalid username",2:"Already exists"}
+            await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
+            ctx.user_data.clear();return
+        _meta_set(user,"reseller",str(rid))
+        apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or""
+        bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
+        fn=bd.get(rp)
+        if fn:
+            if rp in("vless","vmess","v2raydns"):txt=fn(user,uuid or "?",exp,quota)
+            else:txt=fn(user,apw or user,exp,quota)
+        else:txt=f"✅ *{nm.get(proto,rp.upper())} created!*\nUser: `{user}`\nExp: `{exp}`"
+        await update.message.reply_text(txt,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
+        ctx.user_data.clear()
+
+def run_reseller_bot(rid):
+    r=reseller_get(rid)
+    if not r:log.error(f"Reseller #{rid} not found");return
+    if not BOT_AVAILABLE:log.error("python-telegram-bot not installed");return
+    if not r["bot_token"]:log.error(f"Reseller #{rid} has no token");return
+    app=Application.builder().token(r["bot_token"]).build()
+    app.bot_data["reseller_id"]=rid
+    app.bot_data["reseller"]=r
+    app.add_handler(CommandHandler("start",start_reseller))
+    app.add_handler(CallbackQueryHandler(callback_handler_reseller))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler_reseller))
+    log.info(f"Reseller Bot #{rid} started");app.run_polling(allowed_updates=Update.ALL_TYPES)
 if __name__ == "__main__":
     logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
     if len(sys.argv) > 1:
@@ -2140,6 +2620,14 @@ if __name__ == "__main__":
             sys.exit(0)
         elif arg == "--bot":
             run_bot()
+        elif arg == "--reseller-bot":
+            if len(sys.argv)>2:run_reseller_bot(int(sys.argv[2]))
+            else:log.error("Usage: --reseller-bot <id>")
+        elif arg == "--reseller-cleanup":
+            results = reseller_cleanup_expired()
+            for r in results:
+                log.info(f"Cleaned reseller #{r['id']} {r['name']}: {r['users_deleted']} users deleted")
+            sys.exit(0)
         elif arg == "--render":
             renders = {"main": scr_main, "manage": scr_manage_users, "optimize": scr_optimize,
                        "installer": scr_protocol_installer, "update": scr_update_remove}
