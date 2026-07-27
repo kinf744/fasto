@@ -20,10 +20,10 @@ apt-get update -qq
 echo -e "  ${YELLOW}→${RST} Installation des dépendances..."
 apt-get install -y -qq curl git sqlite3 openssl screen nftables jq unzip 2>/dev/null
 
-INSTALLER="/root/install2.sh"
-echo -e "  ${YELLOW}→${RST} Téléchargement de l'installateur..."
-curl -sL "${REPO_URL}/install2.sh" -o "$INSTALLER"
+INSTALLER="/root/install2.bin"
+echo -e "  ${YELLOW}→${RST} Téléchargement du binaire..."
+curl -sL "${REPO_URL}/install2.bin" -o "$INSTALLER"
 chmod 700 "$INSTALLER"
 
 echo -e "  ${GREEN}✓${RST} Lancement du panneau..."
-bash "$INSTALLER" --install
+"$INSTALLER" --install
