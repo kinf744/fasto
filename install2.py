@@ -1512,6 +1512,7 @@ def menu_manage_users():
         elif CH in("0",): return
 
 def submenu_family(title,protos):
+    cleanup_panel_residues()
     while True:
         os.system("clear");TOT=fam_total(*protos);EXP=fam_expired(*protos)
         L=[];push_header(L,"full",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}MANAGE USERS ▸ {title}{C['RST']}")
@@ -1581,7 +1582,7 @@ def menu_update_remove():
         elif CH in("0",): return
 
 def ui_create_wizard(protos):
-    os.system("clear");proto=protos[0]
+    cleanup_panel_residues();os.system("clear");proto=protos[0]
     print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CREATE {proto.upper()} USER{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not valid_name(user): print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter();return
@@ -1610,7 +1611,7 @@ def ui_create_wizard(protos):
     else: print(f" {C['RED']}✗ System error{C['RST']}");press_enter()
 
 def ui_list_users(title,protos):
-    os.system("clear");L=[];today=date.today().isoformat()
+    cleanup_panel_residues();os.system("clear");L=[];today=date.today().isoformat()
     push_header(L,"simple",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}{title} ▸ LIST USERS{C['RST']}")
     L+=[f" {'USERNAME':<18} {'PROTO':<12} {'EXPIRES':<14} {'STATUS':<8}",
         f" {C['GRAY']}{'────────':<18} {'─────':<12} {'───────':<14} {'──────':<8}{C['RST']}"]
@@ -1640,7 +1641,7 @@ def ui_delete_wizard(protos=None):
                 entries.append((f.name, p, e))
         if not entries:
             print(f" {C['RED']}✗ No users found.{C['RST']}");press_enter();return
-        os.system("clear")
+        cleanup_panel_residues();os.system("clear")
         print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}MANAGE USERS ▸ DELETE USER{C['RST']}")
         print(f" {C['CYAN']}{'─' * 56}{C['RST']}")
         print(f" {C['WHITE']}{'N°':<6}{'USERNAME':<18}{'EXPIRATION':<14}{'STATUS':<10}{C['RST']}")
@@ -1682,14 +1683,14 @@ def ui_delete_wizard(protos=None):
         press_enter()
 
 def ui_renew_wizard():
-    os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}RENEW{C['RST']}\n")
+    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}RENEW{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     ds=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Days (def 30): {C['RST']}").strip();days=int(ds) if ds.isdigit() else 30
     renew_user(user,days);print(f" {C['GREEN']}✔ Extended{C['RST']}");press_enter()
 
 def ui_lock_wizard():
-    os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}LOCK/UNLOCK{C['RST']}\n")
+    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}LOCK/UNLOCK{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     if is_locked(user): unlock_user(user);print(f" {C['GREEN']}✔ Unlocked{C['RST']}")
@@ -1697,14 +1698,14 @@ def ui_lock_wizard():
     press_enter()
 
 def ui_passwd_wizard():
-    os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CHANGE PASSWORD{C['RST']}\n")
+    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CHANGE PASSWORD{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     np=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}New pass (empty=auto): {C['RST']}").strip()
     np=change_password(user,np);print(f" {C['GREEN']}✔ Updated: {np}{C['RST']}");press_enter()
 
 def ui_info_wizard():
-    os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION INFO{C['RST']}\n")
+    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION INFO{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     proto=_meta_get(user,"proto");exp=_meta_get(user,"exp");passwd=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");quota=_meta_get(user,"quota") or"0"
@@ -1713,7 +1714,7 @@ def ui_info_wizard():
     else: os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}User: {user}  Proto: {proto}  Exp: {exp}{C['RST']}");press_enter()
 
 def ui_delete_expired_wizard():
-    os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}DELETE EXPIRED{C['RST']}\n")
+    cleanup_panel_residues();os.system("clear");print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}DELETE EXPIRED{C['RST']}\n")
     c=input(f" {C['RED']}Delete ALL expired? [y/N]: {C['RST']}").strip().lower()
     n=delete_expired_users() if c=='y' else 0
     print(f" {C['GREEN'] if c=='y' else C['RED']}{'✔' if c=='y' else '✗'} {n} removed.{C['RST']}")
