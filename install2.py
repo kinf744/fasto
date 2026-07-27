@@ -39,7 +39,9 @@ def strip_ansi(s): return re.sub(r'\x1b\[[0-9;]*m', '', s)
 def vislen(s): return len(strip_ansi(s))
 
 def clear_screen():
-    sys.stdout.write("\n" * 100 + "\033[H")
+    os.system("stty sane 2>/dev/null")
+    subprocess.run("TERM=xterm-256color tput clear 2>/dev/null", shell=True)
+    sys.stdout.write("\033[H\033[2J\033[3J")
     sys.stdout.flush()
 
 def render_screen(lines):
