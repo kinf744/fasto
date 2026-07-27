@@ -39,7 +39,12 @@ def strip_ansi(s): return re.sub(r'\x1b\[[0-9;]*m', '', s)
 def vislen(s): return len(strip_ansi(s))
 
 def clear_screen():
-    sys.stdout.write("\033[2J\033[H\033[3J")
+    try:
+        rows = int(sh("tput lines 2>/dev/null") or "24")
+    except:
+        rows = 24
+    sys.stdout.write("\n" * rows)
+    sys.stdout.write("\033[H\033[2J\033[3J")
     sys.stdout.flush()
     os.system("clear")
 
@@ -55,7 +60,7 @@ def render_screen(lines):
         if l == "%SEP%": out.append(f"{C['YELLOW']}{dash}{C['RST']}")
         elif l.startswith("%FREE%"): out.append(l[6:])
         else: out.append(l)
-    sys.stdout.write("\n".join(out) + "\n")
+    sys.stdout.write("\n".join(out) + "\n\033[J")
     sys.stdout.flush()
 
 def render_panel(lines, prompt=True):
@@ -69,8 +74,6 @@ def press_enter():
     sys.stdout.write(f"\n{C['GRAY']} Press ENTER to go back...{C['RST']}")
     sys.stdout.flush()
     input()
-    sys.stdout.write("\033[1A\033[2K")
-    sys.stdout.flush()
 
 def dot(lbl, w=18):
     n = w - len(lbl) - 1
