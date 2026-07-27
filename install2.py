@@ -1480,8 +1480,10 @@ def cleanup_panel_residues():
         if f.exists(): f.unlink(); sh(f"systemctl disable {svc}.service 2>/dev/null || true")
     for m in ["/usr/local/bin/menu-ssh","/usr/local/bin/menu"]:
         p=Path(m)
-        if p.exists() and not p.resolve().name.startswith("kighmu"):
-            p.unlink(missing_ok=True)
+        if p.exists():
+            cnt=p.read_text() if p.is_file() else ""
+            if "kighmu" not in cnt.lower():
+                p.unlink(missing_ok=True)
     for f in Path("/etc").glob("*.bak"): f.unlink(missing_ok=True)
     for f in Path("/etc").glob("*_backup"): sh(f"rm -rf {f} 2>/dev/null || true")
     sh("pkill -f 'PPS_TECH' 2>/dev/null || true")
