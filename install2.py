@@ -1138,8 +1138,17 @@ def upd_remove():
 def _auto_uninstall_all():
     uninstall_all_active()
     uninstall_telegram_bot()
-    sh("rm -rf /etc/kighmu 2>/dev/null || true")
-    print(f" {C['RED']}All Kighmu components removed.{C['RST']}")
+    sh("systemctl stop kighmu-bot slowdns-router slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
+    sh("systemctl disable kighmu-bot slowdns-router slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
+    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn@7100","badvpn@7200","badvpn@7300"]:
+        sh(f"systemctl stop --now {svc} 2>/dev/null || true")
+        sh(f"systemctl disable {svc} 2>/dev/null || true")
+    for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-router.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
+        Path(f).unlink(missing_ok=True)
+    sh("rm -rf /etc/kighmu /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/menu /usr/local/bin/install2 /root/fasto /root/backup 2>/dev/null || true")
+    sh("nft flush ruleset 2>/dev/null || true")
+    sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
+    print(f" {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
 
 def delete_user(user):
     f = USERDIR / user
@@ -1709,21 +1718,25 @@ def _verify_license():
                 conn.close()
             except: pass
     for _ in range(3):
-        os.system("clear");print(f"\n  {'╔════════════════════════════════════════╗':>5}\n  {'     🔑 VERIFICATION DE LICENCE':>5}\n  {'     KIGHMU PANEL v3.9.9':>5}\n  {'╚════════════════════════════════════════╝':>5}\n")
-        print("  Veuillez saisir votre clé de licence :\n  Exemple : a137726f21f7360a825fd376a3dfe9bd\n")
-        if not db.exists(): print("  ⚠ Aucune base de licence trouvée.\n  Exécutez d'abord ventes.sh.\n")
-        key=input("  ► Clé de licence : ").strip()
-        if key=="KIGHMU_MASTER_2026": print("  ✓ Mode maître.");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text("ADMIN");return
+        os.system("clear");print(f"\n  {C['CYAN']}╔════════════════════════════════════════╗{C['RST']}")
+        print(f"  {C['CYAN']}║{C['RST']}     {C['YELLOW']}🔑{C['RST']} {C['WHITE']}VERIFICATION DE LICENCE{C['RST']}     {C['CYAN']}║{C['RST']}")
+        print(f"  {C['CYAN']}║{C['RST']}     {C['WHITE']}KIGHMU PANEL{C['RST']} {C['GREEN']}v3.9.9{C['RST']}          {C['CYAN']}║{C['RST']}")
+        print(f"  {C['CYAN']}╚════════════════════════════════════════╝{C['RST']}\n")
+        print(f"  {C['YELLOW']}Veuillez saisir votre clé de licence :{C['RST']}")
+        print(f"  {C['GRAY']}Exemple :{C['RST']} {C['GREEN']}a137726f21f7360a825fd376a3dfe9bd{C['RST']}\n")
+        if not db.exists(): print(f"  {C['RED']}⚠{C['RST']} {C['YELLOW']}Aucune base de licence trouvée.{C['RST']}\n  {C['GRAY']}Exécutez d'abord ventes.sh.{C['RST']}\n")
+        key=input(f"  {C['YELLOW']}►{C['RST']} {C['WHITE']}Clé de licence :{C['RST']} ").strip()
+        if key=="KIGHMU_MASTER_2026": print(f"  {C['GREEN']}✓ Mode maître.{C['RST']}");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text("ADMIN");return
         if db.exists():
             try:
                 conn=sqlite3.connect(str(db));c=conn.cursor()
                 r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=? AND status='ACTIVE' AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
-                if r: print(f"\n  ✓ Licence valide ! Client: {r[0]} expire: {r[1]}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(r[0]);return
+                if r: print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{r[0]}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{r[1]}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(r[0]);return
                 conn.close()
             except: pass
-        print(f"\n  ✗ Clé invalide. ({2-_} tentatives restantes)\n")
-        if _<2: input("  Entrée pour réessayer...")
-    print("\n  LICENCE INVALIDE — INSTALLATION BLOQUÉE\n");sys.exit(1)
+        print(f"\n  {C['RED']}✗ Clé invalide. ({2-_} tentatives restantes){C['RST']}\n")
+        if _<2: input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}")
+    print(f"\n  {C['RED']}LICENCE INVALIDE — INSTALLATION BLOQUÉE{C['RST']}\n");sys.exit(1)
 
 def _license_watchdog():
     kf=Path("/etc/kighmu/.license_key");db=Path("/etc/ventes/ventes.db")
