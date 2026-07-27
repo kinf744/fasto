@@ -1103,6 +1103,7 @@ def uninstall_zivpn():
 def install_all_missing():
     for fn in [install_ssh_stack, install_ssl_tls, install_sshws, install_xray, install_v2ray, install_badvpn, install_udp_custom, install_slowdns, install_hysteria, install_zivpn]:
         fn()
+    sh("systemctl daemon-reload 2>/dev/null || true")
 
 def uninstall_all_active():
     os.system("clear")
@@ -1777,7 +1778,7 @@ def self_install():
     if src!=dst: shutil.copy2(str(src),str(dst))
     dst.chmod(0o755)
     ml=Path("/usr/local/bin/menu")
-    if not ml.exists(): ml.write_text(f"#!/usr/bin/env bash\\nexec {dst} \\\"$@\\\"\\n");ml.chmod(0o755)
+    if not ml.exists(): ml.write_text(f"#!/usr/bin/env bash\nexec {dst} \"$@\"\n");ml.chmod(0o755)
 
 # License
 def _verify_license():
