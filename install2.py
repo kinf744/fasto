@@ -946,6 +946,7 @@ frontend xray-ntls
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
+    use_backend xray-trojan-tcp    if !is_vless
     use_backend xray-vmess-tcp     if !is_vless
     default_backend xray-vless-tcp
 
@@ -965,6 +966,7 @@ frontend xray-tls
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
+    use_backend xray-trojan-tcp    if !is_vless
     use_backend xray-vmess-tcp     if !is_vless
     default_backend xray-vless-tcp
 
@@ -1031,34 +1033,35 @@ def xray_build_config():
     if not XRAY_CONFIG.exists(): return
     try:
         config = json.loads(XRAY_CONFIG.read_text())
-        users = json.loads(XRAY_USERS.read_text()) if XRAY_USERS.exists() else {"vmess":[],"vless":[],"trojan":[],"shadow":[]}
+        users = json.loads(XRAY_USERS.read_text()) if XRAY_USERS.exists() else {}
         tag_map = {
             "VMess-TCP":"vmess","VMess-WS":"vmess","VMess-TLS":"vmess","VMess-WSS":"vmess","VMess-XHTTP":"vmess","VMess-gRPC":"vmess",
             "VLESS-TCP":"vless","VLESS-WS":"vless","VLESS-TLS":"vless","VLESS-WSS":"vless","VLESS-XHTTP":"vless","VLESS-gRPC":"vless","VLESS-HUpgrade":"vless",
             "Trojan-TCP":"trojan","Trojan-WS":"trojan","Trojan-XHTTP":"trojan","Trojan-gRPC":"trojan",
             "Shadowsocks":"shadow"
         }
-        proto_index = {"vmess":0,"vless":0,"trojan":0,"shadow":0}
         for inbound in config.get("inbounds", []):
             tag = inbound.get("tag","")
             p = tag_map.get(tag)
-            if p:
-                ulist = users.get(p, [])
-                if ulist:
-                    idx = proto_index[p] % len(ulist)
-                    proto_index[p] += 1
-                    u = ulist[idx]
-                    if p == "shadow" and isinstance(u, dict) and "method" in u:
-                        inbound["settings"] = {"method":u["method"],"password":u["password"],"network":"tcp,udp","level":0}
-                    elif isinstance(u, dict) and "id" in u:
-                        client = {"id":u["id"],"level":0,"email":u.get("email","")}
+            if not p:
+                continue
+            ulist = users.get(p, [])
+            if not ulist:
+                inbound["settings"]["clients"] = []
+                continue
+            if p == "shadow" and "method" in ulist[0]:
+                inbound["settings"] = {"method":ulist[0]["method"],"password":ulist[0]["password"],"network":"tcp,udp","level":0}
+            else:
+                clients = []
+                for u in ulist:
+                    if "id" in u:
+                        c = {"id":u["id"],"level":0,"email":u.get("email","")}
                         if inbound["protocol"]=="vless" and "flow" in u:
-                            client["flow"] = u["flow"]
-                        inbound["settings"]["clients"] = [client]
-                    elif isinstance(u, dict) and "password" in u:
-                        inbound["settings"]["clients"] = [{"password":u["password"],"level":0,"email":u.get("email","")}]
-                else:
-                    inbound["settings"]["clients"] = []
+                            c["flow"] = u["flow"]
+                        clients.append(c)
+                    elif "password" in u:
+                        clients.append({"password":u["password"],"level":0,"email":u.get("email","")})
+                inbound["settings"]["clients"] = clients
         XRAY_CONFIG.write_text(json.dumps(config, indent=2))
     except: pass
     sh("systemctl restart xray 2>/dev/null || true")
