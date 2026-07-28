@@ -388,6 +388,7 @@ WantedBy=multi-user.target
         "'add chain inet kighmu output { type filter hook output priority 0; policy accept; }'",
         "'add chain inet kighmu forward { type filter hook forward priority 0; policy accept; }'",
     ]: sh(f"nft {c} 2>/dev/null || true")
+    _ensure_nat_catchall()
 
 def _deploy_nft(name, nft_src):
     _ensure_nft_base()
@@ -401,6 +402,44 @@ def _remove_nft(name):
     sh(f"systemctl disable --now nftables-tunnel@{name}.service 2>/dev/null || true")
     Path(f"/etc/nftables/{name}.nft").unlink(missing_ok=True)
     sh(f"nft delete table inet {name} 2>/dev/null || true")
+
+def _ensure_nat_catchall():
+    iface = sh("ip route get 1 2>/dev/null | head -1 | grep -oP 'dev \\K\\S+'") or "eth0"
+    EXCL = "{ 53, 5300, 5353-5354, 5667, 6000-50000 }"
+    for family in ["ip", "ip6"]:
+        tbl = f"{family} nat"
+        sh(f"nft add table {tbl} 2>/dev/null || true")
+        sh(f"nft add chain {tbl} PREROUTING '{{ type nat hook prerouting priority dstnat; policy accept; }}' 2>/dev/null || true")
+        sh(f"nft flush chain {tbl} PREROUTING 2>/dev/null || true")
+        sh(f"nft add rule {tbl} PREROUTING iifname \"{iface}\" udp dport != {EXCL} counter dnat to :36712 2>/dev/null || true")
+    nft_src = f"""table ip nat {{
+    chain PREROUTING {{
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "{iface}" udp dport != {EXCL} counter dnat to :36712
+    }}
+}}
+table ip6 nat {{
+    chain PREROUTING {{
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "{iface}" udp dport != {EXCL} counter dnat to :36712
+    }}
+}}"""
+    p = Path("/etc/nftables/00-nat-catchall.nft")
+    p.write_text(nft_src)
+    svc_path = Path("/etc/systemd/system/nftables-nat.service")
+    svc = """[Unit]
+Description=nftables NAT catch-all
+Before=nftables.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables/00-nat-catchall.nft
+ExecStop=/usr/sbin/nft delete table ip nat; /usr/sbin/nft delete table ip6 nat
+[Install]
+WantedBy=multi-user.target
+"""
+    svc_path.write_text(svc)
+    sh("systemctl daemon-reload 2>/dev/null; systemctl enable --now nftables-nat.service 2>/dev/null || true")
 
 def install_openssh():
     sh("apt-get install -y -qq openssh-server 2>/dev/null || true")
@@ -558,7 +597,7 @@ WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/udp-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
-    _deploy_nft("udp-custom", 'table inet udp-custom { chain input { type filter hook input priority 0; policy accept; udp dport 36712 accept; }; }')
+    _deploy_nft("udp-custom", 'table inet udp-custom { chain input { type filter hook input priority 0; policy accept; udp dport 36712 accept; }; chain prerouting { type nat hook prerouting priority dstnat; policy accept; udp dport != { 53, 5300, 5353-5354, 5667, 6000-50000 } dnat to :36712; }; }')
 
 def uninstall_udp_custom():
     sh("systemctl disable --now udp-custom.service 2>/dev/null || true")
@@ -1113,7 +1152,7 @@ StandardError=append:/var/log/hysteria.log
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/hysteria.service").write_text(svc)
-    _deploy_nft("hysteria", 'table inet hysteria { chain input { type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }; }')
+    _deploy_nft("hysteria", 'table inet hysteria { chain input { type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }; chain prerouting { type nat hook prerouting priority dstnat; policy accept; udp dport 20000-50000 dnat to :20000; }; }')
     sh("systemctl daemon-reload && systemctl enable --now hysteria.service 2>/dev/null || true")
 
 def uninstall_hysteria():
