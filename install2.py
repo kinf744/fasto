@@ -354,10 +354,12 @@ def v2raydns_apply():
     USERS_JSON.write_text(json.dumps({"vless": clients}, indent=2))
     try:
         data = json.loads(V2RAY_CONFIG.read_text())
-        data["inbounds"][0]["settings"]["clients"] = clients
+        for ib in data.get("inbounds", []):
+            if ib.get("tag") == "VLESS-TCP":
+                ib["settings"]["clients"] = clients; break
         V2RAY_CONFIG.write_text(json.dumps(data, indent=2))
-        sh("systemctl restart v2ray 2>/dev/null || true")
     except: pass
+    sh("systemctl restart v2ray 2>/dev/null || true")
 
 # ── Protocol install/uninstall functions (self-contained) ────────────────
 def _ensure_nft_base():
@@ -748,6 +750,15 @@ def configure_slowdns():
         Path("/usr/local/bin/slowdns-nv4-start.sh").chmod(0o755)
         sh("systemctl restart slowdns-nv4 2>/dev/null || true")
         print(f"NV4 mis à jour: {new_nv4}")
+    if new_ns4 or new_nv4:
+        svc_path = Path("/etc/systemd/system/slowdns-router.service")
+        if svc_path.exists():
+            txt = svc_path.read_text()
+            txt = re.sub(r"Environment=NS4=\S+", f"Environment=NS4={new_ns4 or ns4_cur}", txt)
+            txt = re.sub(r"Environment=NV4=\S+", f"Environment=NV4={new_nv4 or nv4_cur}", txt)
+            svc_path.write_text(txt)
+            sh("systemctl daemon-reload && systemctl restart slowdns-router 2>/dev/null || true")
+            print("Routeur SlowDNS mis à jour")
 
 def uninstall_slowdns():
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]:
@@ -1303,6 +1314,7 @@ def renew_user(user, days):
     proto = _meta_get(user, "proto"); exp = exp_in_days(days)
     write_meta(user, proto, exp, _meta_get(user,"limit"), _meta_get(user,"pass"), _meta_get(user,"uuid"), _meta_get(user,"quota"))
     if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
+    elif proto == "v2raydns": v2raydns_apply()
     return 0
 
 def set_user_quota(user, quota):
@@ -1319,11 +1331,15 @@ def set_user_quota(user, quota):
 def lock_user(user):
     if not (USERDIR / user).exists(): return 2
     if _meta_get(user,"proto") == "ssh": sh(f"passwd -l {user} &>/dev/null")
-    _meta_set(user, "locked", "1"); return 0
+    _meta_set(user, "locked", "1")
+    if _meta_get(user,"proto") == "v2raydns": v2raydns_apply()
+    return 0
 def unlock_user(user):
     if not (USERDIR / user).exists(): return 2
     if _meta_get(user,"proto") == "ssh": sh(f"passwd -u {user} &>/dev/null")
-    _meta_set(user, "locked", "0"); return 0
+    _meta_set(user, "locked", "0")
+    if _meta_get(user,"proto") == "v2raydns": v2raydns_apply()
+    return 0
 
 def change_password(user, newpass=""):
     if not (USERDIR / user).exists(): return ""
@@ -2102,14 +2118,10 @@ def get_xray_traffic(email):
     except: return 0
 def get_v2ray_traffic(email):
     try:
-        r=subprocess.run(["/usr/local/bin/v2ray","api","stats","--server=127.0.0.1:10086"],capture_output=True,text=True,timeout=10)
-        up=down=0;mul={"B":1,"KB":1024,"MB":1024**2,"GB":1024**3,"TB":1024**4}
-        for l in r.stdout.splitlines():
-            m=re.search(r"([\d.]+)\s*(B|KB|MB|GB|TB)\s+.*user>>>"+re.escape(email)+r">>>traffic>>>(uplink|downlink)",l)
-            if m:
-                v=int(float(m.group(1))*mul[m.group(2)])
-                if m.group(3)=="uplink":up+=v
-                else:down+=v
+        r=subprocess.run(["/usr/local/bin/v2ray","api","stats","--server=127.0.0.1:10086","-json"],capture_output=True,text=True,timeout=10)
+        d=json.loads(r.stdout)if r.stdout.strip()else{}
+        up=sum(int(s.get("value",0))for s in d.get("stat",[])if"uplink"in s.get("name","")and"VLESS-TCP"in s.get("name",""))
+        down=sum(int(s.get("value",0))for s in d.get("stat",[])if"downlink"in s.get("name","")and"VLESS-TCP"in s.get("name",""))
         return up+down
     except: return 0
 def fmt_bytes(b):
@@ -2220,7 +2232,7 @@ def build_v2raydns_details(user, uuid, exp, quota):
         + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
         "*PORTS*\n" + D + " FastDNS UDP: `5354`\n" + D + " V2Ray TCP: `5401`\n\n"
         "*SLOWDNS (PORT 5354)*\n" + D + " Public Key: `"+pub+"`\n" + D + " NameServer: `"+nv4+"`\n\n"
-        "*V2RAY-DNS LINK*\n`vless://"+uuid+"@"+dom+":5401?type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS`")
+        "*V2RAY-DNS LINK*\n`vless://"+uuid+"@"+dom+":5401?security=none&type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS`")
 
 if BOT_AVAILABLE:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
