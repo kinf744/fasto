@@ -2048,6 +2048,7 @@ def reseller_remove_service(rid):
     sh("systemctl disable kighmu-reseller-"+str(rid)+" 2>/dev/null || true")
     Path(f"/etc/systemd/system/kighmu-reseller-{rid}.service").unlink(missing_ok=True)
     sh("rm -rf /etc/kighmu/bot/resellers/"+str(rid)+" 2>/dev/null || true")
+    Path(f"/var/log/kighmu-reseller-{rid}.log").unlink(missing_ok=True)
     sh("systemctl daemon-reload 2>/dev/null || true")
 
 def is_authorized(uid): return uid == ADMIN_ID
