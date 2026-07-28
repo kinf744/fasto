@@ -622,8 +622,8 @@ import socket, signal, sys, os, struct, threading
 
 LISTEN = int(os.environ.get("LISTEN", 5300))
 TIMEOUT = int(os.environ.get("TIMEOUT", 5))
-ns4 = os.environ.get("NS4", "ns4.local")
-nv4 = os.environ.get("NV4", "nv4.local")
+ns4 = os.environ.get("NS4")
+nv4 = os.environ.get("NV4")
 R4 = os.environ.get("R4", "127.0.0.1:5353")
 RV4 = os.environ.get("RV4", "127.0.0.1:5354")
 
@@ -1135,6 +1135,25 @@ def uninstall_zivpn():
     sh("rm -f /usr/local/bin/zivpn 2>/dev/null; rm -rf /etc/zivpn 2>/dev/null || true")
     _remove_nft("zivpn")
     sh("systemctl daemon-reload 2>/dev/null || true")
+
+def setup_config():
+    df=Path("/etc/kighmu/domain.txt")
+    if not df.parent.exists(): df.parent.mkdir(parents=True)
+    cur=df.read_text().strip() if df.exists() else ""
+    print(f"\n {C['CYAN']}━━━ CONFIGURATION ━━━{C['RST']}")
+    dom=input(f" Domain name (e.g. vpn.example.com) [{C['GREEN']}{cur or 'required'}{C['RST']}]: ").strip() or cur
+    while not dom: dom=input(f" Domain required: ").strip()
+    df.write_text(dom+"\n")
+    Path("/etc/slowdns/ns4").mkdir(parents=True,exist_ok=True)
+    Path("/etc/slowdns/nv4").mkdir(parents=True,exist_ok=True)
+    nsc=Path("/etc/slowdns/ns.conf")
+    nv4c=Path("/etc/slowdns/nv4/ns.conf")
+    cur4=nsc.read_text().strip() if nsc.exists() else ""
+    curv4=nv4c.read_text().strip() if nv4c.exists() else ""
+    ns4=input(f" NS4 subdomain (e.g. ns4.{dom}) [{C['GREEN']}{cur4 or 'ns4.'+dom}{C['RST']}]: ").strip() or cur4 or "ns4."+dom
+    nv4=input(f" NV4 subdomain (e.g. nv4.{dom}) [{C['GREEN']}{curv4 or 'nv4.'+dom}{C['RST']}]: ").strip() or curv4 or "nv4."+dom
+    nsc.write_text(ns4+"\n");nv4c.write_text(nv4+"\n")
+    print(f" {C['GREEN']}✔ Domain: {dom}, NS4: {ns4}, NV4: {nv4}{C['RST']}\n")
 
 def install_all_missing():
     for fn in [install_ssh_stack, install_ssl_tls, install_sshws, install_xray, install_v2ray, install_badvpn, install_udp_custom, install_slowdns, install_hysteria, install_zivpn]:
@@ -2885,6 +2904,7 @@ if __name__ == "__main__":
             self_install()
             clear_screen()
             _verify_license()
+            setup_config()
             install_all_missing()
             main_menu()
         elif arg == "--watchdog":
@@ -2893,6 +2913,7 @@ if __name__ == "__main__":
         elif arg == "--install-all":
             self_install()
             _verify_license()
+            setup_config()
             install_all_missing()
             print("Installation complete. Use --menu for interactive menu.")
             sys.exit(0)
