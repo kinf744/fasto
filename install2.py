@@ -2302,13 +2302,15 @@ if BOT_AVAILABLE:
             if not rl:
                 await q.edit_message_text("🤝 *No resellers yet.*",reply_markup=reseller_kb(),parse_mode="Markdown")
             else:
-                kb_rows=[]
+                l=["🤝 *RESELLERS*\n"]
                 for r in rl:
-                    u=reseller_user_count(r["id"])
-                    label=f"{'🟢'if r['active']else'🔴'} {r['client_name']} (#{r['id']}) – {u}/{r['max_users']} – {r['expires_at']}"
-                    kb_rows.append([InlineKeyboardButton(label,callback_data=f"view_reseller_{r['id']}")])
-                kb_rows+=reseller_kb().inline_keyboard
-                await q.edit_message_text("🤝 *RESELLERS*\n👇 Tap a reseller to manage",reply_markup=InlineKeyboardMarkup(kb_rows),parse_mode="Markdown")
+                    status="🟢"if r["active"]else"🔴";u=reseller_user_count(r["id"])
+                    l.append(f"{status} #{r['id']} *{r['client_name']}* – 👥 {u}/{r['max_users']} – 📅 {r['expires_at']}")
+                num_btns=[InlineKeyboardButton(str(r["id"]),callback_data=f"view_reseller_{r['id']}")for r in rl]
+                kb_rows=[num_btns[i:i+5]for i in range(0,len(num_btns),5)]
+                kb_rows.append([InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller")])
+                kb_rows.append([InlineKeyboardButton("⬅️ Back",callback_data="main")])
+                await q.edit_message_text("\n".join(l),reply_markup=InlineKeyboardMarkup(kb_rows),parse_mode="Markdown")
         elif d.startswith("view_reseller_"):
             rid=int(d[14:]);r=reseller_get(rid)
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
