@@ -2201,6 +2201,7 @@ if BOT_AVAILABLE:
         InlineKeyboardButton("🔍 Info",callback_data="info_user"),
         InlineKeyboardButton("🗑 Delete",callback_data="del_user"),
         InlineKeyboardButton("🔄 Renew",callback_data="renew_user"),
+        InlineKeyboardButton("🔄 Renew Bulk",callback_data="renew_bulk"),
         InlineKeyboardButton("🔒 Lock",callback_data="lock_user"),
         InlineKeyboardButton("⬅️ Back",callback_data="main"),
     ]))
@@ -2215,14 +2216,15 @@ if BOT_AVAILABLE:
         InlineKeyboardButton("Trojan",callback_data="cr_trojan"),
         InlineKeyboardButton("⬅️ Back",callback_data="users"),
     ]))
-    def del_proto_kb(): return InlineKeyboardMarkup(build_menu([
-        InlineKeyboardButton("🗑 SSH",callback_data="del_proto_ssh"),
-        InlineKeyboardButton("🗑 Xray",callback_data="del_proto_xray"),
-        InlineKeyboardButton("🗑 V2Ray DNS",callback_data="del_proto_v2ray"),
-        InlineKeyboardButton("🗑 ZIVPN",callback_data="del_proto_zivpn"),
-        InlineKeyboardButton("🗑 Hysteria",callback_data="del_proto_hyst"),
+    def proto_sel_kb(pfx="del"): return InlineKeyboardMarkup(build_menu([
+        InlineKeyboardButton("SSH",callback_data=f"{pfx}_ssh"),
+        InlineKeyboardButton("Xray",callback_data=f"{pfx}_xray"),
+        InlineKeyboardButton("V2Ray DNS",callback_data=f"{pfx}_v2ray"),
+        InlineKeyboardButton("ZIVPN",callback_data=f"{pfx}_zivpn"),
+        InlineKeyboardButton("Hysteria",callback_data=f"{pfx}_hyst"),
         InlineKeyboardButton("⬅️ Back",callback_data="users"),
     ]))
+    def del_proto_kb(): return proto_sel_kb()
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data=t)]])
     def yesno_kb(a,d): return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes",callback_data=f"{a}_y:{d}"),InlineKeyboardButton("❌ No",callback_data=f"{a}_n:{d}")]])
 
@@ -2326,6 +2328,12 @@ if BOT_AVAILABLE:
             if not users: await q.edit_message_text(f"📋 No {p.upper()} users.",reply_markup=back_kb("del_user"),parse_mode="Markdown");ctx.user_data.clear();return
             l=[f"🗑 *{p.upper()} USERS*\nEnter numbers:\n"]+[f"`{i}.` {n} – exp: {e}"for i,(n,e)in enumerate(users,1)]
             await q.edit_message_text("\n".join(l),reply_markup=back_kb("del_user"),parse_mode="Markdown");ctx.user_data["del_users"]=users
+        elif d=="renew_bulk": await q.edit_message_text("Select protocol:",reply_markup=proto_sel_kb("renew_bulk"),parse_mode="Markdown")
+        elif d.startswith("renew_bulk_"):
+            p=d[11:];ctx.user_data["renew_proto"]=p;users=get_users_by_proto(p)
+            if not users: await q.edit_message_text(f"📋 No {p.upper()} users.",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear();return
+            l=[f"🔄 *{p.upper()} USERS*\nEnter: `numbers days`\nExample: `1,3-5 30`\n"]+[f"`{i}.` {n} – exp: {e}"for i,(n,e)in enumerate(users,1)]
+            await q.edit_message_text("\n".join(l),reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data["renew_users"]=users;ctx.user_data["step"]="renew_bulk_days"
         elif d=="renew_user": ctx.user_data["step"]="renew_user";await q.edit_message_text("🔄 Username:",reply_markup=back_kb("users"))
         elif d=="lock_user": ctx.user_data["step"]="lock_user";await q.edit_message_text("🔒 Username:",reply_markup=back_kb("users"))
         elif d.startswith("confirm_del_"):user=d[12:];delete_user(user);await q.edit_message_text(f"✅ `{user}` deleted.",reply_markup=back_kb("users"),parse_mode="Markdown")
@@ -2353,7 +2361,8 @@ List by protocol – view all users with expiry & traffic.
 
 Info: tap 🔍 Info User → enter username → full connection details.
 
-Renew: tap 🔄 Renew User → username → additional days.
+Renew: tap 🔄 Renew → username → days.
+Renew Bulk: tap 🔄 Renew Bulk → proto → `numbers days` (e.g. `1,3-5 30`).
 
 Lock/Unlock: toggle access without deleting.
 
@@ -2495,6 +2504,27 @@ Expired resellers auto-deactivated daily by cron.
             _meta_set(user,"exp",ne)
             if _meta_get(user,"proto")=="ssh":sh(f"chage -E {ne} {user} 2>/dev/null")
             await reply_cls(update,ctx,f"✅ `{user}` → `{ne}`",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
+        elif step=="renew_bulk_days":
+            parts=text.rsplit(None,1)
+            if len(parts)!=2 or not parts[1].isdigit():await update.message.reply_text("❌ Usage: `numbers days`  e.g. `1,3-5 30`");return
+            nums,days=set(),int(parts[1])
+            for pt in parts[0].replace(" ","").split(","):
+                if"-"in pt:
+                    a,b=pt.split("-",1)
+                    if a.isdigit()and b.isdigit():nums.update(range(int(a),int(b)+1))
+                elif pt.isdigit():nums.add(int(pt))
+            users=ctx.user_data.get("renew_users",[])
+            td=[users[n-1][0]for n in sorted(nums)if 1<=n<=len(users)]
+            if not td:await update.message.reply_text("❌ No valid numbers.");return
+            for u in td:
+                old=_meta_get(u,"exp")
+                if old and old!="permanent":
+                    try:ne=(datetime.strptime(old,"%Y-%m-%d")+timedelta(days=days)).strftime("%Y-%m-%d")
+                    except:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
+                else:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
+                _meta_set(u,"exp",ne)
+                if _meta_get(u,"proto")=="ssh":sh(f"chage -E {ne} {u} 2>/dev/null")
+            await reply_cls(update,ctx,f"✅ Renewed `{len(td)}` user(s) +{days} days",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
         elif step=="lock_user":
             user=text
             if not(USERDIR/user).exists():await reply_cls(update,ctx,f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown")
@@ -2619,7 +2649,8 @@ if BOT_AVAILABLE:
             names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
             btns.append(InlineKeyboardButton(f"➡️ Create {names.get(t,t)}",callback_data=f"r_cr_{t}"))
             btns.append(InlineKeyboardButton(f"📋 List {names.get(t,t)}",callback_data=f"r_ls_{t}"))
-        btns.append(InlineKeyboardButton("🗑 Delete Users",callback_data="r_del"))
+        btns.append(InlineKeyboardButton("🔄 Renew",callback_data="r_renew"))
+        btns.append(InlineKeyboardButton("🗑 Delete",callback_data="r_del"))
         btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_main"))
         return InlineKeyboardMarkup(build_menu(btns))
 
@@ -2647,6 +2678,8 @@ if BOT_AVAILABLE:
                 l.append(f"• {names.get(t,t)}: `{cnt}`")
             l.append(f"\nTotal: `{reseller_user_count(rid)}/{r['max_users']}`")
             await q.edit_message_text("\n".join(l),reply_markup=reseller_users_kb(rid),parse_mode="Markdown")
+        elif d=="r_renew":
+            ctx.user_data["r_step"]="r_renew_user";await q.edit_message_text("🔄 Username to renew:",parse_mode="Markdown")
         elif d=="r_del":
             await q.edit_message_text("🗑 Select protocol to delete:",reply_markup=r_del_proto_kb(rid))
         elif d.startswith("r_del_proto_"):
@@ -2667,7 +2700,7 @@ if BOT_AVAILABLE:
             try:await q.edit_message_text(t,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
             except:await q.edit_message_text(t.replace('*','').replace('`',''),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
         elif d=="r_help":
-            await q.edit_message_text("🤖 *Reseller Bot Help*\n━━━━━━━━━━━━━━\n👥 My Users – Manage your users\n• Create users for allowed tunnels\n• List users per tunnel\n\nLimits are enforced:\n• Max users: your reseller cap\n• Expiry: your reseller account\n\nContact your admin for support.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
+            await q.edit_message_text("🤖 *Reseller Bot Help*\n━━━━━━━━━━━━━━\n👥 My Users – Manage your users\n• Create users for allowed tunnels\n• List users per tunnel\n• Renew user expiry\n• Delete users\n\nLimits are enforced:\n• Max users: your reseller cap\n• Expiry: your reseller account\n\nContact your admin for support.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
         elif d.startswith("r_confirm_del_"):
             user=d[14:];delete_user(user);await q.edit_message_text(f"✅ `{user}` deleted.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
 
@@ -2715,6 +2748,23 @@ if BOT_AVAILABLE:
             for u in td:
                 if _meta_get(u,"reseller")==str(rid):delete_user(u)
             await update.message.reply_text(f"🗑 Deleted `{len(td)}` user(s).",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown");ctx.user_data.clear()
+        elif step=="r_renew_user":
+            user=text
+            if not(USERDIR/user).exists():await update.message.reply_text(f"❌ `{user}` not found.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]));ctx.user_data.clear();return
+            ctx.user_data["r_renew_user"]=user;ctx.user_data["r_step"]="r_renew_days"
+            await update.message.reply_text("✏️ Additional *days*:",parse_mode="Markdown")
+        elif step=="r_renew_days":
+            if not text.isdigit()or int(text)<1:await update.message.reply_text("❌ >=1");return
+            user=ctx.user_data.get("r_renew_user","");days=int(text)
+            if _meta_get(user,"reseller")!=str(rid):await update.message.reply_text("❌ Not your user.");ctx.user_data.clear();return
+            old=_meta_get(user,"exp")
+            if old and old!="permanent":
+                try:ne=(datetime.strptime(old,"%Y-%m-%d")+timedelta(days=days)).strftime("%Y-%m-%d")
+                except:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
+            else:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
+            _meta_set(user,"exp",ne)
+            if _meta_get(user,"proto")=="ssh":sh(f"chage -E {ne} {user} 2>/dev/null")
+            await update.message.reply_text(f"✅ `{user}` → `{ne}`",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown");ctx.user_data.clear()
 
     async def do_create_reseller(update,ctx,rid):
         r=reseller_get(rid)
