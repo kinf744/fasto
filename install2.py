@@ -106,6 +106,30 @@ def get_ipv6():
         ip = sh(c)
         if ip: return ip
     return ""
+def get_main_iface():
+    iface = sh("ip route get 1 2>/dev/null | head -1 | grep -oP 'dev \\K\\S+'")
+    if iface: return iface
+    iface = sh("ip -6 route get 2001:4860:4860::8888 2>/dev/null | head -1 | grep -oP 'dev \\K\\S+'")
+    if iface: return iface
+    for f in ["/proc/net/route", "/proc/net/if_inet6"]:
+        try:
+            for l in Path(f).read_text().splitlines():
+                if l.strip():
+                    name = l.split()[-1]
+                    if name != "lo": return name
+        except: pass
+    return "eth0"
+
+def has_ipv4():
+    return bool(get_ipv4()) or any(
+        sh(f"ip -4 addr show {get_main_iface()} 2>/dev/null | grep -oP 'inet \\K[\\d.]+' | grep -v '^127\\.' | head -1")
+    )
+
+def has_ipv6():
+    return bool(get_ipv6()) or Path("/proc/sys/net/ipv6/conf/all/disable_ipv6").read_text().strip() == "0" and bool(
+        sh(f"ip -6 addr show {get_main_iface()} 2>/dev/null | grep -oP 'inet6 \\K[\\da-f:]+' | grep -v '^::1\\|^fe80\\|^fd' | head -1")
+    )
+
 def get_ip(): return get_ipv4()
 def get_primary_ip(): return get_ipv6() or get_ipv4()
 def get_datetime(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -388,6 +412,7 @@ WantedBy=multi-user.target
         "'add chain inet kighmu output { type filter hook output priority 0; policy accept; }'",
         "'add chain inet kighmu forward { type filter hook forward priority 0; policy accept; }'",
     ]: sh(f"nft {c} 2>/dev/null || true")
+    _configure_resolv()
     _ensure_nat_catchall()
 
 def _deploy_nft(name, nft_src):
@@ -403,38 +428,62 @@ def _remove_nft(name):
     Path(f"/etc/nftables/{name}.nft").unlink(missing_ok=True)
     sh(f"nft delete table inet {name} 2>/dev/null || true")
 
+def _configure_resolv():
+    resolv = Path("/etc/resolv.conf")
+    try:
+        current = resolv.read_text().strip()
+    except:
+        current = ""
+    has4 = has_ipv4()
+    has6 = has_ipv6()
+    desired = []
+    if has4:
+        desired.extend(["nameserver 1.1.1.1", "nameserver 8.8.8.8"])
+    if has6:
+        desired.extend(["nameserver 2606:4700:4700::1111", "nameserver 2001:4860:4860::8888"])
+    if not desired:
+        desired = ["nameserver 1.1.1.1", "nameserver 8.8.8.8"]
+    desired_str = "\n".join(desired) + "\n"
+    if current != desired_str:
+        sh("chattr -i /etc/resolv.conf 2>/dev/null || true")
+        resolv.write_text(desired_str)
+        sh("chattr +i /etc/resolv.conf 2>/dev/null || true")
+
 def _ensure_nat_catchall():
-    iface = sh("ip route get 1 2>/dev/null | head -1 | grep -oP 'dev \\K\\S+'") or "eth0"
+    iface = get_main_iface()
+    has4 = has_ipv4()
+    has6 = has_ipv6()
     EXCL = "{ 53, 5300, 5353-5354, 5667, 6000-50000 }"
-    for family in ["ip", "ip6"]:
+    families = []
+    if has4: families.append("ip")
+    if has6: families.append("ip6")
+    for family in families:
         tbl = f"{family} nat"
         sh(f"nft add table {tbl} 2>/dev/null || true")
         sh(f"nft add chain {tbl} PREROUTING '{{ type nat hook prerouting priority dstnat; policy accept; }}' 2>/dev/null || true")
         sh(f"nft flush chain {tbl} PREROUTING 2>/dev/null || true")
         sh(f"nft add rule {tbl} PREROUTING iifname \"{iface}\" udp dport != {EXCL} counter dnat to :36712 2>/dev/null || true")
-    nft_src = f"""table ip nat {{
+    nft_src_parts = []
+    for family in families:
+        nft_src_parts.append(f"""table {family} nat {{
     chain PREROUTING {{
         type nat hook prerouting priority dstnat; policy accept;
         iifname "{iface}" udp dport != {EXCL} counter dnat to :36712
     }}
-}}
-table ip6 nat {{
-    chain PREROUTING {{
-        type nat hook prerouting priority dstnat; policy accept;
-        iifname "{iface}" udp dport != {EXCL} counter dnat to :36712
-    }}
-}}"""
-    p = Path("/etc/nftables/00-nat-catchall.nft")
-    p.write_text(nft_src)
+}}""")
+    nft_src = "\n".join(nft_src_parts)
+    Path("/etc/nftables").mkdir(parents=True, exist_ok=True)
+    Path("/etc/nftables/00-nat-catchall.nft").write_text(nft_src)
+    stop_cmds = "; ".join(f"/usr/sbin/nft delete table {f} nat 2>/dev/null" for f in families)
     svc_path = Path("/etc/systemd/system/nftables-nat.service")
-    svc = """[Unit]
+    svc = f"""[Unit]
 Description=nftables NAT catch-all
 Before=nftables.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/nftables/00-nat-catchall.nft
-ExecStop=/usr/sbin/nft delete table ip nat; /usr/sbin/nft delete table ip6 nat
+ExecStop={stop_cmds}
 [Install]
 WantedBy=multi-user.target
 """
@@ -597,7 +646,8 @@ WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/udp-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
-    _deploy_nft("udp-custom", 'table inet udp-custom { chain input { type filter hook input priority 0; policy accept; udp dport 36712 accept; }; chain prerouting { type nat hook prerouting priority dstnat; policy accept; udp dport != { 53, 5300, 5353-5354, 5667, 6000-50000 } dnat to :36712; }; }')
+    iface = get_main_iface()
+    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority dstnat; policy accept; iifname "{iface}" udp dport != {{ 53, 5300, 5353-5354, 5667, 6000-50000 }} dnat to :36712; }}; }}')
 
 def uninstall_udp_custom():
     sh("systemctl disable --now udp-custom.service 2>/dev/null || true")
@@ -682,8 +732,9 @@ def read_domain(f):
 
 ROUTES = [(read_domain(NS4_FILE), NS4_BACKEND), (read_domain(NV4_FILE), NV4_BACKEND)]
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(("0.0.0.0", LISTEN))
+sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+sock.bind(("", LISTEN))
 
 def parse_qname(pkt):
     if len(pkt) < 12: return None
@@ -776,14 +827,15 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
     Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
     # nftables rules for SlowDNS
-    _deploy_nft("slowdns", """table inet slowdns {
-    chain prerouting { type nat hook prerouting priority -100; policy accept;
-        iif "eth0" udp dport 53 redirect to :5300
-    }
-    chain input { type filter hook input priority 0; policy accept;
-        udp dport {53,5300,5353,5354} accept
-    }
-}""")
+    iface = get_main_iface()
+    _deploy_nft("slowdns", f"""table inet slowdns {{
+    chain prerouting {{ type nat hook prerouting priority -100; policy accept;
+        iif "{iface}" udp dport 53 redirect to :5300
+    }}
+    chain input {{ type filter hook input priority 0; policy accept;
+        udp dport {{53,5300,5353,5354}} accept
+    }}
+}}""")
     sh("systemctl daemon-reload 2>/dev/null || true")
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
 
@@ -1152,7 +1204,8 @@ StandardError=append:/var/log/hysteria.log
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/hysteria.service").write_text(svc)
-    _deploy_nft("hysteria", 'table inet hysteria { chain input { type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }; chain prerouting { type nat hook prerouting priority dstnat; policy accept; udp dport 20000-50000 dnat to :20000; }; }')
+    iface = get_main_iface()
+    _deploy_nft("hysteria", f'table inet hysteria {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }}; chain prerouting {{ type nat hook prerouting priority dstnat; policy accept; iifname "{iface}" udp dport 20000-50000 dnat to :20000; }}; }}')
     sh("systemctl daemon-reload && systemctl enable --now hysteria.service 2>/dev/null || true")
 
 def uninstall_hysteria():
@@ -1193,7 +1246,8 @@ StandardError=append:/var/log/zivpn.log
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/zivpn.service").write_text(svc)
-    _deploy_nft("zivpn", 'table inet zivpn { chain input { type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }; chain prerouting { type nat hook prerouting priority -100; udp dport 6000-19999 dnat to :5667; }; }')
+    iface = get_main_iface()
+    _deploy_nft("zivpn", f'table inet zivpn {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 6000-19999 dnat to :5667; }}; }}')
     sh("systemctl daemon-reload && systemctl enable --now zivpn.service 2>/dev/null || true")
 
 def uninstall_zivpn():
