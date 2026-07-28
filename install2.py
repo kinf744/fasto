@@ -2177,11 +2177,52 @@ if BOT_AVAILABLE:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-    def main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("📊 Dashboard",callback_data="dash"),InlineKeyboardButton("👥 Users",callback_data="users")],[InlineKeyboardButton("🔧 Services",callback_data="services"),InlineKeyboardButton("📈 Server",callback_data="server")],[InlineKeyboardButton("🤝 Resellers",callback_data="resellers"),InlineKeyboardButton("❓ Help",callback_data="help")]])
-    def users_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Create SSH",callback_data="cr_ssh"),InlineKeyboardButton("➡️ Create Xray",callback_data="cr_xray")],[InlineKeyboardButton("➡️ Create V2Ray DNS",callback_data="cr_v2ray"),InlineKeyboardButton("➡️ Create ZIVPN",callback_data="cr_zivpn")],[InlineKeyboardButton("➡️ Create Hysteria",callback_data="cr_hyst")],[InlineKeyboardButton("📋 List SSH",callback_data="ls_ssh"),InlineKeyboardButton("📋 List Xray",callback_data="ls_xray")],[InlineKeyboardButton("📋 List V2Ray DNS",callback_data="ls_v2ray"),InlineKeyboardButton("📋 List ZIVPN",callback_data="ls_zivpn")],[InlineKeyboardButton("📋 List Hysteria",callback_data="ls_hyst")],[InlineKeyboardButton("🔍 Info User",callback_data="info_user"),InlineKeyboardButton("🗑 Delete User",callback_data="del_user")],[InlineKeyboardButton("🔄 Renew User",callback_data="renew_user"),InlineKeyboardButton("🔒 Lock/Unlock",callback_data="lock_user")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
-    def reseller_main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller")],[InlineKeyboardButton("⚙️ Manage Resellers",callback_data="manage_resellers")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
-    def xray_proto_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("VMESS",callback_data="cr_vmess"),InlineKeyboardButton("VLESS",callback_data="cr_vless")],[InlineKeyboardButton("Trojan",callback_data="cr_trojan")],[InlineKeyboardButton("⬅️ Back",callback_data="users")]])
-    def del_proto_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🗑 SSH",callback_data="del_proto_ssh"),InlineKeyboardButton("🗑 Xray",callback_data="del_proto_xray")],[InlineKeyboardButton("🗑 V2Ray DNS",callback_data="del_proto_v2ray"),InlineKeyboardButton("🗑 ZIVPN",callback_data="del_proto_zivpn")],[InlineKeyboardButton("🗑 Hysteria",callback_data="del_proto_hyst")],[InlineKeyboardButton("⬅️ Back",callback_data="users")]])
+    def build_menu(btns, n=2):
+        return [btns[i:i+n] for i in range(0, len(btns), n)]
+    def main_kb(): return InlineKeyboardMarkup(build_menu([
+        InlineKeyboardButton("📊 Dashboard",callback_data="dash"),
+        InlineKeyboardButton("👥 Users",callback_data="users"),
+        InlineKeyboardButton("🔧 Services",callback_data="services"),
+        InlineKeyboardButton("📈 Server",callback_data="server"),
+        InlineKeyboardButton("🤝 Resellers",callback_data="resellers"),
+        InlineKeyboardButton("❓ Help",callback_data="help"),
+    ]))
+    def users_kb(): return InlineKeyboardMarkup(build_menu([
+        InlineKeyboardButton("➕ SSH",callback_data="cr_ssh"),
+        InlineKeyboardButton("📋 SSH",callback_data="ls_ssh"),
+        InlineKeyboardButton("➕ Xray",callback_data="cr_xray"),
+        InlineKeyboardButton("📋 Xray",callback_data="ls_xray"),
+        InlineKeyboardButton("➕ V2Ray DNS",callback_data="cr_v2ray"),
+        InlineKeyboardButton("📋 V2Ray DNS",callback_data="ls_v2ray"),
+        InlineKeyboardButton("➕ ZIVPN",callback_data="cr_zivpn"),
+        InlineKeyboardButton("📋 ZIVPN",callback_data="ls_zivpn"),
+        InlineKeyboardButton("➕ Hysteria",callback_data="cr_hyst"),
+        InlineKeyboardButton("📋 Hysteria",callback_data="ls_hyst"),
+        InlineKeyboardButton("🔍 Info",callback_data="info_user"),
+        InlineKeyboardButton("🗑 Delete",callback_data="del_user"),
+        InlineKeyboardButton("🔄 Renew",callback_data="renew_user"),
+        InlineKeyboardButton("🔒 Lock",callback_data="lock_user"),
+        InlineKeyboardButton("⬅️ Back",callback_data="main"),
+    ]))
+    def reseller_main_kb(): return InlineKeyboardMarkup(build_menu([
+        InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller"),
+        InlineKeyboardButton("⚙️ Manage",callback_data="manage_resellers"),
+        InlineKeyboardButton("⬅️ Back",callback_data="main"),
+    ]))
+    def xray_proto_kb(): return InlineKeyboardMarkup(build_menu([
+        InlineKeyboardButton("VMESS",callback_data="cr_vmess"),
+        InlineKeyboardButton("VLESS",callback_data="cr_vless"),
+        InlineKeyboardButton("Trojan",callback_data="cr_trojan"),
+        InlineKeyboardButton("⬅️ Back",callback_data="users"),
+    ]))
+    def del_proto_kb(): return InlineKeyboardMarkup(build_menu([
+        InlineKeyboardButton("🗑 SSH",callback_data="del_proto_ssh"),
+        InlineKeyboardButton("🗑 Xray",callback_data="del_proto_xray"),
+        InlineKeyboardButton("🗑 V2Ray DNS",callback_data="del_proto_v2ray"),
+        InlineKeyboardButton("🗑 ZIVPN",callback_data="del_proto_zivpn"),
+        InlineKeyboardButton("🗑 Hysteria",callback_data="del_proto_hyst"),
+        InlineKeyboardButton("⬅️ Back",callback_data="users"),
+    ]))
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data=t)]])
     def yesno_kb(a,d): return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes",callback_data=f"{a}_y:{d}"),InlineKeyboardButton("❌ No",callback_data=f"{a}_n:{d}")]])
 
@@ -2567,7 +2608,7 @@ if BOT_AVAILABLE:
         u=reseller_user_count(rid);exp=r["expires_at"];tl=", ".join(json.loads(r["tunnels"]))
         auth_str="👤 Public bot" if r["telegram_id"]==0 else f"👤 Authorized: `{r['telegram_id']}`"
         t=f"🤝 *Reseller: {r['client_name']}*\n━━━━━━━━━━━━━━━━\n• Users: `{u}/{r['max_users']}`\n• Expires: `{exp}`\n• Tunnels: `{tl}`\n{auth_str}"
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("👥 My Users",callback_data="r_users")],[InlineKeyboardButton("❓ Help",callback_data="r_help")]])
+        kb=InlineKeyboardMarkup(build_menu([InlineKeyboardButton("👥 My Users",callback_data="r_users"),InlineKeyboardButton("❓ Help",callback_data="r_help")]))
         if edit:await update.callback_query.edit_message_text(t,reply_markup=kb,parse_mode="Markdown")
         else:await update.message.reply_text(t,reply_markup=kb,parse_mode="Markdown")
 
@@ -2580,7 +2621,7 @@ if BOT_AVAILABLE:
             btns.append(InlineKeyboardButton(f"📋 List {names.get(t,t)}",callback_data=f"r_ls_{t}"))
         btns.append(InlineKeyboardButton("🗑 Delete Users",callback_data="r_del"))
         btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_main"))
-        return InlineKeyboardMarkup([btns[i:i+2]for i in range(0,len(btns),2)])
+        return InlineKeyboardMarkup(build_menu(btns))
 
     def r_del_proto_kb(rid):
         r=reseller_get(rid);tl=json.loads(r["tunnels"])if r else[]
@@ -2588,7 +2629,7 @@ if BOT_AVAILABLE:
         btns=[]
         for t in tl:btns.append(InlineKeyboardButton(f"🗑 {names.get(t,t)}",callback_data=f"r_del_proto_{t}"))
         btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_users"))
-        return InlineKeyboardMarkup([btns[i:i+2]for i in range(0,len(btns),2)])
+        return InlineKeyboardMarkup(build_menu(btns))
 
     async def callback_handler_reseller(update,ctx):
         q=update.callback_query;await q.answer()
@@ -2616,7 +2657,7 @@ if BOT_AVAILABLE:
             ctx.user_data["r_del_users"]=users
             await q.edit_message_text("\n".join(l),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_del")]]),parse_mode="Markdown")
         elif d=="r_cr_xray":
-            await q.edit_message_text("Select Xray protocol:",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("VMESS",callback_data="r_cr_vmess"),InlineKeyboardButton("VLESS",callback_data="r_cr_vless")],[InlineKeyboardButton("Trojan",callback_data="r_cr_trojan")],[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
+            await q.edit_message_text("Select Xray protocol:",reply_markup=InlineKeyboardMarkup(build_menu([InlineKeyboardButton("VMESS",callback_data="r_cr_vmess"),InlineKeyboardButton("VLESS",callback_data="r_cr_vless"),InlineKeyboardButton("Trojan",callback_data="r_cr_trojan"),InlineKeyboardButton("⬅️ Back",callback_data="r_users")])))
         elif d.startswith("r_cr_"):
             p=d[5:];ctx.user_data["r_proto"]=p;ctx.user_data["r_step"]="r_user";ctx.user_data["r_rid"]=rid
             await q.edit_message_text(f"✏️ Username:",parse_mode="Markdown")
