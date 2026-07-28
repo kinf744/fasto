@@ -2298,14 +2298,17 @@ if BOT_AVAILABLE:
         elif d=="help":
             await q.edit_message_text("🤖 *KIGHMU BOT HELP*\n━━━━━━━━━━━━━━━━━━━━━\n/start – Main menu\n\n📊 Dashboard – Stats\n👥 Users – Manage\n🔧 Services – Status\n📈 Server – Resources\n🤝 Resellers – Manage resellers\n❓ Help\n\nCreate/Lists/Delete/Renew/Lock users\nPasswords auto-generated if empty",reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="resellers":
-            rl=reseller_list();l=["🤝 *RESELLERS*\n"]
-            if not rl:l.append("No resellers yet.")
+            rl=reseller_list()
+            if not rl:
+                await q.edit_message_text("🤝 *No resellers yet.*",reply_markup=reseller_kb(),parse_mode="Markdown")
             else:
+                kb_rows=[]
                 for r in rl:
-                    status="🟢"if r["active"]else"🔴";u=reseller_user_count(r["id"])
-                    l.append(f"\n{status} *{r['client_name']}* (#{r['id']})")
-                    l.append(f"  👤 {r['telegram_id']}  👥 {u}/{r['max_users']}  📅 {r['expires_at']}")
-            t="\n".join(l);await q.edit_message_text(t,reply_markup=reseller_kb(),parse_mode="Markdown")
+                    u=reseller_user_count(r["id"])
+                    label=f"{'🟢'if r['active']else'🔴'} {r['client_name']} (#{r['id']}) – {u}/{r['max_users']} – {r['expires_at']}"
+                    kb_rows.append([InlineKeyboardButton(label,callback_data=f"view_reseller_{r['id']}")])
+                kb_rows+=reseller_kb().inline_keyboard
+                await q.edit_message_text("🤝 *RESELLERS*\n👇 Tap a reseller to manage",reply_markup=InlineKeyboardMarkup(kb_rows),parse_mode="Markdown")
         elif d.startswith("view_reseller_"):
             rid=int(d[14:]);r=reseller_get(rid)
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
