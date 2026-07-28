@@ -1268,6 +1268,17 @@ def renew_user(user, days):
     if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
     return 0
 
+def set_user_quota(user, quota):
+    if not (USERDIR/user).exists(): return False
+    _meta_set(user, "quota", str(quota))
+    proto=_meta_get(user,"proto")
+    if proto in ("vmess","vless","trojan","xray"):
+        sh(f"jq '(..|select(.email?==\"{user}\").quota) |= {float(quota)}' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
+        sh("systemctl restart xray 2>/dev/null || true")
+    elif proto=="v2raydns":
+        v2raydns_apply()
+    return True
+
 def lock_user(user):
     if not (USERDIR / user).exists(): return 2
     if _meta_get(user,"proto") == "ssh": sh(f"passwd -l {user} &>/dev/null")
@@ -2202,6 +2213,7 @@ if BOT_AVAILABLE:
         InlineKeyboardButton("🗑 Delete",callback_data="del_user"),
         InlineKeyboardButton("🔄 Renew",callback_data="renew_user"),
         InlineKeyboardButton("🔄 Renew Bulk",callback_data="renew_bulk"),
+        InlineKeyboardButton("💾 Set Quota",callback_data="set_quota"),
         InlineKeyboardButton("🔒 Lock",callback_data="lock_user"),
         InlineKeyboardButton("⬅️ Back",callback_data="main"),
     ]))
@@ -2334,6 +2346,12 @@ if BOT_AVAILABLE:
             if not users: await q.edit_message_text(f"📋 No {p.upper()} users.",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear();return
             l=[f"🔄 *{p.upper()} USERS*\nEnter: `numbers days`\nExample: `1,3-5 30`\n"]+[f"`{i}.` {n} – exp: {e}"for i,(n,e)in enumerate(users,1)]
             await q.edit_message_text("\n".join(l),reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data["renew_users"]=users;ctx.user_data["step"]="renew_bulk_days"
+        elif d=="set_quota": await q.edit_message_text("Select protocol:",reply_markup=proto_sel_kb("setquota"),parse_mode="Markdown")
+        elif d.startswith("setquota_"):
+            p=d[9:];ctx.user_data["sq_proto"]=p;users=get_users_by_proto(p)
+            if not users: await q.edit_message_text(f"📋 No {p.upper()} users.",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear();return
+            l=[f"💾 *{p.upper()} USERS*\nEnter: `numbers quota_GB`\nExample: `1,3-5 50`\n"]+[f"`{i}.` {n} – exp: {e} – quota: {_meta_get(n,'quota') or '0'} GB"for i,(n,e)in enumerate(users,1)]
+            await q.edit_message_text("\n".join(l),reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data["sq_users"]=users;ctx.user_data["step"]="set_quota_val"
         elif d=="renew_user": ctx.user_data["step"]="renew_user";await q.edit_message_text("🔄 Username:",reply_markup=back_kb("users"))
         elif d=="lock_user": ctx.user_data["step"]="lock_user";await q.edit_message_text("🔒 Username:",reply_markup=back_kb("users"))
         elif d.startswith("confirm_del_"):user=d[12:];delete_user(user);await q.edit_message_text(f"✅ `{user}` deleted.",reply_markup=back_kb("users"),parse_mode="Markdown")
@@ -2525,6 +2543,20 @@ Expired resellers auto-deactivated daily by cron.
                 _meta_set(u,"exp",ne)
                 if _meta_get(u,"proto")=="ssh":sh(f"chage -E {ne} {u} 2>/dev/null")
             await reply_cls(update,ctx,f"✅ Renewed `{len(td)}` user(s) +{days} days",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
+        elif step=="set_quota_val":
+            parts=text.rsplit(None,1)
+            if len(parts)!=2 or not re.match(r'^[0-9]+\.?[0-9]*$',parts[1]):await update.message.reply_text("❌ Usage: `numbers quota_GB`  e.g. `1,3-5 50`");return
+            nums,q=set(),float(parts[1])
+            for pt in parts[0].replace(" ","").split(","):
+                if"-"in pt:
+                    a,b=pt.split("-",1)
+                    if a.isdigit()and b.isdigit():nums.update(range(int(a),int(b)+1))
+                elif pt.isdigit():nums.add(int(pt))
+            users=ctx.user_data.get("sq_users",[])
+            td=[users[n-1][0]for n in sorted(nums)if 1<=n<=len(users)]
+            if not td:await update.message.reply_text("❌ No valid numbers.");return
+            for u in td:set_user_quota(u,q)
+            await reply_cls(update,ctx,f"✅ Quota set to `{q} GB` for `{len(td)}` user(s)",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
         elif step=="lock_user":
             user=text
             if not(USERDIR/user).exists():await reply_cls(update,ctx,f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown")
@@ -2650,6 +2682,7 @@ if BOT_AVAILABLE:
             btns.append(InlineKeyboardButton(f"➡️ Create {names.get(t,t)}",callback_data=f"r_cr_{t}"))
             btns.append(InlineKeyboardButton(f"📋 List {names.get(t,t)}",callback_data=f"r_ls_{t}"))
         btns.append(InlineKeyboardButton("🔄 Renew",callback_data="r_renew"))
+        btns.append(InlineKeyboardButton("💾 Set Quota",callback_data="r_setquota"))
         btns.append(InlineKeyboardButton("🗑 Delete",callback_data="r_del"))
         btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_main"))
         return InlineKeyboardMarkup(build_menu(btns))
@@ -2680,6 +2713,8 @@ if BOT_AVAILABLE:
             await q.edit_message_text("\n".join(l),reply_markup=reseller_users_kb(rid),parse_mode="Markdown")
         elif d=="r_renew":
             ctx.user_data["r_step"]="r_renew_user";await q.edit_message_text("🔄 Username to renew:",parse_mode="Markdown")
+        elif d=="r_setquota":
+            ctx.user_data["r_step"]="r_setquota_user";await q.edit_message_text("💾 Username to set quota:",parse_mode="Markdown")
         elif d=="r_del":
             await q.edit_message_text("🗑 Select protocol to delete:",reply_markup=r_del_proto_kb(rid))
         elif d.startswith("r_del_proto_"):
@@ -2765,6 +2800,17 @@ if BOT_AVAILABLE:
             _meta_set(user,"exp",ne)
             if _meta_get(user,"proto")=="ssh":sh(f"chage -E {ne} {user} 2>/dev/null")
             await update.message.reply_text(f"✅ `{user}` → `{ne}`",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown");ctx.user_data.clear()
+        elif step=="r_setquota_user":
+            user=text
+            if not(USERDIR/user).exists():await update.message.reply_text(f"❌ `{user}` not found.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]));ctx.user_data.clear();return
+            if _meta_get(user,"reseller")!=str(rid):await update.message.reply_text("❌ Not your user.");ctx.user_data.clear();return
+            ctx.user_data["r_sq_user"]=user;ctx.user_data["r_step"]="r_setquota_val"
+            await update.message.reply_text("✏️ New quota in *GB* (0=unlimited):",parse_mode="Markdown")
+        elif step=="r_setquota_val":
+            if not re.match(r'^[0-9]+\.?[0-9]*$',text):await update.message.reply_text("❌ Invalid number.");return
+            user=ctx.user_data.get("r_sq_user","");q=float(text)
+            set_user_quota(user,q)
+            await update.message.reply_text(f"✅ `{user}` quota → `{q} GB`",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown");ctx.user_data.clear()
 
     async def do_create_reseller(update,ctx,rid):
         r=reseller_get(rid)
