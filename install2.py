@@ -31,7 +31,7 @@ BANNER = [
     '                                             ',
 ]
 
-def sh(cmd, timeout=30):
+def sh(cmd, timeout=300):
     try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
     except: return ""
 
@@ -571,14 +571,26 @@ def install_slowdns():
     DIR.mkdir(parents=True, exist_ok=True)
     (DIR / "ns4").mkdir(parents=True, exist_ok=True)
     (DIR / "nv4").mkdir(parents=True, exist_ok=True)
-    priv = "4ab3af05fc004cb69d50c89de2cd5d138be1c397a55788b8867088e801f7fcaa"
-    pub = "2cb39d63928451bd67f5954ffa5ac16c8d903562a10c4b21756de4f1a82d581c"
-    (DIR / "server.key").write_text(priv + "\n")
-    (DIR / "server.pub").write_text(pub + "\n")
+    try:
+        from cryptography.hazmat.primitives.asymmetric import x25519
+        priv_k = x25519.X25519PrivateKey.generate()
+        pub_k = priv_k.public_key()
+        priv_hex = priv_k.private_bytes_raw().hex()
+        pub_hex = pub_k.public_bytes_raw().hex()
+    except ImportError:
+        sh("apt-get install -y -qq python3-cryptography 2>/dev/null || pip3 install cryptography --break-system-packages 2>/dev/null || true")
+        from cryptography.hazmat.primitives.asymmetric import x25519
+        priv_k = x25519.X25519PrivateKey.generate()
+        pub_k = priv_k.public_key()
+        priv_hex = priv_k.private_bytes_raw().hex()
+        pub_hex = pub_k.public_bytes_raw().hex()
+    (DIR / "server.key").write_text(priv_hex + "\n")
+    (DIR / "server.pub").write_text(pub_hex + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
     sh("curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
-    ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null") or "ns4.kingom.ggff.net"
-    nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null") or "nv4.kingom.ggff.net"
+    domain = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or get_ip()
+    ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null") or ("ns4."+domain)
+    nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null") or ("nv4."+domain)
     (DIR / "ns.conf").write_text(ns4 + "\n")
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     # dnstt-server start scripts
@@ -610,8 +622,8 @@ import socket, signal, sys, os, struct, threading
 
 LISTEN = int(os.environ.get("LISTEN", 5300))
 TIMEOUT = int(os.environ.get("TIMEOUT", 5))
-ns4 = os.environ.get("NS4", "ns4.kingom.ggff.net")
-nv4 = os.environ.get("NV4", "nv4.kingom.ggff.net")
+ns4 = os.environ.get("NS4", "ns4.local")
+nv4 = os.environ.get("NV4", "nv4.local")
 R4 = os.environ.get("R4", "127.0.0.1:5353")
 RV4 = os.environ.get("RV4", "127.0.0.1:5354")
 
@@ -700,6 +712,7 @@ StandardError=append:/var/log/slowdns/slowdns-router.log
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
+    Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
     # nftables rules for SlowDNS
     _deploy_nft("slowdns", """table inet slowdns {
     chain prerouting { type nat hook prerouting priority -100; policy accept;
@@ -958,8 +971,7 @@ def install_xray():
     sh("chmod 600 /etc/xray/xray.key /etc/xray/xray.pem 2>/dev/null || true")
     xray_gen_config()
     xray_gen_haproxy()
-    if not Path("/etc/systemd/system/xray.service").exists():
-        svc = """[Unit]
+    svc = """[Unit]
 Description=Xray Service
 After=network-online.target nss-lookup.target
 Wants=network-online.target
@@ -976,7 +988,8 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 """
-        Path("/etc/systemd/system/xray.service").write_text(svc)
+    Path("/etc/systemd/system/xray.service").write_text(svc)
+    sh("rm -rf /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d 2>/dev/null || true")
     Path("/etc/systemd/system/haproxy.service.d").mkdir(parents=True, exist_ok=True)
     Path("/etc/systemd/system/haproxy.service.d/override.conf").write_text("[Service]\nRestart=always\nStartLimitIntervalSec=0\nStartLimitBurst=0\n")
     _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880,10001,10085,9898} accept; }; }')
@@ -1028,8 +1041,13 @@ def install_v2ray():
     if not V2RAY_USERS.exists():
         V2RAY_USERS.write_text('{"vless":[]}')
     _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; }')
+    for f in ["/etc/systemd/system/v2ray.service","/etc/systemd/system/v2ray@.service"]:
+        if Path(f).exists():
+            txt=Path(f).read_text().replace("/usr/local/etc/v2ray/config.json","/etc/v2ray/config.json").replace("User=nobody","User=root")
+            Path(f).write_text(txt)
+    sh("rm -rf /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
     v2raydns_apply()
-    sh("systemctl restart v2ray 2>/dev/null || true")
+    sh("systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true")
 
 def uninstall_v2ray():
     sh("systemctl disable --now v2ray 2>/dev/null || true")
