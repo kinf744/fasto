@@ -2436,8 +2436,12 @@ Expired resellers auto-deactivated daily by cron.
             await q.edit_message_text(f"🔄 Reseller #{rid} {'activated' if r['active'] else 'deactivated'}.",reply_markup=back_kb("resellers"))
         elif d.startswith("del_cfm_reseller_"):
             rid=int(d[17:]);r=reseller_get(rid)
-            if r:reseller_remove_service(rid);reseller_delete(rid)
-            await q.edit_message_text(f"🗑 Reseller #{rid} deleted.",reply_markup=back_kb("resellers"))
+            if r:
+                if USERDIR.exists():
+                    for f in USERDIR.iterdir():
+                        if f.is_file() and _meta_get(f.name,"reseller")==str(rid):delete_user(f.name)
+                reseller_remove_service(rid);reseller_delete(rid)
+            await q.edit_message_text(f"🗑 Reseller #{rid} + all their users deleted.",reply_markup=back_kb("resellers"))
         elif d.startswith("extend_reseller_"):
             rid=int(d[16:]);r=reseller_get(rid)
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
