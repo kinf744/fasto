@@ -2179,7 +2179,7 @@ if BOT_AVAILABLE:
 
     def main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("📊 Dashboard",callback_data="dash"),InlineKeyboardButton("👥 Users",callback_data="users")],[InlineKeyboardButton("🔧 Services",callback_data="services"),InlineKeyboardButton("📈 Server",callback_data="server")],[InlineKeyboardButton("🤝 Resellers",callback_data="resellers"),InlineKeyboardButton("❓ Help",callback_data="help")]])
     def users_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Create SSH",callback_data="cr_ssh"),InlineKeyboardButton("➡️ Create Xray",callback_data="cr_xray")],[InlineKeyboardButton("➡️ Create V2Ray DNS",callback_data="cr_v2ray"),InlineKeyboardButton("➡️ Create ZIVPN",callback_data="cr_zivpn")],[InlineKeyboardButton("➡️ Create Hysteria",callback_data="cr_hyst")],[InlineKeyboardButton("📋 List SSH",callback_data="ls_ssh"),InlineKeyboardButton("📋 List Xray",callback_data="ls_xray")],[InlineKeyboardButton("📋 List V2Ray DNS",callback_data="ls_v2ray"),InlineKeyboardButton("📋 List ZIVPN",callback_data="ls_zivpn")],[InlineKeyboardButton("📋 List Hysteria",callback_data="ls_hyst")],[InlineKeyboardButton("🔍 Info User",callback_data="info_user"),InlineKeyboardButton("🗑 Delete User",callback_data="del_user")],[InlineKeyboardButton("🔄 Renew User",callback_data="renew_user"),InlineKeyboardButton("🔒 Lock/Unlock",callback_data="lock_user")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
-    def reseller_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
+    def reseller_main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller")],[InlineKeyboardButton("⚙️ Manage Resellers",callback_data="manage_resellers")],[InlineKeyboardButton("⬅️ Back",callback_data="main")]])
     def xray_proto_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("VMESS",callback_data="cr_vmess"),InlineKeyboardButton("VLESS",callback_data="cr_vless")],[InlineKeyboardButton("Trojan",callback_data="cr_trojan")],[InlineKeyboardButton("⬅️ Back",callback_data="users")]])
     def del_proto_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🗑 SSH",callback_data="del_proto_ssh"),InlineKeyboardButton("🗑 Xray",callback_data="del_proto_xray")],[InlineKeyboardButton("🗑 V2Ray DNS",callback_data="del_proto_v2ray"),InlineKeyboardButton("🗑 ZIVPN",callback_data="del_proto_zivpn")],[InlineKeyboardButton("🗑 Hysteria",callback_data="del_proto_hyst")],[InlineKeyboardButton("⬅️ Back",callback_data="users")]])
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data=t)]])
@@ -2298,18 +2298,19 @@ if BOT_AVAILABLE:
         elif d=="help":
             await q.edit_message_text("🤖 *KIGHMU BOT HELP*\n━━━━━━━━━━━━━━━━━━━━━\n/start – Main menu\n\n📊 Dashboard – Stats\n👥 Users – Manage\n🔧 Services – Status\n📈 Server – Resources\n🤝 Resellers – Manage resellers\n❓ Help\n\nCreate/Lists/Delete/Renew/Lock users\nPasswords auto-generated if empty",reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="resellers":
+            await q.edit_message_text("🤝 *RESELLERS*\nChoose an option:",reply_markup=reseller_main_kb(),parse_mode="Markdown")
+        elif d=="manage_resellers":
             rl=reseller_list()
             if not rl:
-                await q.edit_message_text("🤝 *No resellers yet.*",reply_markup=reseller_kb(),parse_mode="Markdown")
+                await q.edit_message_text("🤝 *No resellers yet.*",reply_markup=back_kb("resellers"),parse_mode="Markdown")
             else:
-                l=["🤝 *RESELLERS*\n"]
+                l=["🤝 *MANAGE RESELLERS*\n"]
                 for r in rl:
                     status="🟢"if r["active"]else"🔴";u=reseller_user_count(r["id"])
                     l.append(f"{status} #{r['id']} *{r['client_name']}* – 👥 {u}/{r['max_users']} – 📅 {r['expires_at']}")
                 num_btns=[InlineKeyboardButton(str(r["id"]),callback_data=f"view_reseller_{r['id']}")for r in rl]
                 kb_rows=[num_btns[i:i+5]for i in range(0,len(num_btns),5)]
-                kb_rows.append([InlineKeyboardButton("➕ New Reseller",callback_data="cr_reseller")])
-                kb_rows.append([InlineKeyboardButton("⬅️ Back",callback_data="main")])
+                kb_rows.append([InlineKeyboardButton("⬅️ Back",callback_data="resellers")])
                 await q.edit_message_text("\n".join(l),reply_markup=InlineKeyboardMarkup(kb_rows),parse_mode="Markdown")
         elif d.startswith("view_reseller_"):
             rid=int(d[14:]);r=reseller_get(rid)
