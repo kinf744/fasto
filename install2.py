@@ -1055,6 +1055,8 @@ def xray_build_config():
                         if inbound["protocol"]=="vless" and "flow" in u:
                             client["flow"] = u["flow"]
                         inbound["settings"]["clients"] = [client]
+                    elif isinstance(u, dict) and "password" in u:
+                        inbound["settings"]["clients"] = [{"password":u["password"],"level":0,"email":u.get("email","")}]
                 else:
                     inbound["settings"]["clients"] = []
         XRAY_CONFIG.write_text(json.dumps(config, indent=2))
