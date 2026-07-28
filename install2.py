@@ -663,8 +663,8 @@ def handle(conn, data, addr):
     send_refused(conn, addr, data)
 
 for d, _ in ROUTES:
-    sys.stderr.write(f"  route {d} -> ...\n")
-sys.stderr.write(f"slowdns-router on {LISTEN}\n")
+    sys.stderr.write(f"  route {d} -> ...\\n")
+sys.stderr.write(f"slowdns-router on {LISTEN}\\n")
 sys.stderr.flush()
 signal.signal(signal.SIGTERM, lambda *_: exit(0))
 
@@ -969,7 +969,7 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/xray -config /etc/xray/config.json
+ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
 Restart=always
 RestartSec=5s
 LimitNOFILE=1048576
