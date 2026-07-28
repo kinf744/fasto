@@ -304,12 +304,12 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         uuid = gen_uuid()
         sh(f"jq '.{proto} += [{{\"id\":\"{uuid}\",\"email\":\"{user}\",\"level\":0,\"expire\":\"{exp}\",\"quota\":{float(quota) or 0}}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
         write_meta(user, proto, exp, "", "", uuid, quota)
-        sh("systemctl restart xray 2>/dev/null || true")
+        xray_build_config()
     elif proto == "trojan":
         passwd = passwd or gen_pass()
         sh(f"jq '.trojan += [{{\"password\":\"{passwd}\",\"email\":\"{user}\",\"level\":0,\"expire\":\"{exp}\",\"quota\":{float(quota) or 0}}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
         write_meta(user, "trojan", exp, "", passwd, "", quota)
-        sh("systemctl restart xray 2>/dev/null || true")
+        xray_build_config()
     elif proto == "v2raydns":
         uuid = gen_uuid()
         write_meta(user, "v2raydns", exp, "", "", uuid, quota)
@@ -1408,10 +1408,10 @@ def delete_user(user):
     if proto == "ssh":
         sh(f"userdel -f {user} 2>/dev/null || true")
         sh(f"sed -i '/^{user}|/d' /etc/kighmu/users.list 2>/dev/null || true")
-    elif proto in ("vmess","vless","trojan"):
+    elif proto in ("vmess","vless","trojan","xray"):
         for p in ("vmess","vless","trojan"):
             sh(f"jq '.{p} |= map(select(.email!=\"{user}\"))' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
-        sh("systemctl restart xray 2>/dev/null || true")
+        xray_build_config()
     else:
         if proto == "zivpn": zivpn_apply()
         elif proto == "hysteria": hysteria_apply()
@@ -1425,6 +1425,7 @@ def renew_user(user, days):
     write_meta(user, proto, exp, _meta_get(user,"limit"), _meta_get(user,"pass"), _meta_get(user,"uuid"), _meta_get(user,"quota"))
     if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
     elif proto == "v2raydns": v2raydns_apply()
+    elif proto in ("vmess","vless","trojan","xray"): xray_build_config()
     return 0
 
 def set_user_quota(user, quota):
@@ -1433,7 +1434,7 @@ def set_user_quota(user, quota):
     proto=_meta_get(user,"proto")
     if proto in ("vmess","vless","trojan","xray"):
         sh(f"jq '(..|select(.email?==\"{user}\").quota) |= {float(quota)}' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
-        sh("systemctl restart xray 2>/dev/null || true")
+        xray_build_config()
     elif proto=="v2raydns":
         v2raydns_apply()
     return True
@@ -1459,7 +1460,7 @@ def change_password(user, newpass=""):
         for p in ("vmess","vless","trojan"):
             sh(f"jq '.{p} |= map(select(.email!=\"{user}\"))' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS}")
         sh(f"jq '.trojan += [{{\"password\":\"{newpass}\",\"email\":\"{user}\",\"level\":0}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS}")
-        sh("systemctl restart xray 2>/dev/null || true")
+        xray_build_config()
     else:
         if proto == "zivpn": zivpn_apply()
         elif proto == "hysteria": hysteria_apply()
