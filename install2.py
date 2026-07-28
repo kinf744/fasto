@@ -216,18 +216,18 @@ def proto_on(*candidates):
 def _svc_ready(svc):
     if svc == "sshd": return True
     if svc == "haproxy":
-        return sh("systemctl is-active --quiet haproxy 2>/dev/null") == "" and (":443 " in sh("ss -tlnp 2>/dev/null") or ":8880 " in sh("ss -tlnp 2>/dev/null"))
+        return sh("systemctl is-active haproxy 2>/dev/null") == "active" and (":443 " in sh("ss -tlnp 2>/dev/null") or ":8880 " in sh("ss -tlnp 2>/dev/null"))
     cases = {
-        "badvpn@7100": sh("systemctl is-active --quiet badvpn@7100 2>/dev/null") == "",
-        "slowdns-router": sh("systemctl is-active --quiet slowdns-router 2>/dev/null") == "",
-        "dropbear-custom": sh("systemctl is-active --quiet dropbear-custom 2>/dev/null") == "" and ":109 " in sh("ss -tlnp 2>/dev/null"),
-        "v2ray": sh("systemctl is-active --quiet v2ray 2>/dev/null") == "" and ":5401 " in sh("ss -tlnp 2>/dev/null"),
-        "xray": sh("systemctl is-active --quiet xray 2>/dev/null") == "" and ":10001 " in sh("ss -tlnp 2>/dev/null"),
-        "sshws": sh("systemctl is-active --quiet sshws 2>/dev/null") == "" and ":80 " in sh("ss -tlnp 2>/dev/null"),
-        "ssl_tls": sh("systemctl is-active --quiet ssl_tls 2>/dev/null") == "" and ":444 " in sh("ss -tlnp 2>/dev/null"),
-        "zivpn": sh("systemctl is-active --quiet zivpn 2>/dev/null") == "" and ":5667 " in sh("ss -ulnp 2>/dev/null"),
-        "hysteria": sh("systemctl is-active --quiet hysteria 2>/dev/null") == "" and "hysteria" in sh("ss -ulnp 2>/dev/null"),
-        "udp-custom": sh("systemctl is-active --quiet udp-custom 2>/dev/null") == "" and ":36712 " in sh("ss -ulnp 2>/dev/null"),
+        "badvpn@7100": sh("systemctl is-active badvpn@7100 2>/dev/null") == "active",
+        "slowdns-router": sh("systemctl is-active slowdns-router 2>/dev/null") == "active",
+        "dropbear-custom": sh("systemctl is-active dropbear-custom 2>/dev/null") == "active" and ":109 " in sh("ss -tlnp 2>/dev/null"),
+        "v2ray": sh("systemctl is-active v2ray 2>/dev/null") == "active" and ":5401 " in sh("ss -tlnp 2>/dev/null"),
+        "xray": sh("systemctl is-active xray 2>/dev/null") == "active" and ":10001 " in sh("ss -tlnp 2>/dev/null"),
+        "sshws": sh("systemctl is-active sshws 2>/dev/null") == "active" and ":80 " in sh("ss -tlnp 2>/dev/null"),
+        "ssl_tls": sh("systemctl is-active ssl_tls 2>/dev/null") == "active" and ":444 " in sh("ss -tlnp 2>/dev/null"),
+        "zivpn": sh("systemctl is-active zivpn 2>/dev/null") == "active" and ":5667 " in sh("ss -ulnp 2>/dev/null"),
+        "hysteria": sh("systemctl is-active hysteria 2>/dev/null") == "active" and "hysteria" in sh("ss -ulnp 2>/dev/null"),
+        "udp-custom": sh("systemctl is-active udp-custom 2>/dev/null") == "active" and ":36712 " in sh("ss -ulnp 2>/dev/null"),
     }
     return cases.get(svc, False)
 
@@ -1400,7 +1400,7 @@ def scr_protocol_installer():
         "badvpn":proto_on("badvpn-udpgw"),"udp":proto_on("udp-custom"),
         "slowdns":proto_on("slowdns-router","slowdns-ns4","slowdns-nv4"),
         "hyst":proto_on("hysteria"),"zivpn":proto_on("zivpn"),
-        "bot":Path("/usr/local/bin/kighmu").exists() and sh("systemctl is-active --quiet kighmu-bot 2>/dev/null")==""}
+        "bot":Path("/usr/local/bin/kighmu").exists() and sh("systemctl is-active kighmu-bot 2>/dev/null")=="active"}
     pl=["SSH / DROPBEAR","WS-EPRO (SSH-WS)","SSL / TLS","XRAY (VMESS/VLESS/TROJAN)","V2RAY-DNS",
         "BADVPN (UDPGW)","UDP CUSTOM","SLOWDNS","HYSTERIA","ZIVPN","INSTALL ALL MISSING","UNINSTALL ALL ACTIVE","TELEGRAM BOT"]
     pw=max(len(l) for l in pl)
@@ -1413,7 +1413,7 @@ def scr_protocol_installer():
     L+=[pil(f"{i+1:02d}",pl[i],sv[i] if i<len(sv) else False,pw) for i in range(10)]
     L+=["%SEP%",f" {C['GREEN']}[11]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}{pl[10]}{C['RST']}",
         f" {C['GREEN']}[12]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{pl[11]:<{pw}}{C['RST']}  {C['RED']}[!]{C['RST']}"]
-    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if Path("/etc/xray/config.json").exists() and sh("systemctl is-active --quiet haproxy 2>/dev/null") == "" else f"{C['RED']}[OFF]{C['RST']}"
+    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if Path("/etc/xray/config.json").exists() and sh("systemctl is-active haproxy 2>/dev/null") == "active" else f"{C['RED']}[OFF]{C['RST']}"
     L+=[pil("13",pl[12],st["bot"],pw),"%SEP%",
         f" {C['YELLOW']}○{C['RST']} {C['GRAY']}Dependencies (auto-installed with Xray):{C['RST']}",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HAProxy{C['RST']} {haproxy_st}          {C['GRAY']}(TLS 443 / NTLS 8880){C['RST']}",
