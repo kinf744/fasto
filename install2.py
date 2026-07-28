@@ -2529,7 +2529,16 @@ if BOT_AVAILABLE:
             names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
             btns.append(InlineKeyboardButton(f"➡️ Create {names.get(t,t)}",callback_data=f"r_cr_{t}"))
             btns.append(InlineKeyboardButton(f"📋 List {names.get(t,t)}",callback_data=f"r_ls_{t}"))
+        btns.append(InlineKeyboardButton("🗑 Delete Users",callback_data="r_del"))
         btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_main"))
+        return InlineKeyboardMarkup([btns[i:i+2]for i in range(0,len(btns),2)])
+
+    def r_del_proto_kb(rid):
+        r=reseller_get(rid);tl=json.loads(r["tunnels"])if r else[]
+        names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
+        btns=[]
+        for t in tl:btns.append(InlineKeyboardButton(f"🗑 {names.get(t,t)}",callback_data=f"r_del_proto_{t}"))
+        btns.append(InlineKeyboardButton("⬅️ Back",callback_data="r_users"))
         return InlineKeyboardMarkup([btns[i:i+2]for i in range(0,len(btns),2)])
 
     async def callback_handler_reseller(update,ctx):
@@ -2548,6 +2557,15 @@ if BOT_AVAILABLE:
                 l.append(f"• {names.get(t,t)}: `{cnt}`")
             l.append(f"\nTotal: `{reseller_user_count(rid)}/{r['max_users']}`")
             await q.edit_message_text("\n".join(l),reply_markup=reseller_users_kb(rid),parse_mode="Markdown")
+        elif d=="r_del":
+            await q.edit_message_text("🗑 Select protocol to delete:",reply_markup=r_del_proto_kb(rid))
+        elif d.startswith("r_del_proto_"):
+            p=d[12:];ctx.user_data["r_del_proto"]=p;ctx.user_data["r_step"]="r_del_choose"
+            users=_users_by_reseller(p,rid)
+            if not users:await q.edit_message_text(f"📋 No {p.upper()} users.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_del")]]));ctx.user_data.clear();return
+            l=[f"🗑 *{p.upper()} USERS*\nEnter numbers to delete:\n"]+[f"`{i}.` {n} – exp: {e}"for i,(n,e,_,_,_)in enumerate(users,1)]
+            ctx.user_data["r_del_users"]=users
+            await q.edit_message_text("\n".join(l),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_del")]]),parse_mode="Markdown")
         elif d=="r_cr_xray":
             await q.edit_message_text("Select Xray protocol:",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("VMESS",callback_data="r_cr_vmess"),InlineKeyboardButton("VLESS",callback_data="r_cr_vless")],[InlineKeyboardButton("Trojan",callback_data="r_cr_trojan")],[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
         elif d.startswith("r_cr_"):
@@ -2592,6 +2610,21 @@ if BOT_AVAILABLE:
         elif step=="r_quota":
             if not re.match(r'^[0-9]+\.?[0-9]*$',text):await update.message.reply_text("❌ Invalid number.");return
             ctx.user_data["r_quota"]=text if float(text)>0 else"0";await do_create_reseller(update,ctx,rid2)
+        elif step=="r_del_choose":
+            users=ctx.user_data.get("r_del_users",[])
+            if not users:await update.message.reply_text("❌ No users.");ctx.user_data.clear();return
+            nums=set()
+            for pt in text.replace(" ","").split(","):
+                if not pt:continue
+                if"-"in pt:
+                    a,b=pt.split("-",1)
+                    if a.isdigit()and b.isdigit():nums.update(range(int(a),int(b)+1))
+                elif pt.isdigit():nums.add(int(pt))
+            td=[users[n-1][0]for n in sorted(nums)if 1<=n<=len(users)]
+            if not td:await update.message.reply_text("❌ No valid numbers.");return
+            for u in td:
+                if _meta_get(u,"reseller")==str(rid):delete_user(u)
+            await update.message.reply_text(f"🗑 Deleted `{len(td)}` user(s).",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown");ctx.user_data.clear()
 
     async def do_create_reseller(update,ctx,rid):
         r=reseller_get(rid)
