@@ -2296,7 +2296,50 @@ if BOT_AVAILABLE:
                 await q.edit_message_text(t,reply_markup=back_kb("users"),parse_mode="Markdown")
             else: await q.edit_message_text(f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown")
         elif d=="help":
-            await q.edit_message_text("🤖 *KIGHMU BOT HELP*\n━━━━━━━━━━━━━━━━━━━━━\n/start – Main menu\n\n📊 Dashboard – Stats\n👥 Users – Manage\n🔧 Services – Status\n📈 Server – Resources\n🤝 Resellers – Manage resellers\n❓ Help\n\nCreate/Lists/Delete/Renew/Lock users\nPasswords auto-generated if empty",reply_markup=back_kb("main"),parse_mode="Markdown")
+            h="""🤖 *KIGHMU PANEL BOT* v3.9.9
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*/start* – Show main menu
+
+📊 *DASHBOARD*
+Server stats: users, expiry, traffic (day/week/month), OS, CPU, RAM, disk, active protocols.
+
+👥 *USERS – Create & Manage*
+Create: SSH – Xray (VMESS/VLESS/Trojan) – V2Ray DNS – ZIVPN – Hysteria
+• Username → Expiry days → Password (or `auto`) → Quota GB
+• Passwords auto-generated if empty / `auto`
+
+List by protocol – view all users with expiry & traffic.
+
+Info: tap 🔍 Info User → enter username → full connection details.
+
+Renew: tap 🔄 Renew User → username → additional days.
+
+Lock/Unlock: toggle access without deleting.
+
+Delete: single user or bulk (comma/range, e.g. `1,3-5,7`).
+
+🔧 *SERVICES*
+Status of all protocols (🟢 active / 🔴 stopped).
+Control via main panel menu (option 4 Protocol Installer).
+
+📈 *SERVER*
+OS, architecture, CPU cores, uptime, public IP.
+
+🤝 *RESELLERS*
+➕ New Reseller: name → TG ID (0=public) → bot token → expiry days → max users → quota GB → tunnels → access code
+
+⚙️ Manage: tap a reseller number →
+• 🔄 Toggle Active – enable/disable
+• 🗑 Delete – remove reseller + bot service
+• 📅 Extend Expiry – add days
+• 👥 Max Users – update user limit
+• 💾 Data Quota – update GB limit
+
+Reseller user count is auto-calculated from actual users.
+Expired resellers auto-deactivated daily by cron.
+
+💡 Tip: Use `auto` as password for random generation."""
+            await q.edit_message_text(h,reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="resellers":
             await q.edit_message_text("🤝 *RESELLERS*\nChoose an option:",reply_markup=reseller_main_kb(),parse_mode="Markdown")
         elif d=="manage_resellers":
