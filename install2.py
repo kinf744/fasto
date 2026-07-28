@@ -1395,12 +1395,12 @@ def scr_optimize():
     render_panel(L)
 
 def scr_protocol_installer():
-    st={"ssh":proto_on("sshd","dropbear","dropbear-custom"),"ws":proto_on("sshws","ws-epro"),
-        "ssl":proto_on("ssl_tls","stunnel4"),"xray":proto_on("xray"),"v2ray":proto_on("v2ray"),
-        "badvpn":proto_on("badvpn-udpgw","badvpn"),"udp":proto_on("udp-custom"),
+    st={"ssh":proto_on("dropbear-custom","dropbear"),"ws":proto_on("sshws","ws-epro"),
+        "ssl":proto_on("ssl_tls"),"xray":proto_on("xray"),"v2ray":proto_on("v2ray"),
+        "badvpn":proto_on("badvpn-udpgw"),"udp":proto_on("udp-custom"),
         "slowdns":proto_on("slowdns-router","slowdns-ns4","slowdns-nv4"),
-        "hyst":proto_on("hysteria","hysteria-server"),"zivpn":proto_on("zivpn"),
-        "bot":Path("/usr/local/bin/kighmu-bot").exists() and sh("systemctl is-active --quiet kighmu-bot 2>/dev/null")==""}
+        "hyst":proto_on("hysteria"),"zivpn":proto_on("zivpn"),
+        "bot":Path("/usr/local/bin/kighmu").exists() and sh("systemctl is-active --quiet kighmu-bot 2>/dev/null")==""}
     pl=["SSH / DROPBEAR","WS-EPRO (SSH-WS)","SSL / TLS","XRAY (VMESS/VLESS/TROJAN)","V2RAY-DNS",
         "BADVPN (UDPGW)","UDP CUSTOM","SLOWDNS","HYSTERIA","ZIVPN","INSTALL ALL MISSING","UNINSTALL ALL ACTIVE","TELEGRAM BOT"]
     pw=max(len(l) for l in pl)
@@ -1413,7 +1413,7 @@ def scr_protocol_installer():
     L+=[pil(f"{i+1:02d}",pl[i],sv[i] if i<len(sv) else False,pw) for i in range(10)]
     L+=["%SEP%",f" {C['GREEN']}[11]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}{pl[10]}{C['RST']}",
         f" {C['GREEN']}[12]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{pl[11]:<{pw}}{C['RST']}  {C['RED']}[!]{C['RST']}"]
-    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if proto_on("haproxy") else f"{C['RED']}[OFF]{C['RST']}"
+    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if Path("/etc/xray/config.json").exists() and sh("systemctl is-active --quiet haproxy 2>/dev/null") == "" else f"{C['RED']}[OFF]{C['RST']}"
     L+=[pil("13",pl[12],st["bot"],pw),"%SEP%",
         f" {C['YELLOW']}○{C['RST']} {C['GRAY']}Dependencies (auto-installed with Xray):{C['RST']}",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HAProxy{C['RST']} {haproxy_st}          {C['GRAY']}(TLS 443 / NTLS 8880){C['RST']}",
