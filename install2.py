@@ -200,7 +200,7 @@ def flag_status(name):
 def bbr_status():
     return f"{C['GREEN']}[ON]{C['RST']}" if sh("sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null") == "bbr" else f"{C['RED']}[OFF]{C['RST']}"
 def svc_status(name):
-    return f"{C['GREEN']}[ON]{C['RST']}" if sh(f"systemctl is-active --quiet {name} 2>/dev/null") == "" else f"{C['RED']}[OFF]{C['RST']}"
+    return f"{C['GREEN']}[ON]{C['RST']}" if sh(f"systemctl is-active {name} 2>/dev/null") == "active" else f"{C['RED']}[OFF]{C['RST']}"
 def loglimit_status():
     return f"{C['GREEN']}[ON]{C['RST']}" if sh("grep -qsE '^[[:space:]]*SystemMaxUse=' /etc/systemd/journald.conf && echo 1 || echo 0") == "1" else f"{C['RED']}[OFF]{C['RST']}"
 def sysctl_status():
@@ -210,7 +210,7 @@ def last_optimized():
     return f.read_text().strip() if f.exists() and f.stat().st_size > 0 else "NEVER"
 def proto_on(*candidates):
     for x in candidates:
-        if sh(f"systemctl is-active --quiet {x} 2>/dev/null") == "" or sh(f"command -v {x} 2>/dev/null") != "": return True
+        if sh(f"systemctl is-active {x} 2>/dev/null") == "active" or sh(f"command -v {x} 2>/dev/null") != "": return True
     return False
 
 def _svc_ready(svc):
