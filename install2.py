@@ -2020,7 +2020,7 @@ Description=Kighmu Reseller Bot #{rid}
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/kighmu-bot --reseller-bot {rid}
+        ExecStart=/usr/bin/python3 /usr/local/bin/kighmu --reseller-bot {rid}
 WorkingDirectory=/etc/kighmu/bot/resellers/{rid}
 Restart=always
 RestartSec=10
@@ -2228,6 +2228,27 @@ if BOT_AVAILABLE:
             t=f"🖥 *SERVER INFO*\n━━━━━━━━━━━━━━━━━━━━━\n• OS: `{get_os()}`\n• Arch: `{sh_bot('uname -m')}`\n• Cores: `{sh_bot('nproc 2>/dev/null || echo 1')}`\n• Uptime: `{upt}`\n• IP: `{get_ip()}`"
             await q.edit_message_text(t,reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="cr_xray": await q.edit_message_text("Select Xray protocol:",reply_markup=xray_proto_kb(),parse_mode="Markdown")
+        elif d=="cr_reseller":
+            ctx.user_data["cr_reseller"]={};ctx.user_data["cr_step"]="name"
+            await q.edit_message_text("✏️ Reseller client name:",reply_markup=back_kb("resellers"))
+        elif d=="cr_rsel_done":
+            crd=ctx.user_data.get("cr_reseller",{});tl=crd.get("tunnels",[])
+            if not tl:await q.edit_message_text("❌ Select at least 1 tunnel.",reply_markup=back_kb("resellers"));return
+            ctx.user_data["cr_step"]="done"
+            rid=reseller_add(crd["name"],crd.get("tgid",0),crd["token"],crd["exp"],crd["max_u"],crd["quota"],tl,crd.get("access_code",""))
+            reseller_create_service(rid,crd["token"])
+            await q.edit_message_text(f"✅ Reseller #{rid} `{crd['name']}` created!\nService started.",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+            ctx.user_data.pop("cr_reseller",None);ctx.user_data.pop("cr_step",None)
+        elif d.startswith("cr_rsel_"):
+            tunnel=d[8:];crd=ctx.user_data.get("cr_reseller",{});sl=crd.get("tunnels",[])
+            if tunnel in sl:sl.remove(tunnel)
+            else:sl.append(tunnel)
+            crd["tunnels"]=sl;ctx.user_data["cr_reseller"]=crd
+            btns=[];all_t=["ssh","xray","v2ray","zivpn","hyst"]
+            for t in all_t:mark="✅"if t in sl else"⬜";btns.append(InlineKeyboardButton(f"{mark} {t.upper()}",callback_data=f"cr_rsel_{t}"))
+            btns.append(InlineKeyboardButton("✅ Done",callback_data="cr_rsel_done"))
+            kb=InlineKeyboardMarkup([btns[i:i+3]for i in range(0,len(btns),3)]+[[btns[-1]]])
+            await q.edit_message_text("Select tunnels for reseller:",reply_markup=kb)
         elif d.startswith("cr_"):
             p=d[3:];ctx.user_data["cr_proto"]=p;ctx.user_data["step"]="cr_user"
             pn={"vmess":"VMESS","vless":"VLESS","trojan":"Trojan","ssh":"SSH","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}.get(p,p)
@@ -2285,9 +2306,6 @@ if BOT_AVAILABLE:
                     l.append(f"\n{status} *{r['client_name']}* (#{r['id']})")
                     l.append(f"  👤 {r['telegram_id']}  👥 {u}/{r['max_users']}  📅 {r['expires_at']}")
             t="\n".join(l);await q.edit_message_text(t,reply_markup=reseller_kb(),parse_mode="Markdown")
-        elif d=="cr_reseller":
-            ctx.user_data["cr_reseller"]={};ctx.user_data["cr_step"]="name"
-            await q.edit_message_text("✏️ Reseller client name:",reply_markup=back_kb("resellers"))
         elif d.startswith("view_reseller_"):
             rid=int(d[14:]);r=reseller_get(rid)
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
@@ -2318,25 +2336,6 @@ if BOT_AVAILABLE:
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
             ctx.user_data["edit_rid"]=rid;ctx.user_data["step"]="edit_quota"
             await q.edit_message_text(f"💾 New *data quota (GB)* for `{r['client_name']}` (current: {r['data_quota_gb']}):",reply_markup=back_kb("resellers"),parse_mode="Markdown")
-        elif d.startswith("cr_rsel_"):
-            tunnel=d[8:];crd=ctx.user_data.get("cr_reseller",{});sl=crd.get("tunnels",[])
-            if tunnel in sl:sl.remove(tunnel)
-            else:sl.append(tunnel)
-            crd["tunnels"]=sl;ctx.user_data["cr_reseller"]=crd
-            btns=[];all_t=["ssh","xray","v2ray","zivpn","hyst"]
-            for t in all_t:mark="✅"if t in sl else"⬜";btns.append(InlineKeyboardButton(f"{mark} {t.upper()}",callback_data=f"cr_rsel_{t}"))
-            btns.append(InlineKeyboardButton("✅ Done",callback_data="cr_rsel_done"))
-            kb=InlineKeyboardMarkup([btns[i:i+3]for i in range(0,len(btns),3)]+[[btns[-1]]])
-            await q.edit_message_text("Select tunnels for reseller:",reply_markup=kb)
-        elif d=="cr_rsel_done":
-            crd=ctx.user_data.get("cr_reseller",{});tl=crd.get("tunnels",[])
-            if not tl:await q.edit_message_text("❌ Select at least 1 tunnel.",reply_markup=back_kb("resellers"));return
-            ctx.user_data["cr_step"]="done"
-            rid=reseller_add(crd["name"],crd.get("tgid",0),crd["token"],crd["exp"],crd["max_u"],crd["quota"],tl,crd.get("access_code",""))
-            reseller_create_service(rid,crd["token"])
-            await q.edit_message_text(f"✅ Reseller #{rid} `{crd['name']}` created!\nService started.",reply_markup=back_kb("resellers"),parse_mode="Markdown")
-            ctx.user_data.pop("cr_reseller",None);ctx.user_data.pop("cr_step",None)
-
     async def text_handler(update,ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Unauthorized.");return
         text=update.message.text.strip();step=ctx.user_data.get("step","");proto=ctx.user_data.get("cr_proto","")
@@ -2536,7 +2535,7 @@ if BOT_AVAILABLE:
     async def callback_handler_reseller(update,ctx):
         q=update.callback_query;await q.answer()
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
-        ok,msg=_r_auth(q,r)
+        ok,msg=_r_auth(update,r)
         if not ok:await q.edit_message_text(msg);return
         d=q.data
         if d=="r_main":await show_main_reseller(update,ctx,edit=True)
