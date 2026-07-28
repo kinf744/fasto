@@ -591,8 +591,17 @@ def install_slowdns():
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
     sh("curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
     domain = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or get_ip()
-    ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null") or ("ns4."+domain)
-    nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null") or ("nv4."+domain)
+    # BUGFIX: ns4/nv4 must be read from ns.conf files, NOT auto-generated from domain.
+    # Previously: ns4 = "ns4."+domain → produced "ns4.vlo.kingom.ggff.net" when domain was
+    # "vlo.kingom.ggff.net". But user's Cloudflare NS records are at the APEX
+    # ("ns4.kingom.ggff.net"). Each user has different NS values, so never hardcode.
+    # Fallback now uses apex domain (last 2 labels) if ns.conf missing.
+    ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null")
+    nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null")
+    if not ns4 or not nv4:
+        apex = ".".join(domain.split(".")[-2:]) if len(domain.split(".")) > 2 else domain
+        if not ns4: ns4 = "ns4." + apex
+        if not nv4: nv4 = "nv4." + apex
     (DIR / "ns.conf").write_text(ns4 + "\n")
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     # dnstt-server start scripts
@@ -619,33 +628,23 @@ WantedBy=multi-user.target
 """
         Path(f"/etc/systemd/system/{svc_name}.service").write_text(svc)
     # slowdns-router: Python DNS proxy (forwards query → waits response → relays to client)
+    # BUGFIX v2ray-dns: router no longer matches QNAME against configured domains.
+    # Previously used ROUTES = [(ns4,R4),(nv4,RV4)] and matched QNAME → if no match,
+    # query was rejected with REFUSED. Problem: each user has different NS records
+    # (ns4.kingom.ggff.net, nv4.example.com, etc.). Domain matching blocked legitimate
+    # queries when QNAME didn't match the hardcoded pattern. Now router simply forwards
+    # ALL DNS queries to a single configurable BACKEND (default 127.0.0.1:5354).
+    # The BACKEND env var is set in the systemd service file; user provides the correct
+    # backend during tunnel installation. No domain encoding = works with any NS.
     router_py = """#!/usr/bin/env python3
 import socket, signal, sys, os, struct, threading
 
 LISTEN = int(os.environ.get("LISTEN", 5300))
 TIMEOUT = int(os.environ.get("TIMEOUT", 5))
-ns4 = os.environ.get("NS4")
-nv4 = os.environ.get("NV4")
-R4 = os.environ.get("R4", "127.0.0.1:5353")
-RV4 = os.environ.get("RV4", "127.0.0.1:5354")
-
-ROUTES = [(ns4.rstrip("."), R4), (nv4.rstrip("."), RV4)]
+BACKEND = os.environ.get("BACKEND", "127.0.0.1:5354")
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("0.0.0.0", LISTEN))
-
-def parse_qname(pkt):
-    if len(pkt) < 12: return None
-    labels, pos = [], 12
-    while pos < len(pkt):
-        l = pkt[pos]
-        if l == 0: break
-        if l & 0xC0: return None
-        pos += 1
-        if pos + l > len(pkt): return None
-        labels.append(pkt[pos:pos+l].decode(errors="replace"))
-        pos += l
-    return ".".join(labels)
 
 def send_refused(conn, addr, req):
     if len(req) < 12: return
@@ -653,31 +652,27 @@ def send_refused(conn, addr, req):
     resp[2] = (req[2] & 0x01) | 0x80
     resp[3] = 0x85
     for i in range(6, 12): resp[i] = 0
-    conn.sendto(bytes(resp), addr)
+    try: conn.sendto(bytes(resp), addr)
+    except: pass
 
 def handle(conn, data, addr):
-    qname = parse_qname(data)
-    if not qname: return
-    for domain, backend in ROUTES:
-        if qname == domain or qname.endswith("." + domain) or qname.endswith("." + domain + "."):
-            bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            bc.settimeout(TIMEOUT)
-            try:
-                h, p = backend.split(":", 1)
-                bc.sendto(data, (h, int(p)))
-                resp, _ = bc.recvfrom(4096)
-                conn.sendto(resp, addr)
-            except socket.timeout:
-                send_refused(conn, addr, data)
-            except Exception:
-                send_refused(conn, addr, data)
-            finally:
-                bc.close()
-            return
-    send_refused(conn, addr, data)
+    bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    bc.settimeout(TIMEOUT)
+    try:
+        h, p = BACKEND.split(":", 1)
+        bc.sendto(data, (h, int(p)))
+        resp, _ = bc.recvfrom(4096)
+        conn.sendto(resp, addr)
+    except socket.timeout:
+        sys.stderr.write(f"[slowdns] timeout {BACKEND} from {addr[0]}\\n")
+        send_refused(conn, addr, data)
+    except Exception as e:
+        sys.stderr.write(f"[slowdns] error {BACKEND}: {e}\\n")
+        send_refused(conn, addr, data)
+    finally:
+        bc.close()
 
-for d, _ in ROUTES:
-    sys.stderr.write(f"  route {d} -> ...\\n")
+sys.stderr.write(f"  backend {BACKEND}\\n")
 sys.stderr.write(f"slowdns-router on {LISTEN}\\n")
 sys.stderr.flush()
 signal.signal(signal.SIGTERM, lambda *_: exit(0))
@@ -699,10 +694,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 Environment=LISTEN=5300
-Environment=NS4={ns4}
-Environment=NV4={nv4}
-Environment=R4=127.0.0.1:5353
-Environment=RV4=127.0.0.1:5354
+Environment=BACKEND=127.0.0.1:5354
 Environment=TIMEOUT=5
 ExecStart=/usr/bin/python3 /usr/local/bin/slowdns-router
 Restart=always
