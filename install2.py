@@ -1682,7 +1682,7 @@ def ui_create_wizard(protos):
         if proto=="ssh":
             clear_screen()
             show_ssh_details_screen("created",user,p or passwd,exp,q)
-        elif proto in("vmess","vless","trojan"):
+        elif proto in("vmess","vless","trojan","v2raydns"):
             clear_screen()
             show_detail_screen("created",proto.upper(),user,uuid=uuid,exp=exp,quota=q,passwd=p or passwd)
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
@@ -1790,7 +1790,7 @@ def ui_info_wizard():
     if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     proto=_meta_get(user,"proto");exp=_meta_get(user,"exp");passwd=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");quota=_meta_get(user,"quota") or"0"
     if proto=="ssh": show_ssh_details_screen("details",user,passwd,exp,quota)
-    elif proto in("vless","trojan","vmess"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
+    elif proto in("vless","trojan","vmess","v2raydns"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
     else: clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}User: {user}  Proto: {proto}  Exp: {exp}{C['RST']}");press_enter()
 
 def ui_delete_expired_wizard():
@@ -1876,6 +1876,19 @@ def show_detail_screen(mode,proto,user,**kw):
            f"   {C['YELLOW']}[1] NTLS/WS{C['RST']}",f"%FREE%   {l1}","",
            f"   {C['YELLOW']}[2] TLS/WS{C['RST']}",f"%FREE%   {l2}","",
            f"   {C['YELLOW']}[3] TLS/gRPC{C['RST']}",f"%FREE%   {l3}","%SEP%"]
+    elif proto=="V2RAYDNS":
+        u=kw.get("uuid","");e=kw.get("exp","");q=kw.get("quota","0");pub=sh("cat /etc/slowdns/server.pub 2>/dev/null")or"N/A";nv4=sh("cat /etc/slowdns/nv4/ns.conf 2>/dev/null")or"N/A"
+        L=["%SEP%",_detail_title(mode,"V2RAY","DNS"),"%SEP%",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('USER',18)}{C['RST']} {C['WHITE']}{user}{C['RST']}",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('DOMAIN',18)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('PROTOCOL',18)}{C['RST']} {C['WHITE']}V2RAY-DNS{C['RST']}",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',18)}{C['RST']} expires {exp_color(e)}",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',18)}{C['RST']} {C['WHITE']}{q} GB{C['RST']}","%SEP%",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}UUID{C['RST']}",f"   {C['GREEN']}{u}{C['RST']}","%SEP%",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
+           f"   {C['YELLOW']}[1] Direct VLESS TCP (5401){C['RST']}",f"%FREE%   vless://{u}@{dom}:5401?security=none&type=tcp&encryption=none&host={dom}#{user}-V2RAY-DNS","",
+           f"   {C['YELLOW']}[2] Via SlowDNS NV4 (5354){C['RST']}",
+           f"%FREE%   {C['WHITE']}Public Key :{C['RST']} {pub}",f"   {C['WHITE']}NameServer :{C['RST']} {nv4}","%SEP%"]
     else: L=["%SEP%",f" {C['WHITE']}Details not available{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
 
