@@ -260,7 +260,7 @@ def write_meta(user, proto, exp, limit="", passwd="", uuid="", quota=""):
 def valid_name(name): return bool(re.match(r'^[a-zA-Z0-9._-]{1,32}$', name))
 def exp_in_days(days): return (date.today() + timedelta(days=days)).isoformat()
 def gen_uuid(): return str(_uuid.uuid4())
-def gen_pass(n=12): return sh(f"openssl rand -base64 {n} | tr -d '=/+' | head -c {n}") or "Kighmu2026!"
+def gen_pass(n=12): return sh(f"openssl rand -base64 {n} | tr -d '=/+' | head -c {n}") or sh(f"head -c {n} /dev/urandom | base64 | tr -d '=/+' | head -c {n}") or "Kighmu2026!"
 def is_locked(user): return _meta_get(user, "locked") == "1"
 
 # User CRUD
@@ -488,7 +488,7 @@ def uninstall_ssl_tls():
 def install_sshws():
     if sh("command -v sshws 2>/dev/null") != "": return
     sh("apt-get install -y -qq curl 2>/dev/null")
-    sh("curl -LO 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null")
+    sh("curl -L 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null")
     svc = """[Unit]
 Description=SSHWS Slipstream Tunnel
 After=network.target
@@ -516,7 +516,7 @@ def install_badvpn():
     sh("cd /tmp && rm -rf badvpn && git clone --depth 1 https://github.com/ambrop72/badvpn.git 2>/dev/null")
     sh("cd /tmp/badvpn && mkdir -p build && cd build && cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null 2>&1 && make -j$(nproc) >/dev/null 2>&1 && cp udpgw/badvpn-udpgw /usr/local/bin/ && chmod +x /usr/local/bin/badvpn-udpgw")
     for port in ["7100","7200","7300"]:
-        svc = f"""{{Unit]
+        svc = f"""[Unit]
 Description=BadVPN UDPGW {port}
 After=network.target
 [Service]
@@ -528,7 +528,7 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 """
-        Path(f"/etc/systemd/system/badvpn@{port}.service").write_text(svc.replace("{","["))
+        Path(f"/etc/systemd/system/badvpn@{port}.service").write_text(svc)
     sh("systemctl daemon-reload 2>/dev/null || true")
     for port in ["7100","7200","7300"]: sh(f"systemctl enable --now badvpn@{port}.service 2>/dev/null || true")
     _deploy_nft("badvpn", 'table inet badvpn { chain input { type filter hook input priority 0; policy accept; tcp dport {7100,7200,7300} accept; }; }')
@@ -1856,7 +1856,7 @@ def show_detail_screen(mode,proto,user,**kw):
            f"   {C['YELLOW']}[1] TLS/WS{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=ws&path=/trojan&host={dom}&sni={dom}#{user}","",
            f"   {C['YELLOW']}[2] NTLS/WS{C['RST']}",f"%FREE%   trojan://{p}@{dom}:8880?security=none&type=ws&path=/trojan&host={dom}#{user}","",
            f"   {C['YELLOW']}[3] TLS/XHTTP{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=xhttp&path=/trojan-xhttp&host={dom}&sni={dom}#{user}","",
-           f"   {C['YELLOW']}[4] TLS/HTTPUpgrade{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host={dom}&sni={dom}#{user}","",
+            f"   {C['GRAY']}[4] TLS/HTTPUpgrade (coming soon){C['RST']}",f"%FREE%   {C['GRAY']}Not yet available in HAProxy config{C['RST']}","",
            f"   {C['YELLOW']}[5] TLS/gRPC{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni={dom}#{user}","",
            f"   {C['YELLOW']}[6] NTLS/TCP{C['RST']}",f"%FREE%   trojan://{p}@{dom}:8880?security=none&type=tcp#{user}","",
            f"   {C['YELLOW']}[7] TLS/TCP{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=tcp&sni={dom}#{user}","%SEP%"]
