@@ -1337,8 +1337,8 @@ WantedBy=multi-user.target
 """
         Path("/etc/systemd/system/v2ray.service").write_text(v2svc)
     sh("rm -rf /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
-    v2raydns_apply()
     sh("systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true")
+    v2raydns_apply()
     if sh("systemctl is-active v2ray 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ V2ray-DNS installé et actif (port 5401).{C['RST']}")
     else:
