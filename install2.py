@@ -294,7 +294,9 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
     exp = exp_in_days(days); uuid = ""; proto = proto.lower()
     if proto == "ssh":
         if sh(f"id {user} 2>/dev/null"): return 2
-        if sh(f"useradd -M -s /usr/sbin/nologin -e {exp} {user} 2>/dev/null") and not sh(f"id {user} 2>/dev/null"): return 3
+        sh(f"userdel -r {user} 2>/dev/null || true")
+        sh(f"useradd -m -s /bin/bash -e {exp} {user} 2>/dev/null")
+        if not sh(f"id {user} 2>/dev/null"): return 3
         passwd = passwd or gen_pass()
         sh(f"echo '{user}:{passwd}' | chpasswd 2>/dev/null")
         write_meta(user, "ssh", exp, limit, passwd, "", quota)
@@ -345,12 +347,21 @@ def _reload_passwords(config_path, service, proto):
     if not config.exists(): return
     pws = _active_passwords(proto)
     if not pws: pws = ["zi"]
+    tmp = config.with_suffix(".json.tmp")
     try:
         data = json.loads(config.read_text())
         data.setdefault("auth", {})["config"] = pws
-        config.write_text(json.dumps(data, indent=2))
-        sh(f"systemctl restart {service} 2>/dev/null || true")
-    except: pass
+        tmp.write_text(json.dumps(data, indent=2))
+        ok = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
+        if ok:
+            tmp.replace(config)
+            sh(f"systemctl restart {service} 2>/dev/null || true")
+        else:
+            print(f" {C['RED']}✗ {service}: JSON invalide, annulé{C['RST']}")
+            tmp.unlink(missing_ok=True)
+    except Exception as e:
+        print(f" {C['RED']}✗ {service}: {e}{C['RST']}")
+        tmp.unlink(missing_ok=True)
 
 def zivpn_apply():
     _reload_passwords("/etc/zivpn/config.json", "zivpn", "zivpn")
@@ -376,14 +387,23 @@ def v2raydns_apply():
             q = float(_meta_get(f.name, "quota") or "0")
             clients.append({"id": uuid, "email": f.name, "level": 0, "quota": q})
     USERS_JSON.write_text(json.dumps({"vless": clients}, indent=2))
+    tmp = V2RAY_CONFIG.with_suffix(".json.tmp")
     try:
         data = json.loads(V2RAY_CONFIG.read_text())
         for ib in data.get("inbounds", []):
             if ib.get("tag") == "VLESS-TCP":
                 ib["settings"]["clients"] = clients; break
-        V2RAY_CONFIG.write_text(json.dumps(data, indent=2))
-    except: pass
-    sh("systemctl restart v2ray 2>/dev/null || true")
+        tmp.write_text(json.dumps(data, indent=2))
+        ok = sh(f"/usr/local/bin/v2ray test -config {tmp} >/dev/null 2>&1 && echo OK")
+        if ok:
+            tmp.replace(V2RAY_CONFIG)
+            sh("systemctl restart v2ray 2>/dev/null || true")
+        else:
+            print(f" {C['RED']}✗ v2raydns: config invalide, annulé{C['RST']}")
+            tmp.unlink(missing_ok=True)
+    except:
+        print(f" {C['RED']}✗ v2raydns: erreur écriture config{C['RST']}")
+        tmp.unlink(missing_ok=True)
 
 # ── Protocol install/uninstall functions (self-contained) ────────────────
 def _ensure_nft_base():
@@ -419,9 +439,12 @@ def _deploy_nft(name, nft_src):
     _ensure_nft_base()
     Path("/etc/nftables").mkdir(parents=True, exist_ok=True)
     Path(f"/etc/nftables/{name}.nft").write_text(nft_src)
-    if sh(f"nft -c -f /etc/nftables/{name}.nft 2>/dev/null") == "":
+    ok = sh(f"nft -c -f /etc/nftables/{name}.nft 2>/dev/null && echo OK")
+    if ok:
         sh(f"systemctl enable --now nftables-tunnel@{name}.service 2>/dev/null || true")
         sh(f"systemctl restart nftables-tunnel@{name}.service 2>/dev/null || true")
+    else:
+        print(f" {C['RED']}✗ nftables {name}: règle invalide, ignorée.{C['RST']}")
 
 def _remove_nft(name):
     sh(f"systemctl disable --now nftables-tunnel@{name}.service 2>/dev/null || true")
@@ -453,22 +476,15 @@ def _ensure_nat_catchall():
     iface = get_main_iface()
     has4 = has_ipv4()
     has6 = has_ipv6()
-    EXCL = "{ 53, 5300, 5353-5354, 5667, 6000-50000 }"
     families = []
     if has4: families.append("ip")
     if has6: families.append("ip6")
-    for family in families:
-        tbl = f"{family} nat"
-        sh(f"nft add table {tbl} 2>/dev/null || true")
-        sh(f"nft add chain {tbl} PREROUTING '{{ type nat hook prerouting priority dstnat; policy accept; }}' 2>/dev/null || true")
-        sh(f"nft flush chain {tbl} PREROUTING 2>/dev/null || true")
-        sh(f"nft add rule {tbl} PREROUTING iifname \"{iface}\" udp dport != {EXCL} counter dnat to :36712 2>/dev/null || true")
     nft_src_parts = []
     for family in families:
         nft_src_parts.append(f"""table {family} nat {{
     chain PREROUTING {{
         type nat hook prerouting priority dstnat; policy accept;
-        iifname "{iface}" udp dport != {EXCL} counter dnat to :36712
+        iifname "{iface}" udp dport {{ 2900-5600 }} counter dnat to :36712
     }}
 }}""")
     nft_src = "\n".join(nft_src_parts)
@@ -526,12 +542,18 @@ def install_dropbear():
     Path("/etc/dropbear").mkdir(parents=True, exist_ok=True)
     for key in ["rsa","ecdsa","ed25519"]: sh(f"/usr/local/bin/dropbearkey -t {key} -f /etc/dropbear/dropbear_{key}_host_key >/dev/null 2>&1 || true")
     Path("/etc/dropbear/banner.txt").write_text("Bienvenue sur Kighmu - Connexion autorisee\n")
+    dropbear_cfg = """Ciphers aes128-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com
+Macs hmac-sha2-256,hmac-sha2-512,hmac-sha1
+KexAlgorithms curve25519-sha256,diffie-hellman-group14-sha256,diffie-hellman-group16-sha512,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521
+HostKeyAlgorithms ssh-ed25519,ssh-rsa,ecdsa-sha2-nistp256
+"""
+    Path("/etc/dropbear/config").write_text(dropbear_cfg)
     svc = """[Unit]
 Description=Dropbear Custom (port 109)
 After=network-online.target
 [Service]
 Type=simple
-ExecStart=/usr/local/sbin/dropbear -F -E -p 109 -w -g -b /etc/dropbear/banner.txt -R
+ExecStart=/usr/local/sbin/dropbear -F -E -p 109 -b /etc/dropbear/banner.txt -R
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -543,7 +565,9 @@ WantedBy=multi-user.target
     _deploy_nft("dropbear", 'table inet dropbear { chain input { type filter hook input priority 0; policy accept; tcp dport 109 accept; }; }')
     if sh("systemctl is-active dropbear-custom.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ Dropbear installé et actif (port 109).{C['RST']}")
-    else: print(f" {C['RED']}✗ Dropbear: échec démarrage.{C['RST']}")
+    else:
+        print(f" {C['RED']}✗ Dropbear: échec démarrage.{C['RST']}")
+        sh("journalctl -u dropbear-custom.service -n 20 --no-pager")
 
 def uninstall_dropbear():
     sh("systemctl disable --now dropbear-custom.service 2>/dev/null || true")
@@ -704,7 +728,7 @@ def install_badvpn():
     sh("cd /tmp && rm -rf badvpn && git clone --depth 1 https://github.com/ambrop72/badvpn.git 2>/dev/null")
     sh("cd /tmp/badvpn && mkdir -p build && cd build && cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null 2>&1 && make -j$(nproc) >/dev/null 2>&1 && cp udpgw/badvpn-udpgw /usr/local/bin/ && chmod +x /usr/local/bin/badvpn-udpgw")
     for port in ["7100","7200","7300"]:
-        svc = f"""[Unit]
+        Path(f"/etc/systemd/system/badvpn-{port}.service").write_text(f"""[Unit]
 Description=BadVPN UDPGW {port}
 After=network.target
 [Service]
@@ -715,16 +739,15 @@ RestartSec=2
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
-"""
-        Path(f"/etc/systemd/system/badvpn@{port}.service").write_text(svc)
+""")
     sh("systemctl daemon-reload 2>/dev/null || true")
-    for port in ["7100","7200","7300"]: sh(f"systemctl enable --now badvpn@{port}.service 2>/dev/null || true")
+    for port in ["7100","7200","7300"]: sh(f"systemctl enable --now badvpn-{port}.service 2>/dev/null || true")
     _deploy_nft("badvpn", 'table inet badvpn { chain input { type filter hook input priority 0; policy accept; tcp dport {7100,7200,7300} accept; }; }')
     print(f" {C['GREEN']}✔ BadVPN installé (ports 7100,7200,7300).{C['RST']}")
 
 def uninstall_badvpn():
-    for port in ["7100","7200","7300"]: sh(f"systemctl disable --now badvpn@{port}.service 2>/dev/null || true")
-    for port in ["7100","7200","7300"]: Path(f"/etc/systemd/system/badvpn@{port}.service").unlink(missing_ok=True)
+    for port in ["7100","7200","7300"]: sh(f"systemctl disable --now badvpn-{port}.service 2>/dev/null || true")
+    for port in ["7100","7200","7300"]: Path(f"/etc/systemd/system/badvpn-{port}.service").unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/badvpn-udpgw 2>/dev/null || true"); _remove_nft("badvpn"); sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ BadVPN désinstallé.{C['RST']}")
 
@@ -735,15 +758,17 @@ def install_udp_custom():
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement udp-custom.{C['RST']}");return
     Path("/etc/udp-custom").mkdir(parents=True, exist_ok=True)
-    Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","mtu":1500,"max_clients":1000}')
+    Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","exclude_port":[53,5300,5667,5354,5353,20000,4466],"timeout":600,"auth":{"mode":"passwords","config":[]}}')
+    Path("/etc/udp-custom/users.list").touch()
+    Path("/etc/udp-custom/users.list").chmod(0o600)
     svc = """[Unit]
 Description=UDP Custom
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/udp-custom -config /etc/udp-custom/config.json
+ExecStart=/usr/local/bin/udp-custom server -c /etc/udp-custom/config.json
 Restart=always
-RestartSec=2
+RestartSec=5
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
@@ -751,10 +776,14 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/udp-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
     iface = get_main_iface()
-    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority dstnat; policy accept; iifname "{iface}" udp dport != {{ 53, 5300, 5353-5354, 5667, 6000-50000 }} dnat to :36712; }}; }}')
+    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 53 return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
     if sh("systemctl is-active udp-custom.service 2>/dev/null")=="active":
-        print(f" {C['GREEN']}✔ UDP-Custom installé et actif.{C['RST']}")
-    else: print(f" {C['RED']}✗ UDP-Custom: échec démarrage.{C['RST']}")
+        IP = sh("hostname -I | awk '{print $1}'")
+        print(f" {C['GREEN']}✔ UDP-Custom installé et actif sur {IP}:36712{C['RST']}")
+        print(f" {C['YELLOW']}⚠ Auth activée — ajoutez des utilisateurs via le menu SSH{C['RST']}")
+    else:
+        print(f" {C['RED']}✗ UDP-Custom: échec démarrage.{C['RST']}")
+        sh("journalctl -u udp-custom.service -n 20 --no-pager")
 
 def uninstall_udp_custom():
     sh("systemctl disable --now udp-custom.service 2>/dev/null || true")
@@ -788,7 +817,7 @@ def install_slowdns():
     (DIR / "server.key").write_text(priv_hex + "\n")
     (DIR / "server.pub").write_text(pub_hex + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
-    sh("curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
+    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/dnstt-server' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
     domain = _ensure_domain() or get_ip()
     ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null")
     nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null")
@@ -839,10 +868,14 @@ def read_domain(f):
     try: return open(f).read().strip().rstrip(".")
     except: return ""
 
-ROUTES = [(read_domain(NS4_FILE), NS4_BACKEND), (read_domain(NV4_FILE), NV4_BACKEND)]
+def load_routes():
+    return [(read_domain(NS4_FILE), NS4_BACKEND), (read_domain(NV4_FILE), NV4_BACKEND)]
+
+ROUTES = load_routes()
 
 sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+sock.settimeout(30)
 sock.bind(("", LISTEN))
 
 def parse_qname(pkt):
@@ -881,13 +914,14 @@ def handle(conn, data, addr):
         return
     for domain, backend in ROUTES:
         if match_domain(qname, domain):
-            bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            bc.settimeout(TIMEOUT)
             try:
+                bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                bc.settimeout(TIMEOUT)
                 h, p = backend.split(":", 1)
                 bc.sendto(data, (h, int(p)))
                 resp, _ = bc.recvfrom(4096)
                 conn.sendto(resp, addr)
+                bc.close()
             except socket.timeout:
                 sys.stderr.write("[slowdns] timeout %s->%s from %s\\n" % (domain, backend, addr[0]))
                 send_refused(conn, addr, data)
@@ -895,21 +929,35 @@ def handle(conn, data, addr):
                 sys.stderr.write("[slowdns] error %s->%s: %s\\n" % (domain, backend, e))
                 send_refused(conn, addr, data)
             finally:
-                bc.close()
+                try: bc.close()
+                except: pass
             return
     sys.stderr.write("[slowdns] no route for %s from %s\\n" % (qname, addr[0]))
     send_refused(conn, addr, data)
 
-for d, b in ROUTES:
-    sys.stderr.write("  route %s -> %s\\n" % (d, b))
+def reload_routes(signum=None, frame=None):
+    global ROUTES
+    ROUTES = load_routes()
+    for d, b in ROUTES:
+        sys.stderr.write("  reloaded route %s -> %s\\n" % (d, b))
+    sys.stderr.flush()
+
+signal.signal(signal.SIGTERM, lambda *_: exit(0))
+signal.signal(signal.SIGHUP, reload_routes)
+
+reload_routes()
 sys.stderr.write("slowdns-router on %s\\n" % LISTEN)
 sys.stderr.flush()
-signal.signal(signal.SIGTERM, lambda *_: exit(0))
 
 while True:
     try:
         data, addr = sock.recvfrom(4096)
-        threading.Thread(target=handle, args=(sock, data, addr), daemon=True).start()
+        t = threading.Thread(target=handle, args=(sock, data, addr), daemon=True)
+        t.start()
+    except socket.timeout:
+        continue
+    except OSError:
+        continue
     except Exception:
         continue
 """
@@ -1143,7 +1191,6 @@ def xray_build_config():
     try:
         config = json.loads(XRAY_CONFIG.read_text())
         users = json.loads(XRAY_USERS.read_text()) if XRAY_USERS.exists() else {}
-        # Sanitize: convert uuid→id (legacy panel bug)
         for p in ["vmess","vless","trojan","shadow"]:
             for u in users.get(p, []):
                 if "uuid" in u and "id" not in u:
@@ -1178,9 +1225,17 @@ def xray_build_config():
                     elif "password" in u:
                         clients.append({"password":u["password"],"level":0,"email":u.get("email","")})
                 inbound["settings"]["clients"] = clients
-        XRAY_CONFIG.write_text(json.dumps(config, indent=2))
-    except: pass
-    sh("systemctl restart xray 2>/dev/null || true")
+        tmp = XRAY_CONFIG.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(config, indent=2))
+        ok = sh(f"/usr/local/bin/xray test -config {tmp} >/dev/null 2>&1 && echo OK")
+        if ok:
+            tmp.replace(XRAY_CONFIG)
+            sh("systemctl restart xray 2>/dev/null || true")
+        else:
+            print(f" {C['RED']}✗ xray: config invalide après build, annulé{C['RST']}")
+            tmp.unlink(missing_ok=True)
+    except Exception as e:
+        print(f" {C['RED']}✗ xray_build_config: {e}{C['RST']}")
 
 def xray_add_user(proto, user, cred, exp, quota):
     XRAY_USERS.parent.mkdir(parents=True, exist_ok=True)
