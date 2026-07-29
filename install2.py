@@ -394,15 +394,15 @@ def v2raydns_apply():
             if ib.get("tag") == "VLESS-TCP":
                 ib["settings"]["clients"] = clients; break
         tmp.write_text(json.dumps(data, indent=2))
-        ok = sh(f"/usr/local/bin/v2ray test -config {tmp} >/dev/null 2>&1 && echo OK")
-        if ok:
+        valid = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
+        if valid:
             tmp.replace(V2RAY_CONFIG)
             sh("systemctl restart v2ray 2>/dev/null || true")
         else:
-            print(f" {C['RED']}✗ v2raydns: config invalide, annulé{C['RST']}")
+            print(f" {C['RED']}✗ v2raydns: JSON invalide, annulé{C['RST']}")
             tmp.unlink(missing_ok=True)
-    except:
-        print(f" {C['RED']}✗ v2raydns: erreur écriture config{C['RST']}")
+    except Exception as e:
+        print(f" {C['RED']}✗ v2raydns: {e}{C['RST']}")
         tmp.unlink(missing_ok=True)
 
 # ── Protocol install/uninstall functions (self-contained) ────────────────
