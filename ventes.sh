@@ -9,6 +9,13 @@ set -Eeuo pipefail
 IFS=$' \t\n'
 # shellcheck disable=SC2312
 
+# ── Auto-install ───────────────────────────────────────────────────────────────
+if [[ "$(readlink -f "$0")" != "/usr/local/bin/ventes" ]]; then
+    cp "$0" /usr/local/bin/ventes
+    chmod 700 /usr/local/bin/ventes
+    exec /usr/local/bin/ventes "$@"
+fi
+
 # ── Protection anti-copie / anti-débogage ─────────────────────────────────────
 _secure_init() {
     if [[ -f /proc/self/status ]]; then
