@@ -2096,10 +2096,11 @@ def _verify_license():
                 conn.close()
             except: pass
     for _ in range(3):
-        clear_screen();        print(f"\n  {C['CYAN']}╔════════════════════════════════════════╗{C['RST']}")
-        print(f"  {C['CYAN']}║{C['RST']}     {C['YELLOW']}🔑{C['RST']} {C['WHITE']}VERIFICATION DE LICENCE{C['RST']}      {C['CYAN']}║{C['RST']}")
-        print(f"  {C['CYAN']}║{C['RST']}         {C['WHITE']}KIGHMU PANEL{C['RST']} {C['GREEN']}v3.9.9{C['RST']}         {C['CYAN']}║{C['RST']}")
-        print(f"  {C['CYAN']}╚════════════════════════════════════════╝{C['RST']}\n")
+        clear_screen()
+        print(f"\n  {C['CYAN']}╔═══════════════════════════════════════════╗{C['RST']}")
+        print(f"  {C['CYAN']}║{C['RST']}        {C['YELLOW']}🔑{C['RST']} {C['WHITE']}VERIFICATION DE LICENCE{C['RST']}         {C['CYAN']}║{C['RST']}")
+        print(f"  {C['CYAN']}║{C['RST']}            {C['WHITE']}KIGHMU PANEL{C['RST']} {C['GREEN']}v3.9.9{C['RST']}            {C['CYAN']}║{C['RST']}")
+        print(f"  {C['CYAN']}╚═══════════════════════════════════════════╝{C['RST']}\n")
         print(f"  {C['YELLOW']}Veuillez saisir votre clé de licence :{C['RST']}")
         print(f"  {C['GRAY']}Exemple :{C['RST']} {C['GREEN']}a137726f21f7360a825fd376a3dfe9bd{C['RST']}\n")
         if not db.exists(): print(f"  {C['RED']}⚠{C['RST']} {C['YELLOW']}Aucune base de licence trouvée.{C['RST']}\n  {C['GRAY']}Exécutez d'abord ventes.sh.{C['RST']}\n")
