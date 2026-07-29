@@ -1644,7 +1644,10 @@ def scr_protocol_installer():
     L+=["%SEP%",f" {C['GREEN']}[11]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}{pl[10]}{C['RST']}",
         f" {C['GREEN']}[12]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{pl[11]:<{pw}}{C['RST']}  {C['RED']}[!]{C['RST']}"]
     haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if Path("/etc/xray/config.json").exists() and sh("systemctl is-active haproxy 2>/dev/null") == "active" else f"{C['RED']}[OFF]{C['RST']}"
-    L+=[pil("13",pl[12],st["bot"],pw),"%SEP%",
+    bst = st["bot"]
+    L+=[f" {C['GREEN']}[13]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}INSTALL TELEGRAM BOT{C['RST']}",
+        f" {C['GREEN']}[14]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}UNINSTALL TELEGRAM BOT{C['RST']}" + (f"  {C['GREEN']}[ON]{C['RST']}" if bst else f"  {C['RED']}[OFF]{C['RST']}"),
+        "%SEP%",
         f" {C['YELLOW']}○{C['RST']} {C['GRAY']}Dependencies (auto-installed with Xray):{C['RST']}",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HAProxy{C['RST']} {haproxy_st}          {C['GRAY']}(TLS 443 / NTLS 8880){C['RST']}",
         "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
@@ -1813,6 +1816,7 @@ def menu_protocol_installer():
         if CH in acts: acts[CH]();press_enter()
         elif CH in("11","12"): (install_all_missing if CH=="11" else uninstall_all_active)();press_enter()
         elif CH=="13": install_telegram_bot()
+        elif CH=="14": uninstall_telegram_bot()
         elif CH=="0": return
 
 def menu_update_remove():
