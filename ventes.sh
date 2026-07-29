@@ -1193,7 +1193,7 @@ _header() {
     echo
     echo -e "  ${BLUE}╔══════════════════════════════════════════════════════╗${RST}"
     echo -e "  ${BLUE}║${RST}         ${WHITE}☰ VENTES — Licence Manager ${GRAY}v${VERSION}${RST}${BLUE}            ║${RST}"
-    echo -e "  ${BLUE}║${RST}           ${GRAY}Administration Complète des Licences${RST}${BLUE}         ║${RST}"
+    echo -e "  ${BLUE}║${RST}           ${GRAY}Administration Complète des Licences${RST}${BLUE}       ║${RST}"
     echo -e "  ${BLUE}╚══════════════════════════════════════════════════════╝${RST}"
     echo
 }
