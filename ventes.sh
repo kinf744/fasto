@@ -278,9 +278,22 @@ _apply_schema() {
     "
 }
 
+_auto_restore_db() {
+    [[ -f "$DB" ]] && return 0
+    local latest
+    latest=$(find "$BACKUP_DIR" -name "*.db.gz" -type f -exec stat -c '%Y %n' {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    [[ -z "$latest" || ! -f "$latest" ]] && return 1
+    _warn "Base manquante — restauration depuis $(basename "$latest")..."
+    local tmp; tmp=$(mktemp)
+    gunzip -c "$latest" > "$tmp" 2>/dev/null && cp "$tmp" "$DB" 2>/dev/null && _ok "Base restaurée depuis $(basename "$latest")."
+    rm -f "$tmp"
+    return 0
+}
+
 _init_db() {
     _check_deps
     _init_dirs
+    _auto_restore_db
 
     if [[ ! -f "$DB" ]]; then
         _sql "VACUUM;" 2>/dev/null || true
@@ -1273,6 +1286,8 @@ _menu_backups() {
         echo -e "  ${CYAN} 1${RST}) ${ICON_BACKUP} ${WHITE}Sauvegarder (manuelle)${RST}"
         echo -e "  ${CYAN} 2${RST}) ${ICON_BACKUP} ${WHITE}Sauvegarde quotidienne (auto)${RST}"
         echo -e "  ${CYAN} 3${RST}) ${ICON_BACKUP} ${WHITE}Restaurer une sauvegarde${RST}"
+        echo -e "  ${CYAN} 4${RST}) ${ICON_LOCK} ${WHITE}Installer la persistance (systemd + cron)${RST}"
+        echo -e "  ${CYAN} 5${RST}) ${ICON_DEL} ${WHITE}Désinstaller la persistance${RST}"
         echo -e "  ${CYAN}99${RST}) ${GRAY}Retour${RST}"
         echo
         echo -ne "  ${YELLOW}►${RST} ${WHITE}Choix${RST} : ${RST}" >&2
@@ -1281,6 +1296,8 @@ _menu_backups() {
             1) backup_db "manuel" ;;
             2) daily_backup ;;
             3) restore_backup ;;
+            4) _install_persistence ;;
+            5) _uninstall_persistence ;;
             99) break ;;
             *) _err "Choix invalide."; _press_enter ;;
         esac
@@ -1312,6 +1329,90 @@ _menu_security() {
 # ==============================================================================
 #  CLI — ARGUMENTS DIRECTS
 # ==============================================================================
+
+# ==============================================================================
+#  PERSISTANCE — systemd / cron
+# ==============================================================================
+
+_install_persistence() {
+    echo
+    echo -e "  ${BLUE}═══${RST} ${WHITE}INSTALLER LA PERSISTANCE${RST} ${BLUE}═══${RST}"
+    echo
+
+    # 1. systemd service
+    local svc_name="ventes-backup"
+    local svc_file="/etc/systemd/system/${svc_name}.service"
+    cat > "$svc_file" <<-SVC
+[Unit]
+Description=VENTES License DB Backup
+After=network-online.target
+Before=shutdown.target reboot.target halt.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=$0 --backup
+ExecStop=$0 --backup
+RemainAfterExit=yes
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVC
+    chmod 644 "$svc_file"
+
+    # 2. systemd timer (quotidien)
+    local timer_file="/etc/systemd/system/${svc_name}.timer"
+    cat > "$timer_file" <<-TIMER
+[Unit]
+Description=VENTES Daily Backup Timer
+Requires=${svc_name}.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+TIMER
+    chmod 644 "$timer_file"
+
+    # 3. Cron (double sécurisation)
+    local cron_line="0 4 * * * $0 --backup >/dev/null 2>&1"
+    if ! crontab -l 2>/dev/null | grep -qF "$0 --backup"; then
+        (crontab -l 2>/dev/null; echo "$cron_line") | crontab - 2>/dev/null && _ok "Cron ajouté"
+    fi
+
+    # 4. Protection fichier (immutable)
+    if [[ -f "$DB" ]]; then
+        chmod 600 "$DB"
+        chattr +i "$DB" 2>/dev/null && _ok "Base protégée (immutable)" || _warn "Impossible de rendre immutable (sans effet sur certains FS)"
+    fi
+
+    systemctl daemon-reload 2>/dev/null
+    systemctl enable --now "${svc_name}.timer" 2>/dev/null && _ok "Timer systemd activé"
+    _ok "Persistence installée — sauvegardes automatiques actives"
+    _press_enter
+}
+
+_uninstall_persistence() {
+    echo
+    echo -e "  ${BLUE}═══${RST} ${WHITE}DÉSINSTALLER LA PERSISTANCE${RST} ${BLUE}═══${RST}"
+    echo
+    systemctl disable --now ventes-backup.timer 2>/dev/null || true
+    systemctl disable --now ventes-backup.service 2>/dev/null || true
+    rm -f /etc/systemd/system/ventes-backup.service /etc/systemd/system/ventes-backup.timer
+    crontab -l 2>/dev/null | grep -v "$0 --backup" | crontab - 2>/dev/null || true
+    if [[ -f "$DB" ]]; then
+        chattr -i "$DB" 2>/dev/null || true
+    fi
+    systemctl daemon-reload 2>/dev/null
+    _ok "Persistence désinstallée"
+    _press_enter
+}
 
 cli_help() {
     cat <<-HELP
@@ -1403,6 +1504,8 @@ _main() {
             --restore)      restore_backup; exit 0 ;;
             --check)        system_check; exit 0 ;;
             --integrity)    verify_integrity; exit 0 ;;
+            --persist)      _install_persistence; exit 0 ;;
+            --uninstall-persist) _uninstall_persistence; exit 0 ;;
             --api)          shift; cli_api "$@"; exit 0 ;;
             *)              echo "Option inconnue: $1"; cli_help; exit 1 ;;
         esac

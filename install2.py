@@ -2120,22 +2120,53 @@ def self_install():
     if not ml.exists(): ml.write_text(f"#!/usr/bin/env bash\nexec {dst} \"$@\"\n");ml.chmod(0o755)
 
 # License
+import hashlib, hmac
+
+def _machine_fingerprint():
+    parts=[]
+    try: parts.append(Path("/etc/machine-id").read_text().strip())
+    except: pass
+    try: parts.append(Path("/var/lib/dbus/machine-id").read_text().strip())
+    except: pass
+    try:
+        for l in Path("/sys/class/net").iterdir():
+            mac=(l/"address").read_text().strip() if (l/"address").exists() else ""
+            if mac and mac!="00:00:00:00:00:00": parts.append(mac);break
+    except: pass
+    try: parts.append(sh("hostname").strip())
+    except: pass
+    raw="|".join(parts) if parts else "unknown"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+def _sign_key(key):
+    fp=_machine_fingerprint()
+    return hmac.new(key.encode(),fp.encode(),hashlib.sha256).hexdigest()
+
+def _verify_signature(key,stored_sig):
+    return _sign_key(key)==stored_sig
+
 def _ensure_license_db():
     db=Path("/etc/ventes/ventes.db")
     db.parent.mkdir(parents=True,exist_ok=True)
     conn=sqlite3.connect(str(db));c=conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS licenses (id INTEGER PRIMARY KEY AUTOINCREMENT,uuid TEXT UNIQUE NOT NULL,license_key TEXT UNIQUE NOT NULL,client_name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'ACTIVE',created_at TEXT NOT NULL,expires_at TEXT NOT NULL,activated_at TEXT DEFAULT NULL,last_checkin TEXT DEFAULT NULL)")
+    c.execute("CREATE TABLE IF NOT EXISTS licenses (id INTEGER PRIMARY KEY AUTOINCREMENT,uuid TEXT UNIQUE NOT NULL,license_key TEXT NOT NULL,client_name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'ACTIVE',created_at TEXT NOT NULL,expires_at TEXT NOT NULL,activated_at TEXT DEFAULT NULL,last_checkin TEXT DEFAULT NULL,hw_binding TEXT DEFAULT NULL)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_license_key ON licenses(license_key)")
     c.execute("CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT,timestamp TEXT NOT NULL,action TEXT NOT NULL,license_uuid TEXT DEFAULT NULL,details TEXT DEFAULT '',user TEXT DEFAULT 'admin')")
     conn.commit();return conn,c
 
 def _register_key_in_db(key,client_name="",days=365):
     conn,c=_ensure_license_db()
-    r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
-    if r: conn.close();return r[0],r[1]
+    r=c.execute("SELECT client_name,expires_at,hw_binding FROM licenses WHERE license_key=?",(key,)).fetchone()
+    if r:
+        name,exp,binding=r
+        if binding and not _verify_signature(key,binding):
+            conn.close();return None,None
+        conn.close();return name,exp
     import uuid as _uuid
     uid=str(_uuid.uuid4());exp=(date.today()+timedelta(days=days)).isoformat();name=client_name or "Verified"
+    sig=_sign_key(key)
     try:
-        c.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at,activated_at,last_checkin) VALUES (?,?,?,'ACTIVE',datetime('now'),?,datetime('now'),datetime('now'))",(uid,key,name,exp))
+        c.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at,activated_at,last_checkin,hw_binding) VALUES (?,?,?,'ACTIVE',datetime('now'),?,datetime('now'),datetime('now'),?)",(uid,key,name,exp,sig))
         conn.commit()
     except: conn.rollback()
     conn.close();return name,exp
@@ -2148,9 +2179,17 @@ def _verify_license():
         if sk:
             try:
                 conn,c=_ensure_license_db()
-                r=c.execute("SELECT client_name FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(sk,)).fetchone()
-                if r: nf.write_text(r[0]);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(sk,));conn.commit();conn.close();return
-                name,exp=_register_key_in_db(sk);nf.write_text(name);conn.close();return
+                r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(sk,)).fetchone()
+                if r:
+                    name,binding=r
+                    if binding and not _verify_signature(sk,binding):
+                        kf.unlink(missing_ok=True);conn.close()
+                    else:
+                        nf.write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(sk,));conn.commit();conn.close();return
+                conn.close()
+                name,exp=_register_key_in_db(sk)
+                if name: nf.write_text(name);return
+                kf.unlink(missing_ok=True)
             except: pass
     for _ in range(3):
         clear_screen()
@@ -2164,10 +2203,14 @@ def _verify_license():
         if key=="KIGHMU_MASTER_2026": print(f"  {C['GREEN']}✓ Mode maître.{C['RST']}");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text("ADMIN");return
         try:
             conn,c=_ensure_license_db()
-            r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
-            if r: print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{r[0]}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{r[1]}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(r[0]);return
+            r=c.execute("SELECT client_name,expires_at,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
+            if r:
+                name,exp,binding=r
+                if binding and not _verify_signature(key,binding): print(f"\n  {C['RED']}✗ Cette clé est liée à une autre machine.{C['RST']}\n");input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}");continue
+                print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
             conn.close()
-            name,exp=_register_key_in_db(key);print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
+            name,exp=_register_key_in_db(key)
+            if name: print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
         except: pass
         print(f"\n  {C['RED']}✗ Clé invalide. ({2-_} tentatives restantes){C['RST']}\n")
         if _<2: input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}")
@@ -2180,8 +2223,11 @@ def _license_watchdog():
     if not key or key=="KIGHMU_MASTER_2026": return
     try:
         conn,c=_ensure_license_db()
-        r=c.execute("SELECT client_name FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
-        if r: Path("/etc/kighmu/.client_name").write_text(r[0]);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit()
+        r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
+        if r:
+            name,binding=r
+            if binding and not _verify_signature(key,binding): kf.unlink(missing_ok=True);conn.close();return
+            Path("/etc/kighmu/.client_name").write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit()
         conn.close()
     except: pass
 
