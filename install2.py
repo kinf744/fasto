@@ -1484,8 +1484,6 @@ def _auto_uninstall_all():
     sh("nft flush ruleset 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
-    print(f" {C['YELLOW']}Prochaine installation sera comme la première fois.{C['RST']}")
-    print(f" {C['GREEN']}bash <(curl -sL https://github.com/kinf744/fasto/raw/main/install.sh){C['RST']}\n")
     sh("pkill -f kighmu 2>/dev/null || true")
     os._exit(0)
 
@@ -2130,7 +2128,7 @@ def _verify_license():
         if sk and db.exists():
             try:
                 conn=sqlite3.connect(str(db));c=conn.cursor()
-                r=c.execute("SELECT client_name FROM licenses WHERE license_key=? AND status='ACTIVE' AND (expires_at>=date('now') OR expires_at='9999-12-31')",(sk,)).fetchone()
+                r=c.execute("SELECT client_name FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(sk,)).fetchone()
                 if r: nf.write_text(r[0]);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(sk,));conn.commit();conn.close();return
                 conn.close()
             except: pass
@@ -2148,7 +2146,7 @@ def _verify_license():
         if db.exists():
             try:
                 conn=sqlite3.connect(str(db));c=conn.cursor()
-                r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=? AND status='ACTIVE' AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
+                r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
                 if r: print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{r[0]}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{r[1]}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(r[0]);return
                 conn.close()
             except: pass
@@ -2164,7 +2162,7 @@ def _license_watchdog():
     if not db.exists(): _auto_uninstall_all();return
     try:
         conn=sqlite3.connect(str(db));c=conn.cursor()
-        r=c.execute("SELECT status,client_name FROM licenses WHERE license_key=? AND status='ACTIVE' AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
+        r=c.execute("SELECT status,client_name FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
         if r: Path("/etc/kighmu/.client_name").write_text(r[1]);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit()
         else: _auto_uninstall_all()
         conn.close()
