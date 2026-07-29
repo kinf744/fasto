@@ -2047,7 +2047,7 @@ def proto_action(title, install_fn, uninstall_fn, configure_fn=None):
     if configure_fn:
         print(f"   {C['YELLOW']}3{C['RST']}) Configure")
     print(f"   {C['GRAY']}0{C['RST']}) Back")
-    a = input(f"\n {C['YELLOW']}►{C['RST']} Choice: ").strip()
+    a = input(f"\n {C['YELLOW']}►{C['RST']} Choice: ").strip().translate({c:None for c in range(32)})
     if a == "1": install_fn()
     elif a == "2": uninstall_fn()
     elif a == "3" and configure_fn: configure_fn()
