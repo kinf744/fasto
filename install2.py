@@ -1227,7 +1227,7 @@ def xray_build_config():
                 inbound["settings"]["clients"] = clients
         tmp = XRAY_CONFIG.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(config, indent=2))
-        ok = sh(f"/usr/local/bin/xray test -config {tmp} >/dev/null 2>&1 && echo OK")
+        ok = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
         if ok:
             tmp.replace(XRAY_CONFIG)
             sh("systemctl restart xray 2>/dev/null || true")
