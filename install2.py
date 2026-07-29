@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Kighmu Panel - VPS Management (Python port of install2.sh)"""
 
-import os, sys, json, subprocess, sqlite3, re, asyncio, logging, base64
+import os, sys, json, subprocess, sqlite3, re, asyncio, logging, base64, signal
 import uuid as _uuid, time, shutil, pathlib, socket, hashlib, secrets
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -3107,7 +3107,12 @@ def run_reseller_bot(rid):
     app.add_handler(CallbackQueryHandler(callback_handler_reseller))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler_reseller))
     log.info(f"Reseller Bot #{rid} started");app.run_polling(allowed_updates=Update.ALL_TYPES)
+def _sigint_handler(sig, frame):
+    sys.stdout.write("\n")
+    sys.exit(0)
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, _sigint_handler)
     logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
     if len(sys.argv) > 1:
         arg = sys.argv[1]
