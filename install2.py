@@ -548,8 +548,22 @@ def uninstall_dropbear():
     sh("rm -rf /etc/dropbear /usr/local/sbin/dropbear /usr/local/bin/dropbear* 2>/dev/null || true")
     _remove_nft("dropbear"); sh("systemctl daemon-reload 2>/dev/null || true")
 
+def _ensure_domain():
+    df = Path("/etc/kighmu/domain.txt")
+    if not df.parent.exists(): df.parent.mkdir(parents=True)
+    cur = df.read_text().strip() if df.exists() else ""
+    if not cur:
+        print(f"\n {C['YELLOW']}⚠ No domain configured yet.{C['RST']}")
+        dom = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Enter domain (e.g. vpn.example.com): {C['RST']}").strip()
+        while not dom: dom = input(f" {C['RED']}✗{C['RST']} Domain required: ").strip()
+        df.write_text(dom + "\n")
+        print(f" {C['GREEN']}✔ Domain saved: {dom}{C['RST']}\n")
+        return dom
+    return cur
+
 def install_ssl_tls():
     if sh("command -v ssl_tls 2>/dev/null") != "": return
+    _ensure_domain()
     sh("apt-get install -y -qq curl file 2>/dev/null")
     sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null")
     svc = """[Unit]
@@ -575,6 +589,7 @@ def uninstall_ssl_tls():
 
 def install_sshws():
     if sh("command -v sshws 2>/dev/null") != "": return
+    _ensure_domain()
     sh("apt-get install -y -qq curl 2>/dev/null")
     sh("curl -L 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null")
     svc = """[Unit]
