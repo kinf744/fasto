@@ -1161,7 +1161,7 @@ def install_xray():
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
     if sh("command -v xray 2>/dev/null") == "":
         print(f" {C['YELLOW']}► Installation de Xray...{C['RST']}")
-        r=sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>&1")
+        r=sh("curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh | bash 2>&1")
         if "success" not in r.lower() and sh("command -v xray 2>/dev/null") == "":
             print(f" {C['RED']}✗ Échec installation Xray: téléchargement impossible.{C['RST']}")
             print(f" {C['YELLOW']}► Vérifiez votre connexion Internet ou installez Xray manuellement.{C['RST']}")
@@ -1279,7 +1279,7 @@ def install_v2ray():
     if sh("command -v v2ray 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ V2ray déjà installé.{C['RST']}");return
     _ensure_domain()
-    sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)' 2>/dev/null || true")
+    sh("curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash 2>/dev/null || true")
     if sh("command -v v2ray 2>/dev/null") == "":
         print(f" {C['RED']}✗ Échec installation V2ray.{C['RST']}");return
     V2RAY_CONFIG = Path("/etc/v2ray/config.json")
