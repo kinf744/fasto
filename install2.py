@@ -1397,9 +1397,21 @@ WantedBy=multi-user.target
 
 def uninstall_telegram_bot():
     sh("systemctl stop kighmu-bot 2>/dev/null || true; systemctl disable kighmu-bot 2>/dev/null || true")
-    for f in ["/etc/systemd/system/kighmu-bot.service","/usr/local/bin/kighmu-bot"]: Path(f).unlink(missing_ok=True)
-    sh("rm -rf /etc/kighmu/bot 2>/dev/null || true")
+    sh("systemctl stop kighmu-reseller-* 2>/dev/null || true; systemctl disable kighmu-reseller-* 2>/dev/null || true")
+    for f in Path("/etc/systemd/system").glob("kighmu-reseller-*.service"):
+        f.unlink(missing_ok=True)
+    for f in ["/etc/systemd/system/kighmu-bot.service","/usr/local/bin/kighmu-bot"]:
+        Path(f).unlink(missing_ok=True)
+    sh("rm -rf /etc/kighmu/bot /var/log/kighmu-bot.log 2>/dev/null || true")
+    sh("pkill -f 'kighmu.*--bot' 2>/dev/null || true; pkill -f 'kighmu.*--reseller-bot' 2>/dev/null || true")
+    existing = sh("crontab -l 2>/dev/null")
+    for pat in ["kighmu-bot","reseller-cleanup"]:
+        if pat in existing:
+            sh(f'(crontab -l 2>/dev/null | grep -v "{pat}" | crontab - 2>/dev/null) || true')
+    sh("pip3 uninstall python-telegram-bot -y --break-system-packages 2>/dev/null || pip3 uninstall python-telegram-bot -y 2>/dev/null || true")
     sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ Telegram Bot complètement désinstallé{C['RST']}")
+    press_enter()
 
 # ── Update functions ──────────────────────────────────────────────────────────
 def upd_check():
