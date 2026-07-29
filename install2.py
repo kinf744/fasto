@@ -696,18 +696,17 @@ def install_slowdns():
     (DIR / "server.pub").write_text(pub_hex + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
     sh("curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
-    domain = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or get_ip()
-    # BUGFIX: ns4/nv4 must be read from ns.conf files, NOT auto-generated from domain.
-    # Previously: ns4 = "ns4."+domain → produced "ns4.vlo.kingom.ggff.net" when domain was
-    # "vlo.kingom.ggff.net". But user's Cloudflare NS records are at the APEX
-    # ("ns4.kingom.ggff.net"). Each user has different NS values, so never hardcode.
-    # Fallback now uses apex domain (last 2 labels) if ns.conf missing.
+    domain = _ensure_domain() or get_ip()
     ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null")
     nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null")
-    if not ns4 or not nv4:
-        apex = ".".join(domain.split(".")[-2:]) if len(domain.split(".")) > 2 else domain
-        if not ns4: ns4 = "ns4." + apex
-        if not nv4: nv4 = "nv4." + apex
+    if not ns4:
+        print(f"\n {C['YELLOW']}⚠ NS4 subdomain not configured.{C['RST']}")
+        default_ns4 = "ns4." + ".".join(domain.split(".")[-2:]) if len(domain.split(".")) > 2 else "ns4." + domain
+        ns4 = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}NS4 subdomain (e.g. {default_ns4}): {C['RST']}").strip() or default_ns4
+    if not nv4:
+        print(f"\n {C['YELLOW']}⚠ NV4 subdomain not configured.{C['RST']}")
+        default_nv4 = "nv4." + ".".join(domain.split(".")[-2:]) if len(domain.split(".")) > 2 else "nv4." + domain
+        nv4 = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}NV4 subdomain (e.g. {default_nv4}): {C['RST']}").strip() or default_nv4
     (DIR / "ns.conf").write_text(ns4 + "\n")
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     # dnstt-server start scripts
@@ -1104,7 +1103,7 @@ def xray_reload():
 
 def install_xray():
     if sh("command -v xray 2>/dev/null") != "": return
-    DOMAIN = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or get_ip()
+    DOMAIN = _ensure_domain() or get_ip()
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
     if sh("command -v xray 2>/dev/null") == "":
         sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>/dev/null || true")
@@ -1207,6 +1206,7 @@ def uninstall_xray():
 
 def install_v2ray():
     if sh("command -v v2ray 2>/dev/null") != "": return
+    _ensure_domain()
     sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)' 2>/dev/null || true")
     V2RAY_CONFIG = Path("/etc/v2ray/config.json")
     V2RAY_CONFIG.parent.mkdir(parents=True, exist_ok=True)
@@ -1249,7 +1249,7 @@ def install_hysteria():
     if sh("command -v hysteria-linux-amd64 2>/dev/null") != "": return
     sh("curl -fsSL 'https://github.com/apernet/hysteria/releases/download/v1.3.4/hysteria-linux-amd64' -o /usr/local/bin/hysteria-linux-amd64 2>/dev/null && chmod +x /usr/local/bin/hysteria-linux-amd64 2>/dev/null")
     Path("/etc/hysteria").mkdir(parents=True, exist_ok=True)
-    DOMAIN = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or "hysteria.local"
+    DOMAIN = _ensure_domain() or "hysteria.local"
     sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
     sh("chmod 600 /etc/hysteria/hysteria.key 2>/dev/null; chmod 644 /etc/hysteria/hysteria.crt 2>/dev/null || true")
     hy_cfg = '{\"listen\":\":20000\",\"cert\":\"/etc/hysteria/hysteria.crt\",\"key\":\"/etc/hysteria/hysteria.key\",\"obfs\":\"hysteria\",\"up_mbps\":150,\"down_mbps\":150,\"recv_window_conn\":33554432,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,5667,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
@@ -1291,7 +1291,7 @@ def install_zivpn():
     if sh("command -v zivpn 2>/dev/null") != "": return
     sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-zivpn-linux-amd64' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null")
     Path("/etc/zivpn").mkdir(parents=True, exist_ok=True)
-    DOMAIN = sh("head -1 /etc/kighmu/domain.txt 2>/dev/null") or "zivpn.local"
+    DOMAIN = _ensure_domain() or "zivpn.local"
     sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/zivpn/zivpn.key -out /etc/zivpn/zivpn.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
     sh("chmod 600 /etc/zivpn/zivpn.key 2>/dev/null; chmod 644 /etc/zivpn/zivpn.crt 2>/dev/null || true")
     zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
