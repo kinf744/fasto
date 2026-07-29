@@ -1822,17 +1822,35 @@ def menu_optimize():
         elif CH in("10",): opt_restore()
         elif CH in("0",): return
 
+def proto_action(title, install_fn, uninstall_fn, configure_fn=None):
+    clear_screen()
+    print(f" {C['CYAN']}{title}{C['RST']}\n")
+    print(f"   {C['GREEN']}1{C['RST']}) Install / Repair")
+    print(f"   {C['RED']}2{C['RST']}) Uninstall")
+    if configure_fn:
+        print(f"   {C['YELLOW']}3{C['RST']}) Configure")
+    print(f"   {C['GRAY']}0{C['RST']}) Back")
+    a = input(f"\n {C['YELLOW']}►{C['RST']} Choice: ").strip()
+    if a == "1": install_fn()
+    elif a == "2": uninstall_fn()
+    elif a == "3" and configure_fn: configure_fn()
+    press_enter()
+
 def menu_protocol_installer():
     cleanup_panel_residues()
     while True:
         scr_protocol_installer();CH=input().strip()
-        acts={"1":install_ssh_stack,"01":install_ssh_stack,"2":install_sshws,"02":install_sshws,
-              "3":install_ssl_tls,"03":install_ssl_tls,"4":install_xray,"04":install_xray,
-              "5":install_v2ray,"05":install_v2ray,"6":install_badvpn,"06":install_badvpn,
-              "7":install_udp_custom,"07":install_udp_custom,"8":install_slowdns,"08":install_slowdns,
-              "9":install_hysteria,"09":install_hysteria,"10":install_zivpn}
-        if CH in acts: acts[CH]();press_enter()
-        elif CH in("11","12"): (install_all_missing if CH=="11" else uninstall_all_active)();press_enter()
+        if CH in ("1","01"): proto_action("SSH / DROPBEAR (ports 22 / 109)", install_ssh_stack, uninstall_dropbear)
+        elif CH in ("2","02"): proto_action("WS-EPRO (SSH-WS port 80)", install_sshws, uninstall_sshws)
+        elif CH in ("3","03"): proto_action("SSL/TLS (port 444 → 109)", install_ssl_tls, uninstall_ssl_tls)
+        elif CH in ("4","04"): proto_action("XRAY + HAProxy (443 / 8880 / 9898)", install_xray, uninstall_xray)
+        elif CH in ("5","05"): proto_action("V2RAY-DNS (VLESS TCP 5401)", install_v2ray, uninstall_v2ray)
+        elif CH in ("6","06"): proto_action("BADVPN (UDPGW 7100/7200/7300)", install_badvpn, uninstall_badvpn)
+        elif CH in ("7","07"): proto_action("UDP CUSTOM (36712)", install_udp_custom, uninstall_udp_custom)
+        elif CH in ("8","08"): proto_action("SLOWDNS (5300/5353/5354)", install_slowdns, uninstall_slowdns, configure_slowdns)
+        elif CH in ("9","09"): proto_action("HYSTERIA (20000-50000)", install_hysteria, uninstall_hysteria)
+        elif CH in ("10",): proto_action("ZIVPN (5667 / 6000-19999)", install_zivpn, uninstall_zivpn)
+        elif CH in ("11","12"): (install_all_missing if CH=="11" else uninstall_all_active)();press_enter()
         elif CH=="13": install_telegram_bot()
         elif CH=="14": uninstall_telegram_bot()
         elif CH=="0": return
