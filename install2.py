@@ -2148,6 +2148,7 @@ TOKEN = BOT_CONFIG.get("token", ""); ADMIN_ID = BOT_CONFIG.get("admin_id", 0)
 RESELLER_DB = BOT_DIR / "resellers.db"
 
 def init_reseller_db():
+    RESELLER_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(RESELLER_DB))
     conn.execute("""CREATE TABLE IF NOT EXISTS resellers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
