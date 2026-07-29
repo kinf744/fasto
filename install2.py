@@ -1168,11 +1168,12 @@ def install_xray():
     if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
     ok=_acme_cert(DOMAIN, "/etc/xray")
     if not ok:
-        if not Path("/etc/xray/xray.crt").exists():
-            sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+        print(f" {C['RED']}✗ Xray requiert un certificat Let's Encrypt valide pour {DOMAIN}.{C['RST']}")
+        print(f" {C['YELLOW']}► Vérifiez que votre domaine pointe vers cette IP et que le port 80 est accessible.{C['RST']}")
+        return
     if not Path("/etc/xray/xray.pem").exists():
-        crt=Path("/etc/xray/fullchain.pem") if Path("/etc/xray/fullchain.pem").exists() else Path("/etc/xray/xray.crt")
-        key=Path("/etc/xray/privkey.pem") if Path("/etc/xray/privkey.pem").exists() else Path("/etc/xray/xray.key")
+        crt=Path("/etc/xray/fullchain.pem")
+        key=Path("/etc/xray/privkey.pem")
         sh(f"cat {crt} {key} > /etc/xray/xray.pem 2>/dev/null || true")
     sh("chmod 600 /etc/xray/xray.key /etc/xray/xray.pem /etc/xray/privkey.pem 2>/dev/null || true")
     xray_gen_config()
@@ -1342,12 +1343,8 @@ def install_hysteria():
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement Hysteria.{C['RST']}");return
     Path("/etc/hysteria").mkdir(parents=True, exist_ok=True)
     DOMAIN = _ensure_domain() or "hysteria.local"
-    if not Path("/etc/hysteria/fullchain.pem").exists():
-        _acme_cert(DOMAIN, "/etc/hysteria")
     if not Path("/etc/hysteria/hysteria.crt").exists():
         sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
-    if Path("/etc/hysteria/fullchain.pem").exists():
-        sh("cp /etc/hysteria/fullchain.pem /etc/hysteria/hysteria.crt && cp /etc/hysteria/privkey.pem /etc/hysteria/hysteria.key 2>/dev/null || true")
     sh("chmod 600 /etc/hysteria/hysteria.key 2>/dev/null; chmod 644 /etc/hysteria/hysteria.crt 2>/dev/null || true")
     hy_cfg = '{\"listen\":\":20000\",\"cert\":\"/etc/hysteria/hysteria.crt\",\"key\":\"/etc/hysteria/hysteria.key\",\"obfs\":\"hysteria\",\"up_mbps\":150,\"down_mbps\":150,\"recv_window_conn\":33554432,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,5667,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
     Path("/etc/hysteria/config.json").write_text(hy_cfg)
