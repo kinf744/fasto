@@ -608,8 +608,6 @@ def install_ssl_tls():
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ssl_tls.{C['RST']}");return
     if "ELF" not in sh("file /usr/local/bin/ssl_tls 2>/dev/null"):
         print(f" {C['RED']}✗ Binaire ssl_tls invalide (pas un ELF).{C['RST']}");return
-    if sh("/usr/local/bin/ssl_tls --help 2>/dev/null") == "":
-        print(f" {C['RED']}✗ Binaire ssl_tls ne s'exécute pas.{C['RST']}");return
     svc = """[Unit]
 Description=Tunnel SSL/TLS (ssl_tls)
 After=network.target
@@ -652,8 +650,6 @@ def install_sshws():
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement sshws.{C['RST']}");return
     if "ELF" not in sh("file /usr/local/bin/sshws 2>/dev/null"):
         print(f" {C['RED']}✗ Binaire sshws invalide (pas un ELF).{C['RST']}");return
-    if sh("/usr/local/bin/sshws --help 2>/dev/null") == "":
-        print(f" {C['RED']}✗ Binaire sshws ne s'exécute pas.{C['RST']}");return
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && sha256sum -c /tmp/sshws.sha256 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
     svc = """[Unit]
