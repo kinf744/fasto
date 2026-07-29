@@ -2299,7 +2299,7 @@ def build_ssh_details(user, pwd, exp, quota):
         "3" + chr(0xFE0F) + chr(0x20E3) + " PROXY WS\n`"+dom+":9090@"+user+":"+pwd+"`\n\n"
         "4" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
         "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
-        "*FASTDNS (PORT 5300)*\n" + chr(0x2022) + " Public Key: `"+pub+"`\n" + chr(0x2022) + " NameServer: `"+ns+"`\n\n"
+        "*SLOWDNS (FASTDNS)*\nConfigure your SlowDNS app with:\n" + chr(0x2022) + " DNS IP: `"+ip+"` (port 53)\n" + chr(0x2022) + " NameServer: `"+ns+"`\n" + chr(0x2022) + " Public Key: `"+pub+"`\n\n"
         "*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN")
 
 def build_vless_details(user, uuid, exp, quota):
@@ -2355,13 +2355,13 @@ def build_zivpn_details(user, pwd, exp, quota):
         "Use a ZIVPN client with the above details.")
 
 def build_v2raydns_details(user, uuid, exp, quota):
-    dom = get_domain(); pub, ns, nv4 = get_slowdns_info()
+    dom = get_domain(); pub, ns, nv4 = get_slowdns_info(); ip = get_ip()
     B = chr(0x2501); D = chr(0x2022)
     return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
-        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
-        "*PORTS*\n" + D + " FastDNS UDP: `5354`\n" + D + " V2Ray TCP: `5401`\n\n"
-        "*SLOWDNS (PORT 5354)*\n" + D + " Public Key: `"+pub+"`\n" + D + " NameServer: `"+nv4+"`\n\n"
-        "*V2RAY-DNS LINK*\n`vless://"+uuid+"@"+dom+":5401?security=none&type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS`")
+        + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        "*SLOWDNS TUNNEL*\nConfigure your SlowDNS app with:\n" + D + " DNS IP: `"+ip+"` (port 53)\n" + D + " NameServer: `"+nv4+"`\n" + D + " Public Key: `"+pub+"`\n\n"
+        "*VLESS DIRECT (NO TUNNEL)*\n`vless://"+uuid+"@"+ip+":5401?security=none&type=tcp&encryption=none#"+user+"-V2RAY-DNS`\n\n"
+        "Apps: v2rayNG, Nekoray, Shadowrocket")
 
 if BOT_AVAILABLE:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
