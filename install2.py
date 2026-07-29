@@ -903,7 +903,7 @@ def xray_gen_config():
     config = {
         "log": {"loglevel": "warning", "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log"},
         "inbounds": inbounds,
-        "outbounds": [{"protocol":"freedom","settings":{}}],
+        "outbounds": [{"tag":"direct","protocol":"freedom","settings":{}}],
         "stats": {},
         "policy": {"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},"system":{"statsInboundUplink":True,"statsInboundDownlink":True}},
         "api": {"tag":"api","services":["HandlerService","StatsService"]},
@@ -946,12 +946,10 @@ frontend xray-ntls
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
-    use_backend xray-trojan-tcp    if !is_vless
     use_backend xray-vmess-tcp     if !is_vless
     default_backend xray-vless-tcp
 
 frontend xray-tls
-    bind *:443 ssl crt /etc/xray/xray.pem alpn h2,http/1.1
     tcp-request inspect-delay 5s
     tcp-request content accept if { req.len ge 5 }
     acl is_h2         req.payload(0,3) -m bin 505249
@@ -966,8 +964,8 @@ frontend xray-tls
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
-    use_backend xray-trojan-tcp    if !is_vless
     use_backend xray-vmess-tcp     if !is_vless
+    use_backend xray-trojan-tcp    if !is_vless
     default_backend xray-vless-tcp
 
 frontend grpc_router
@@ -1034,6 +1032,13 @@ def xray_build_config():
     try:
         config = json.loads(XRAY_CONFIG.read_text())
         users = json.loads(XRAY_USERS.read_text()) if XRAY_USERS.exists() else {}
+        # Sanitize: convert uuid→id (legacy panel bug)
+        for p in ["vmess","vless","trojan","shadow"]:
+            for u in users.get(p, []):
+                if "uuid" in u and "id" not in u:
+                    u["id"] = u.pop("uuid")
+                elif "uuid" in u and p == "trojan":
+                    u["password"] = u.pop("uuid")
         tag_map = {
             "VMess-TCP":"vmess","VMess-WS":"vmess","VMess-TLS":"vmess","VMess-WSS":"vmess","VMess-XHTTP":"vmess","VMess-gRPC":"vmess",
             "VLESS-TCP":"vless","VLESS-WS":"vless","VLESS-TLS":"vless","VLESS-WSS":"vless","VLESS-XHTTP":"vless","VLESS-gRPC":"vless","VLESS-HUpgrade":"vless",
@@ -1105,9 +1110,11 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
+ExecStart=/usr/local/bin/xray -config /etc/xray/config.json
 Restart=always
 RestartSec=5s
+StartLimitIntervalSec=0
+StartLimitBurst=0
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
@@ -1130,12 +1137,55 @@ WantedBy=multi-user.target
     for cmd in crontab_cmds:
         if cmd not in existing:
             sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
+    _install_xray_watchdog()
+
+def _install_xray_watchdog():
+    watchdog_script = """#!/bin/bash
+XRAY_BIN="/usr/local/bin/xray"; XRAY_CONFIG="/etc/xray/config.json"; WATCHDOG_LOG="/var/log/xray-watchdog.log"
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$WATCHDOG_LOG"; }
+systemctl is-active --quiet xray 2>/dev/null && exit 0
+log "[WATCHDOG] Xray INACTIF --- reparation..."
+[[ ! -x "$XRAY_BIN" ]] && { log "Binaire manquant"; exit 1; }
+[[ -f "$XRAY_CONFIG" ]] && ! jq empty "$XRAY_CONFIG" 2>/dev/null && { cp "$XRAY_CONFIG" "${XRAY_CONFIG}.corrupted.$(date +%s)"; log "Config corrompue"; }
+for port in 10001 10002 10003 10004 10005 10006 10007 10008 10009 10010 10011 10012 10013 10014 10015 10016 10017 10085; do
+    pid=$(ss -tlnp | grep ":$port " | grep -v xray | grep -oP 'pid=\K[0-9]+' | head -1)
+    [[ -n "$pid" ]] && { kill "$pid" 2>/dev/null || true; log "Port $port libere (PID $pid)"; }
+done
+systemctl start xray 2>/dev/null; sleep 3
+systemctl is-active --quiet xray 2>/dev/null && log "[WATCHDOG] Xray redemarre !" || log "[WATCHDOG] Echec demarrage"
+"""
+    Path("/etc/kighmu/xray-watchdog.sh").write_text(watchdog_script)
+    sh("chmod +x /etc/kighmu/xray-watchdog.sh 2>/dev/null || true")
+    if "xray-watchdog.sh" not in sh("crontab -l 2>/dev/null"):
+        sh('(crontab -l 2>/dev/null; echo "* * * * * /etc/kighmu/xray-watchdog.sh") | crontab - 2>/dev/null || true')
+    wd_svc = """[Unit]
+Description=Xray Watchdog Service
+After=network.target
+[Service]
+Type=oneshot
+ExecStart=/etc/kighmu/xray-watchdog.sh
+User=root
+"""
+    wd_timer = """[Unit]
+Description=Xray Watchdog Timer
+Requires=xray-watchdog.service
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=120
+Unit=xray-watchdog.service
+[Install]
+WantedBy=timers.target
+"""
+    Path("/etc/systemd/system/xray-watchdog.service").write_text(wd_svc)
+    Path("/etc/systemd/system/xray-watchdog.timer").write_text(wd_timer)
+    sh("systemctl daemon-reload 2>/dev/null; systemctl enable --now xray-watchdog.timer 2>/dev/null || true")
 
 def uninstall_xray():
     sh("systemctl disable --now xray haproxy 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray /usr/local/bin/xray-* 2>/dev/null; rm -rf /etc/xray /var/log/xray 2>/dev/null || true")
-    sh("rm -f /etc/systemd/system/xray.service 2>/dev/null; rm -rf /etc/systemd/system/haproxy.service.d 2>/dev/null || true")
-    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog\\|vnstat --reset' | crontab - 2>/dev/null || true")
+    sh("rm -f /etc/systemd/system/xray.service /etc/systemd/system/xray-watchdog.service /etc/systemd/system/xray-watchdog.timer 2>/dev/null; rm -rf /etc/systemd/system/haproxy.service.d 2>/dev/null || true")
+    sh("rm -f /etc/kighmu/xray-watchdog.sh 2>/dev/null || true")
+    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\|haproxy-watchdog\|vnstat --reset' | crontab - 2>/dev/null || true")
     _remove_nft("xray"); sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_v2ray():
