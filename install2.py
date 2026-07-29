@@ -1160,9 +1160,12 @@ def install_xray():
     DOMAIN = _ensure_domain() or get_ip()
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
     if sh("command -v xray 2>/dev/null") == "":
-        sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>/dev/null || true")
-    if sh("command -v xray 2>/dev/null") == "":
-        print(f" {C['RED']}✗ Échec installation Xray.{C['RST']}");return
+        print(f" {C['YELLOW']}► Installation de Xray...{C['RST']}")
+        r=sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>&1")
+        if "success" not in r.lower() and sh("command -v xray 2>/dev/null") == "":
+            print(f" {C['RED']}✗ Échec installation Xray: téléchargement impossible.{C['RST']}")
+            print(f" {C['YELLOW']}► Vérifiez votre connexion Internet ou installez Xray manuellement.{C['RST']}")
+            return
     Path("/etc/xray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/xray").mkdir(parents=True, exist_ok=True)
     if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
