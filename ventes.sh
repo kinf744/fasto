@@ -310,7 +310,7 @@ _auto_restore_db() {
 _init_db() {
     _check_deps
     _init_dirs
-    _auto_restore_db
+    _auto_restore_db || true
 
     if [[ ! -f "$DB" ]]; then
         _sql "VACUUM;" 2>/dev/null || true
