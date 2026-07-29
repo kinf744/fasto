@@ -261,38 +261,45 @@ _schema_version() {
 _apply_schema() {
     local ver
     ver=$(_schema_version)
-    (( ver >= 1 )) && return 0
 
-    _sql "
-        CREATE TABLE IF NOT EXISTS licenses (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid        TEXT    UNIQUE NOT NULL,
-            license_key TEXT    UNIQUE NOT NULL,
-            client_name TEXT    NOT NULL,
-            client_phone TEXT   DEFAULT '',
-            client_email TEXT   DEFAULT '',
-            notes       TEXT    DEFAULT '',
-            status      TEXT    NOT NULL DEFAULT 'ACTIVE',
-            created_at  TEXT    NOT NULL,
-            expires_at  TEXT    NOT NULL,
-            activated_at TEXT   DEFAULT NULL,
-            last_checkin TEXT   DEFAULT NULL,
-            metadata    TEXT    DEFAULT '{}'
-        );
-        CREATE TABLE IF NOT EXISTS audit (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp   TEXT    NOT NULL,
-            action      TEXT    NOT NULL,
-            license_uuid TEXT   DEFAULT NULL,
-            details     TEXT    DEFAULT '',
-            user        TEXT    DEFAULT 'admin'
-        );
-        CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
-        CREATE INDEX IF NOT EXISTS idx_licenses_uuid  ON licenses(uuid);
-        CREATE INDEX IF NOT EXISTS idx_licenses_name  ON licenses(client_name);
-        CREATE INDEX IF NOT EXISTS idx_audit_time     ON audit(timestamp);
-        PRAGMA user_version = 1;
-    "
+    if (( ver < 1 )); then
+        _sql "
+            CREATE TABLE IF NOT EXISTS licenses (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid        TEXT    UNIQUE NOT NULL,
+                license_key TEXT    UNIQUE NOT NULL,
+                client_name TEXT    NOT NULL,
+                client_phone TEXT   DEFAULT '',
+                client_email TEXT   DEFAULT '',
+                notes       TEXT    DEFAULT '',
+                status      TEXT    NOT NULL DEFAULT 'ACTIVE',
+                created_at  TEXT    NOT NULL,
+                expires_at  TEXT    NOT NULL,
+                activated_at TEXT   DEFAULT NULL,
+                last_checkin TEXT   DEFAULT NULL,
+                hw_binding  TEXT    DEFAULT NULL
+            );
+            CREATE TABLE IF NOT EXISTS audit (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT    NOT NULL,
+                action      TEXT    NOT NULL,
+                license_uuid TEXT   DEFAULT NULL,
+                details     TEXT    DEFAULT '',
+                user        TEXT    DEFAULT 'admin'
+            );
+            CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
+            CREATE INDEX IF NOT EXISTS idx_licenses_uuid  ON licenses(uuid);
+            CREATE INDEX IF NOT EXISTS idx_licenses_name  ON licenses(client_name);
+            CREATE INDEX IF NOT EXISTS idx_audit_time     ON audit(timestamp);
+            PRAGMA user_version = 2;
+        "
+        return
+    fi
+
+    if (( ver < 2 )); then
+        _sql "ALTER TABLE licenses ADD COLUMN hw_binding TEXT DEFAULT NULL;" 2>/dev/null || true
+        _sql "PRAGMA user_version = 2;"
+    fi
 }
 
 _auto_restore_db() {

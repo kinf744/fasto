@@ -2170,6 +2170,9 @@ def _ensure_license_db():
     db.parent.mkdir(parents=True,exist_ok=True)
     conn=sqlite3.connect(str(db));c=conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS licenses (id INTEGER PRIMARY KEY AUTOINCREMENT,uuid TEXT UNIQUE NOT NULL,license_key TEXT NOT NULL,client_name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'ACTIVE',created_at TEXT NOT NULL,expires_at TEXT NOT NULL,activated_at TEXT DEFAULT NULL,last_checkin TEXT DEFAULT NULL,hw_binding TEXT DEFAULT NULL)")
+    try:
+        c.execute("ALTER TABLE licenses ADD COLUMN hw_binding TEXT DEFAULT NULL")
+    except: pass
     c.execute("CREATE INDEX IF NOT EXISTS idx_license_key ON licenses(license_key)")
     c.execute("CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT,timestamp TEXT NOT NULL,action TEXT NOT NULL,license_uuid TEXT DEFAULT NULL,details TEXT DEFAULT '',user TEXT DEFAULT 'admin')")
     conn.commit();return conn,c
