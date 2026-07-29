@@ -1459,16 +1459,20 @@ def _auto_uninstall_all():
         sh(f"systemctl disable {svc} 2>/dev/null || true")
     for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-router.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
         Path(f).unlink(missing_ok=True)
-    sh("rm -rf /etc/kighmu /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/menu /usr/local/bin/install2 /root/fasto /root/backup /tmp/nuitka-build 2>/dev/null || true")
-    sh("rm -f /etc/kighmu/bot/resellers.db 2>/dev/null || true")
-    sh("rm -rf /etc/kighmu/bot/resellers 2>/dev/null || true")
+    if USERDIR.exists():
+        for uf in USERDIR.iterdir():
+            if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
+                sh(f"userdel -f {uf.name} 2>/dev/null || true")
+    sh("rm -rf /etc/kighmu /etc/ventes /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/kighmu /usr/local/bin/menu /usr/local/bin/install2 /root/fasto /root/backup /tmp/nuitka-build 2>/dev/null || true")
+    sh("rm -f /root/install2.py /root/install2.bin 2>/dev/null || true")
     sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog\\|vnstat --reset\\|reseller-cleanup' | crontab - 2>/dev/null || true")
     sh("nft flush ruleset 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
-    print(f" {C['YELLOW']}Le panneau va se fermer.{C['RST']}")
-    input(f" {C['GRAY']}Appuyez sur Entrée pour quitter...{C['RST']}")
-    sys.exit(0)
+    print(f" {C['YELLOW']}Prochaine installation sera comme la première fois.{C['RST']}")
+    print(f" {C['GREEN']}bash <(curl -sL https://github.com/kinf744/fasto/raw/main/install.sh){C['RST']}\n")
+    sh("pkill -f kighmu 2>/dev/null || true")
+    os._exit(0)
 
 def delete_user(user):
     f = USERDIR / user
