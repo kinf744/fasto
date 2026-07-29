@@ -601,46 +601,46 @@ def _force_domain():
     return dom
 
 def install_ssl_tls():
-    if sh("command -v ssl_tls 2>/dev/null") != "":
+    if Path("/etc/stunnel/stunnel.conf").exists() and sh("systemctl is-active stunnel4 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
-    sh("apt-get install -y -qq curl file 2>/dev/null")
-    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
-    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ssl_tls.{C['RST']}");return
-    if "ELF" not in sh("file /usr/local/bin/ssl_tls 2>/dev/null"):
-        print(f" {C['RED']}✗ Binaire ssl_tls invalide (pas un ELF).{C['RST']}");return
-    svc = """[Unit]
-Description=Tunnel SSL/TLS (ssl_tls)
-After=network.target
-Wants=network.target
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/ssl_tls -listen 444 -target-host 127.0.0.1 -target-port 109
-Restart=always
-RestartSec=2
-LimitNOFILE=1048576
-StandardOutput=journal
-StandardError=journal
-[Install]
-WantedBy=multi-user.target
+    sh("apt-get install -y -qq stunnel4 ssl-cert 2>/dev/null")
+    sh("sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4 2>/dev/null || true")
+    key=Path("/etc/stunnel/stunnel.key");crt=Path("/etc/stunnel/stunnel.crt");pem=Path("/etc/stunnel/stunnel.pem")
+    if not pem.exists():
+        sh("openssl req -x509 -newkey rsa:2048 -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt -nodes -days 3650 -subj '/CN=ssltls' 2>/dev/null")
+        sh("cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem 2>/dev/null")
+        sh("chmod 600 /etc/stunnel/stunnel.pem /etc/stunnel/stunnel.key 2>/dev/null || true")
+    conf="""setuid = stunnel4
+setgid = stunnel4
+pid = /var/run/stunnel4.pid
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+client = no
+foreground = no
+[ssh]
+accept = 444
+connect = 127.0.0.1:22
+cert = /etc/stunnel/stunnel.pem
 """
-    Path("/etc/systemd/system/ssl_tls.service").write_text(svc)
+    Path("/etc/stunnel/stunnel.conf").write_text(conf)
+    Path("/etc/systemd/system/stunnel4.service.d").mkdir(parents=True, exist_ok=True)
+    Path("/etc/systemd/system/stunnel4.service.d/override.conf").write_text("[Service]\nRestart=always\nRestartSec=5s\n")
+    _deploy_nft("ssltls", 'table inet ssltls { chain input { type filter hook input priority 0; policy accept; tcp dport 444 accept; }; }')
     sh("systemctl daemon-reload 2>/dev/null || true")
-    sh("systemctl enable --now ssl_tls.service 2>/dev/null || true")
-    sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
-    _deploy_nft("ssl_tls", 'table inet ssl_tls { chain input { type filter hook input priority 0; policy accept; tcp dport 444 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 444 accept; }; }')
-    if sh("systemctl is-active ssl_tls.service 2>/dev/null")=="active":
-        print(f" {C['GREEN']}✔ SSL/TLS installé et actif.{C['RST']}")
-    else: print(f" {C['RED']}✗ SSL/TLS: échec démarrage.{C['RST']}")
+    sh("systemctl enable --now stunnel4 2>/dev/null || true")
+    sh("systemctl reset-failed stunnel4 2>/dev/null || true")
+    if sh("systemctl is-active stunnel4 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ SSL/TLS (stunnel4) installé et actif (port 444).{C['RST']}")
+    else: print(f" {C['RED']}✗ SSL/TLS: échec démarrage stunnel4.{C['RST']}")
 
 def uninstall_ssl_tls():
-    sh("systemctl stop ssl_tls.service 2>/dev/null || true")
-    sh("systemctl disable ssl_tls.service 2>/dev/null || true")
-    Path("/etc/systemd/system/ssl_tls.service").unlink(missing_ok=True)
-    sh("rm -f /usr/local/bin/ssl_tls 2>/dev/null || true")
-    _remove_nft("ssl_tls")
-    sh("systemctl daemon-reload 2>/dev/null || true")
-    sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
-    print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
+    sh("systemctl stop stunnel4 2>/dev/null || true")
+    sh("systemctl disable stunnel4 2>/dev/null || true")
+    Path("/etc/stunnel/stunnel.conf").unlink(missing_ok=True)
+    Path("/etc/systemd/system/stunnel4.service.d/override.conf").unlink(missing_ok=True)
+    _remove_nft("ssltls")
+    sh("sed -i 's/ENABLED=1/ENABLED=0/g' /etc/default/stunnel4 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SSL/TLS (stunnel4) désinstallé.{C['RST']}")
 
 def install_sshws():
     if sh("command -v sshws 2>/dev/null") != "":
@@ -658,7 +658,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 109
+ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 22
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -1399,25 +1399,28 @@ def install_v2ray():
     if not V2RAY_USERS.exists():
         V2RAY_USERS.write_text('{"vless":[]}')
     _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; }')
-    for f in ["/etc/systemd/system/v2ray.service","/etc/systemd/system/v2ray@.service"]:
-        if Path(f).exists():
-            txt=Path(f).read_text().replace("/usr/local/etc/v2ray/config.json","/etc/v2ray/config.json").replace("User=nobody","User=root")
-            Path(f).write_text(txt)
-    if not Path("/etc/systemd/system/v2ray.service").exists():
-        v2svc="""[Unit]
+    v2svc="""[Unit]
 Description=V2Ray Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/v2ray -config /etc/v2ray/config.json
+ExecStart=/usr/local/bin/v2ray run -config /etc/v2ray/config.json
 Restart=always
 RestartSec=5
-LimitNOFILE=1048576
+StartLimitBurst=0
+LimitNOFILE=65536
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=10
 [Install]
 WantedBy=multi-user.target
 """
-        Path("/etc/systemd/system/v2ray.service").write_text(v2svc)
+    Path("/etc/systemd/system/v2ray.service").write_text(v2svc)
+    sh("rm -f /etc/systemd/system/v2ray@.service /etc/systemd/system/v2ray.service.d/* 2>/dev/null || true")
+    sh("rmdir /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
     sh("rm -rf /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true")
     v2raydns_apply()
