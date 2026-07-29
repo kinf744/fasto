@@ -2104,6 +2104,9 @@ def ui_create_wizard(protos):
         elif proto in("vmess","vless","trojan","v2raydns"):
             clear_screen()
             show_detail_screen("created",proto.upper(),user,uuid=uuid,exp=exp,quota=q,passwd=p or passwd)
+        elif proto=="zivpn":
+            clear_screen()
+            show_zivpn_details_screen("created",user,p or passwd,exp)
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
     elif rc==1: print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter()
     elif rc==2: print(f" {C['RED']}✗ User exists{C['RST']}");press_enter()
@@ -2240,6 +2243,26 @@ def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
        f"%FREE%   {C['GRAY']}GET / HTTP/1.1[crlf]Host: {dom}[crlf]Connection: Upgrade[crlf]User-Agent: {ua}[crlf]Upgrade: websocket[crlf][crlf]{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}SLOWDNS (PORT 5300){C['RST']}",
        f"%FREE%   {C['WHITE']}Public Key :{C['RST']} {pub}",f"   {C['WHITE']}NameServer :{C['RST']} {ns}","%SEP%"]
+    render_screen(L);press_enter()
+
+def show_zivpn_details_screen(mode,user,passwd,exp):
+    clear_screen()
+    dom=get_domain();ip=get_ip()
+    L=["%SEP%",_detail_title(mode,"ZIVPN"),"%SEP%",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('USER',19)}{C['RST']} {C['WHITE']}{user}{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('DOMAIN',19)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('IP HOST',19)}{C['RST']} {C['WHITE']}{ip}{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',19)}{C['RST']} expires {exp_color(exp)}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('PORT RANGE',19)}{C['RST']} {C['WHITE']}6000-19999{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('OBFS',19)}{C['RST']} {C['WHITE']}zivpn{C['RST']}",
+       "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CLIENT CONFIG{C['RST']}","",
+       f"   {C['YELLOW']}Server   :{C['RST']} {ip}",
+       f"   {C['YELLOW']}Port     :{C['RST']} 6000-19999",
+       f"   {C['YELLOW']}Password :{C['RST']} {passwd}",
+       f"   {C['YELLOW']}Obfs     :{C['RST']} zivpn",
+       f"   {C['YELLOW']}recv_window_conn  :{C['RST']} 15728640 (15 Mo)",
+       f"   {C['YELLOW']}recv_window_client:{C['RST']} 67108864 (64 Mo)","%SEP%"]
     render_screen(L);press_enter()
 
 def show_detail_screen(mode,proto,user,**kw):
