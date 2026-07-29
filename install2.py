@@ -565,6 +565,17 @@ def _ensure_domain():
         return dom
     return cur
 
+def _force_domain():
+    df = Path("/etc/kighmu/domain.txt")
+    if not df.parent.exists(): df.parent.mkdir(parents=True)
+    cur = df.read_text().strip() if df.exists() else ""
+    print(f"\n {C['YELLOW']}╔═══ CONFIGURATION DOMAINE POUR XRAY ═══╗{C['RST']}")
+    dom = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Domain (e.g. vpn.example.com){C['RST']} [{C['GREEN']}{cur}{C['RST']}]: ").strip() or cur
+    while not dom: dom = input(f" {C['RED']}✗{C['RST']} Domain required: ").strip()
+    df.write_text(dom + "\n")
+    print(f" {C['GREEN']}✔ Domain: {dom}{C['RST']}\n")
+    return dom
+
 def install_ssl_tls():
     if sh("command -v ssl_tls 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
@@ -1157,7 +1168,7 @@ def xray_reload():
 def install_xray():
     if sh("command -v xray 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ Xray déjà installé.{C['RST']}");return
-    DOMAIN = _ensure_domain() or get_ip()
+    DOMAIN = _force_domain()
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
     if sh("command -v xray 2>/dev/null") == "":
         print(f" {C['YELLOW']}► Installation de Xray...{C['RST']}")
