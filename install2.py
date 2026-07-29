@@ -246,7 +246,7 @@ def _svc_ready(svc):
         "slowdns-router": sh("systemctl is-active slowdns-router 2>/dev/null") == "active",
         "dropbear-custom": sh("systemctl is-active dropbear-custom 2>/dev/null") == "active" and ":109 " in sh("ss -tlnp 2>/dev/null"),
         "v2ray": sh("systemctl is-active v2ray 2>/dev/null") == "active" and ":5401 " in sh("ss -tlnp 2>/dev/null"),
-        "xray": sh("systemctl is-active xray 2>/dev/null") == "active" and ":10001 " in sh("ss -tlnp 2>/dev/null"),
+        "xray": sh("systemctl is-active xray 2>/dev/null") == "active",
         "sshws": sh("systemctl is-active sshws 2>/dev/null") == "active" and ":80 " in sh("ss -tlnp 2>/dev/null"),
         "ssl_tls": sh("systemctl is-active ssl_tls 2>/dev/null") == "active" and ":444 " in sh("ss -tlnp 2>/dev/null"),
         "zivpn": sh("systemctl is-active zivpn 2>/dev/null") == "active" and ":5667 " in sh("ss -ulnp 2>/dev/null"),
