@@ -601,46 +601,48 @@ def _force_domain():
     return dom
 
 def install_ssl_tls():
-    if Path("/etc/stunnel/stunnel.conf").exists() and sh("systemctl is-active stunnel4 2>/dev/null")=="active":
+    if sh("command -v ssl_tls 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
-    sh("apt-get install -y -qq stunnel4 ssl-cert 2>/dev/null")
-    sh("sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4 2>/dev/null || true")
-    key=Path("/etc/stunnel/stunnel.key");crt=Path("/etc/stunnel/stunnel.crt");pem=Path("/etc/stunnel/stunnel.pem")
-    if not pem.exists():
-        sh("openssl req -x509 -newkey rsa:2048 -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt -nodes -days 3650 -subj '/CN=ssltls' 2>/dev/null")
-        sh("cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem 2>/dev/null")
-        sh("chmod 600 /etc/stunnel/stunnel.pem /etc/stunnel/stunnel.key 2>/dev/null || true")
-    conf="""setuid = stunnel4
-setgid = stunnel4
-pid = /var/run/stunnel4.pid
-socket = l:TCP_NODELAY=1
-socket = r:TCP_NODELAY=1
-client = no
-foreground = no
-[ssh]
-accept = 444
-connect = 127.0.0.1:22
-cert = /etc/stunnel/stunnel.pem
+    sh("apt-get install -y -qq curl file 2>/dev/null")
+    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ssl_tls.{C['RST']}");return
+    if "ELF" not in sh("file /usr/local/bin/ssl_tls 2>/dev/null"):
+        print(f" {C['RED']}✗ Binaire ssl_tls invalide (pas un ELF).{C['RST']}");return
+    if subprocess.run(["/usr/local/bin/ssl_tls", "--help"], capture_output=True, timeout=5).returncode != 0:
+        print(f" {C['RED']}✗ Binaire ssl_tls ne s'exécute pas.{C['RST']}");return
+    svc = """[Unit]
+Description=Tunnel SSL/TLS (ssl_tls)
+After=network.target
+Wants=network.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ssl_tls -listen 444 -target-host 127.0.0.1 -target-port 109
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
+[Install]
+WantedBy=multi-user.target
 """
-    Path("/etc/stunnel/stunnel.conf").write_text(conf)
-    Path("/etc/systemd/system/stunnel4.service.d").mkdir(parents=True, exist_ok=True)
-    Path("/etc/systemd/system/stunnel4.service.d/override.conf").write_text("[Service]\nRestart=always\nRestartSec=5s\n")
-    _deploy_nft("ssltls", 'table inet ssltls { chain input { type filter hook input priority 0; policy accept; tcp dport 444 accept; }; }')
+    Path("/etc/systemd/system/ssl_tls.service").write_text(svc)
     sh("systemctl daemon-reload 2>/dev/null || true")
-    sh("systemctl enable --now stunnel4 2>/dev/null || true")
-    sh("systemctl reset-failed stunnel4 2>/dev/null || true")
-    if sh("systemctl is-active stunnel4 2>/dev/null")=="active":
-        print(f" {C['GREEN']}✔ SSL/TLS (stunnel4) installé et actif (port 444).{C['RST']}")
-    else: print(f" {C['RED']}✗ SSL/TLS: échec démarrage stunnel4.{C['RST']}")
+    sh("systemctl enable --now ssl_tls.service 2>/dev/null || true")
+    sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
+    _deploy_nft("ssl_tls", 'table inet ssl_tls { chain input { type filter hook input priority 0; policy accept; tcp dport 444 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 444 accept; }; }')
+    if sh("systemctl is-active ssl_tls.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ SSL/TLS installé et actif.{C['RST']}")
+    else: print(f" {C['RED']}✗ SSL/TLS: échec démarrage.{C['RST']}")
 
 def uninstall_ssl_tls():
-    sh("systemctl stop stunnel4 2>/dev/null || true")
-    sh("systemctl disable stunnel4 2>/dev/null || true")
-    Path("/etc/stunnel/stunnel.conf").unlink(missing_ok=True)
-    Path("/etc/systemd/system/stunnel4.service.d/override.conf").unlink(missing_ok=True)
-    _remove_nft("ssltls")
-    sh("sed -i 's/ENABLED=1/ENABLED=0/g' /etc/default/stunnel4 2>/dev/null || true")
-    print(f" {C['GREEN']}✔ SSL/TLS (stunnel4) désinstallé.{C['RST']}")
+    sh("systemctl stop ssl_tls.service 2>/dev/null || true")
+    sh("systemctl disable ssl_tls.service 2>/dev/null || true")
+    Path("/etc/systemd/system/ssl_tls.service").unlink(missing_ok=True)
+    sh("rm -f /usr/local/bin/ssl_tls 2>/dev/null || true")
+    _remove_nft("ssl_tls")
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
 
 def install_sshws():
     if sh("command -v sshws 2>/dev/null") != "":
@@ -658,7 +660,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 22
+ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 109
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
