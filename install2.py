@@ -664,17 +664,19 @@ def install_slowdns():
     (DIR / "nv4").mkdir(parents=True, exist_ok=True)
     try:
         from cryptography.hazmat.primitives.asymmetric import x25519
+        from cryptography.hazmat.primitives.serialization import PrivateFormat, PublicFormat, NoEncryption, Encoding
         priv_k = x25519.X25519PrivateKey.generate()
         pub_k = priv_k.public_key()
-        priv_hex = priv_k.private_bytes_raw().hex()
-        pub_hex = pub_k.public_bytes_raw().hex()
-    except ImportError:
+        priv_hex = priv_k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex()
+        pub_hex = pub_k.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+    except (ImportError, AttributeError):
         sh("apt-get install -y -qq python3-cryptography 2>/dev/null || pip3 install cryptography --break-system-packages 2>/dev/null || true")
         from cryptography.hazmat.primitives.asymmetric import x25519
+        from cryptography.hazmat.primitives.serialization import PrivateFormat, PublicFormat, NoEncryption, Encoding
         priv_k = x25519.X25519PrivateKey.generate()
         pub_k = priv_k.public_key()
-        priv_hex = priv_k.private_bytes_raw().hex()
-        pub_hex = pub_k.public_bytes_raw().hex()
+        priv_hex = priv_k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex()
+        pub_hex = pub_k.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     (DIR / "server.key").write_text(priv_hex + "\n")
     (DIR / "server.pub").write_text(pub_hex + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
@@ -3113,8 +3115,6 @@ if __name__ == "__main__":
             self_install()
             clear_screen()
             _verify_license()
-            setup_config()
-            install_all_missing()
             main_menu()
         elif arg == "--watchdog":
             _license_watchdog()
