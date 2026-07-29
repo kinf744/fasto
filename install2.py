@@ -579,47 +579,65 @@ def _force_domain():
 def install_ssl_tls():
     if sh("command -v ssl_tls 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
-    _ensure_domain()
     sh("apt-get install -y -qq curl file 2>/dev/null")
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ssl_tls.{C['RST']}");return
+    if "ELF" not in sh("file /usr/local/bin/ssl_tls 2>/dev/null"):
+        print(f" {C['RED']}✗ Binaire ssl_tls invalide (pas un ELF).{C['RST']}");return
+    if sh("/usr/local/bin/ssl_tls --help 2>/dev/null") == "":
+        print(f" {C['RED']}✗ Binaire ssl_tls ne s'exécute pas.{C['RST']}");return
     svc = """[Unit]
 Description=Tunnel SSL/TLS (ssl_tls)
 After=network.target
+Wants=network.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/ssl_tls -listen 444 -target-host 127.0.0.1 -target-port 109
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/ssl_tls.service").write_text(svc)
-    sh("systemctl daemon-reload && systemctl enable --now ssl_tls.service 2>/dev/null || true")
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl enable --now ssl_tls.service 2>/dev/null || true")
+    sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
     _deploy_nft("ssl_tls", 'table inet ssl_tls { chain input { type filter hook input priority 0; policy accept; tcp dport 444 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 444 accept; }; }')
     if sh("systemctl is-active ssl_tls.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ SSL/TLS installé et actif.{C['RST']}")
     else: print(f" {C['RED']}✗ SSL/TLS: échec démarrage.{C['RST']}")
 
 def uninstall_ssl_tls():
-    sh("systemctl disable --now ssl_tls.service 2>/dev/null || true")
+    sh("systemctl stop ssl_tls.service 2>/dev/null || true")
+    sh("systemctl disable ssl_tls.service 2>/dev/null || true")
     Path("/etc/systemd/system/ssl_tls.service").unlink(missing_ok=True)
-    sh("rm -f /usr/local/bin/ssl_tls 2>/dev/null || true"); _remove_nft("ssl_tls"); sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/ssl_tls 2>/dev/null || true")
+    _remove_nft("ssl_tls")
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
     print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
 
 def install_sshws():
     if sh("command -v sshws 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ SSHWS déjà installé.{C['RST']}");return
-    _ensure_domain()
     sh("apt-get install -y -qq curl 2>/dev/null")
-    r=sh("curl -L 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null && echo OK")
+    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement sshws.{C['RST']}");return
+    if "ELF" not in sh("file /usr/local/bin/sshws 2>/dev/null"):
+        print(f" {C['RED']}✗ Binaire sshws invalide (pas un ELF).{C['RST']}");return
+    if sh("/usr/local/bin/sshws --help 2>/dev/null") == "":
+        print(f" {C['RED']}✗ Binaire sshws ne s'exécute pas.{C['RST']}");return
+    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && sha256sum -c /tmp/sshws.sha256 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
     svc = """[Unit]
 Description=SSHWS Slipstream Tunnel
 After=network.target
 [Service]
 Type=simple
+User=root
 ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 109
 Restart=always
 RestartSec=2
@@ -627,17 +645,30 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 """
-    Path("/etc/systemd/system/sshws.service").write_text(svc)
-    sh("systemctl daemon-reload && systemctl enable --now sshws.service 2>/dev/null || true")
+    svc_path = Path("/etc/systemd/system/sshws.service")
+    if not svc_path.exists():
+        svc_path.write_text(svc)
+        sh("systemctl daemon-reload 2>/dev/null || true")
+        sh("systemctl enable --now sshws.service 2>/dev/null || true")
+    else:
+        print(f" {C['YELLOW']}⚠ Service systemd sshws déjà existant.{C['RST']}")
+    sh("systemctl reset-failed sshws.service 2>/dev/null || true")
     _deploy_nft("sshws", 'table inet sshws { chain input { type filter hook input priority 0; policy accept; tcp dport 80 accept; }; }')
     if sh("systemctl is-active sshws.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ SSHWS installé et actif.{C['RST']}")
     else: print(f" {C['RED']}✗ SSHWS: échec démarrage.{C['RST']}")
 
 def uninstall_sshws():
-    sh("systemctl disable --now sshws.service 2>/dev/null || true")
-    for f in ["/etc/systemd/system/sshws.service"]: Path(f).unlink(missing_ok=True)
-    sh("rm -f /usr/local/bin/sshws 2>/dev/null || true"); _remove_nft("sshws"); sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl stop sshws.service 2>/dev/null || true")
+    sh("systemctl disable sshws.service 2>/dev/null || true")
+    Path("/etc/systemd/system/sshws.service").unlink(missing_ok=True)
+    sh("pkill -9 -f /usr/local/bin/sshws 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/sshws 2>/dev/null || true")
+    sh("rm -rf /var/log/sshws 2>/dev/null || true")
+    _remove_nft("sshws")
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl reset-failed sshws.service 2>/dev/null || true")
+    sh('screen -ls 2>/dev/null | awk \'/sshws/ {print $1}\' | xargs -r -n1 screen -S {} -X quit 2>/dev/null || true')
     print(f" {C['GREEN']}✔ SSHWS désinstallé.{C['RST']}")
 
 _ACME_EMAIL = "adrienkiaje@gmail.com"
