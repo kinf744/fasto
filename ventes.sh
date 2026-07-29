@@ -182,6 +182,16 @@ _gen_key() {
     dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | cut -d' ' -f1 | head -c "$len"
 }
 
+LICENSE_SECRET="$(echo -n 'KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2' | sha256sum | cut -d' ' -f1)"
+
+_pack_token() {
+    local key="$1" expiry="$2"
+    local msg="${key}|${expiry}"
+    local sig
+    sig=$(echo -n "$msg" | openssl dgst -sha256 -hmac "$LICENSE_SECRET" 2>/dev/null | cut -d' ' -f2 || echo -n "$msg" | sha256sum | cut -d' ' -f1)
+    echo "${key}|${expiry}|${sig}"
+}
+
 # --- validation entrées -------------------------------------------------------
 _valid_uuid()   { [[ "$1" =~ ^[0-9a-fA-F-]{36}$ ]]; }
 _valid_phone()  { [[ "$1" =~ ^[0-9+][0-9[:space:]()-]{4,20}$ ]] || [[ -z "$1" ]]; }
@@ -527,6 +537,10 @@ _license_card() {
     echo -e "    ${GREEN}🔑${RST} ${WHITE}Key Generada:${RST}"
     echo -e "       ${GREEN}${key}${RST}"
     echo
+    local packed_token
+    packed_token=$(_pack_token "$key" "$expires_at")
+    echo -e "    ${RED}💣${RST} ${WHITE}Token License Bomb :${RST}"
+    echo -e "       ${RED}${packed_token}${RST}"
     echo -e "    ${YELLOW}📅${RST} ${WHITE}Créée le:${RST}     ${YELLOW}${created_at}${RST}"
     echo -e "    ${RED}⏳${RST} ${WHITE}Expire le:${RST}     ${expires_at}"
     echo -e "    ${WHITE}⏱${RST}  ${WHITE}Replique:${RST}     ${remaining}"
@@ -553,6 +567,12 @@ _license_card() {
         echo
         echo -e "    ${YELLOW}3.${RST} ${WHITE}Quand la clé vous est demandée, saisissez :${RST}"
         echo -e "       ${GREEN}${key}${RST}"
+        echo
+        local packed_token
+        packed_token=$(_pack_token "$key" "$expires_at")
+        echo -e "    ${YELLOW}   OU (token licence bomb) :${RST}"
+    echo -e "       ${RED}${packed_token}${RST}"
+    echo
         echo
         echo -e "    ${YELLOW}4.${RST} ${WHITE}Le panneau s'ouvre automatiquement après validation${RST}"
         echo

