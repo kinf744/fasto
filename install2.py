@@ -541,12 +541,16 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/dropbear-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now dropbear-custom.service 2>/dev/null || true")
     _deploy_nft("dropbear", 'table inet dropbear { chain input { type filter hook input priority 0; policy accept; tcp dport 109 accept; }; }')
+    if sh("systemctl is-active dropbear-custom.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ Dropbear installé et actif (port 109).{C['RST']}")
+    else: print(f" {C['RED']}✗ Dropbear: échec démarrage.{C['RST']}")
 
 def uninstall_dropbear():
     sh("systemctl disable --now dropbear-custom.service 2>/dev/null || true")
     for f in ["/etc/systemd/system/dropbear-custom.service"]: Path(f).unlink(missing_ok=True)
     sh("rm -rf /etc/dropbear /usr/local/sbin/dropbear /usr/local/bin/dropbear* 2>/dev/null || true")
     _remove_nft("dropbear"); sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ Dropbear désinstallé.{C['RST']}")
 
 def _ensure_domain():
     df = Path("/etc/kighmu/domain.txt")
@@ -562,10 +566,12 @@ def _ensure_domain():
     return cur
 
 def install_ssl_tls():
-    if sh("command -v ssl_tls 2>/dev/null") != "": return
+    if sh("command -v ssl_tls 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
     _ensure_domain()
     sh("apt-get install -y -qq curl file 2>/dev/null")
-    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null")
+    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ssl_tls.{C['RST']}");return
     svc = """[Unit]
 Description=Tunnel SSL/TLS (ssl_tls)
 After=network.target
@@ -581,17 +587,23 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/ssl_tls.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now ssl_tls.service 2>/dev/null || true")
     _deploy_nft("ssl_tls", 'table inet ssl_tls { chain input { type filter hook input priority 0; policy accept; tcp dport 444 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 444 accept; }; }')
+    if sh("systemctl is-active ssl_tls.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ SSL/TLS installé et actif.{C['RST']}")
+    else: print(f" {C['RED']}✗ SSL/TLS: échec démarrage.{C['RST']}")
 
 def uninstall_ssl_tls():
     sh("systemctl disable --now ssl_tls.service 2>/dev/null || true")
     Path("/etc/systemd/system/ssl_tls.service").unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/ssl_tls 2>/dev/null || true"); _remove_nft("ssl_tls"); sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
 
 def install_sshws():
-    if sh("command -v sshws 2>/dev/null") != "": return
+    if sh("command -v sshws 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ SSHWS déjà installé.{C['RST']}");return
     _ensure_domain()
     sh("apt-get install -y -qq curl 2>/dev/null")
-    sh("curl -L 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null")
+    r=sh("curl -L 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement sshws.{C['RST']}");return
     svc = """[Unit]
 Description=SSHWS Slipstream Tunnel
 After=network.target
@@ -607,11 +619,42 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/sshws.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now sshws.service 2>/dev/null || true")
     _deploy_nft("sshws", 'table inet sshws { chain input { type filter hook input priority 0; policy accept; tcp dport 80 accept; }; }')
+    if sh("systemctl is-active sshws.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ SSHWS installé et actif.{C['RST']}")
+    else: print(f" {C['RED']}✗ SSHWS: échec démarrage.{C['RST']}")
 
 def uninstall_sshws():
     sh("systemctl disable --now sshws.service 2>/dev/null || true")
     for f in ["/etc/systemd/system/sshws.service"]: Path(f).unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/sshws 2>/dev/null || true"); _remove_nft("sshws"); sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SSHWS désinstallé.{C['RST']}")
+
+_ACME_EMAIL = "adrienkiaje@gmail.com"
+
+def _acme_cert(domain, cert_dir):
+    fullchain = Path(cert_dir) / "fullchain.pem"
+    privkey = Path(cert_dir) / "privkey.pem"
+    if fullchain.exists() and privkey.exists():
+        exp = sh(f"openssl x509 -enddate -noout -in {fullchain} 2>/dev/null | cut -d= -f2")
+        print(f" {C['GREEN']}✔ Certificat TLS existant ({exp}).{C['RST']}")
+        return True
+    print(f" {C['YELLOW']}► Génération certificat Let's Encrypt pour {domain}...{C['RST']}")
+    Path(cert_dir).mkdir(parents=True, exist_ok=True)
+    sh("command -v acme.sh >/dev/null || curl -fsSL https://get.acme.sh | sh 2>/dev/null || true")
+    sh("systemctl stop sshws 2>/dev/null || true")
+    acme = sh("which acme.sh 2>/dev/null || echo ~/.acme.sh/acme.sh")
+    acme = acme.strip() or "/root/.acme.sh/acme.sh"
+    cmd = f"{acme} --issue --standalone -d {domain} --keylength ec-256 --server letsencrypt --email {_ACME_EMAIL} --force 2>&1"
+    r = sh(cmd, timeout=120)
+    if "success" in r.lower() or fullchain.exists():
+        sh(f"{acme} --installcert -d {domain} --fullchainpath {fullchain} --keypath {privkey} --force 2>/dev/null || true")
+        exp = sh(f"openssl x509 -enddate -noout -in {fullchain} 2>/dev/null | cut -d= -f2")
+        print(f" {C['GREEN']}✔ Certificat TLS valide créé (expire: {exp}).{C['RST']}")
+        sh("systemctl start sshws 2>/dev/null || true")
+        return True
+    print(f" {C['RED']}✗ Échec ACME — certificat auto-signé utilisé.{C['RST']}")
+    sh("systemctl start sshws 2>/dev/null || true")
+    return False
 
 def install_badvpn():
     if sh("command -v badvpn-udpgw 2>/dev/null") != "": return
@@ -635,16 +678,20 @@ WantedBy=multi-user.target
     sh("systemctl daemon-reload 2>/dev/null || true")
     for port in ["7100","7200","7300"]: sh(f"systemctl enable --now badvpn@{port}.service 2>/dev/null || true")
     _deploy_nft("badvpn", 'table inet badvpn { chain input { type filter hook input priority 0; policy accept; tcp dport {7100,7200,7300} accept; }; }')
+    print(f" {C['GREEN']}✔ BadVPN installé (ports 7100,7200,7300).{C['RST']}")
 
 def uninstall_badvpn():
     for port in ["7100","7200","7300"]: sh(f"systemctl disable --now badvpn@{port}.service 2>/dev/null || true")
     for port in ["7100","7200","7300"]: Path(f"/etc/systemd/system/badvpn@{port}.service").unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/badvpn-udpgw 2>/dev/null || true"); _remove_nft("badvpn"); sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ BadVPN désinstallé.{C['RST']}")
 
 def install_udp_custom():
-    if sh("command -v udp-custom 2>/dev/null") != "": return
+    if sh("command -v udp-custom 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ UDP-Custom déjà installé.{C['RST']}");return
     sh("apt-get install -y -qq curl 2>/dev/null")
-    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null")
+    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement udp-custom.{C['RST']}");return
     Path("/etc/udp-custom").mkdir(parents=True, exist_ok=True)
     Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","mtu":1500,"max_clients":1000}')
     svc = """[Unit]
@@ -663,12 +710,16 @@ WantedBy=multi-user.target
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
     iface = get_main_iface()
     _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority dstnat; policy accept; iifname "{iface}" udp dport != {{ 53, 5300, 5353-5354, 5667, 6000-50000 }} dnat to :36712; }}; }}')
+    if sh("systemctl is-active udp-custom.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ UDP-Custom installé et actif.{C['RST']}")
+    else: print(f" {C['RED']}✗ UDP-Custom: échec démarrage.{C['RST']}")
 
 def uninstall_udp_custom():
     sh("systemctl disable --now udp-custom.service 2>/dev/null || true")
     Path("/etc/systemd/system/udp-custom.service").unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/udp-custom 2>/dev/null; rm -rf /etc/udp-custom 2>/dev/null || true")
     _remove_nft("udp-custom"); sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ UDP-Custom désinstallé.{C['RST']}")
 
 def install_slowdns():
     if sh("command -v dnstt-server 2>/dev/null") != "": return
@@ -854,6 +905,7 @@ WantedBy=multi-user.target
 }}""")
     sh("systemctl daemon-reload 2>/dev/null || true")
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SlowDNS installé (NS4:5353, NV4:5354, Router:5300).{C['RST']}")
 
 def configure_slowdns():
     DIR = Path("/etc/slowdns")
@@ -892,6 +944,7 @@ def uninstall_slowdns():
     sh("rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router 2>/dev/null || true")
     _remove_nft("slowdns")
     sh("chattr -i /etc/resolv.conf 2>/dev/null; systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SlowDNS désinstallé.{C['RST']}")
 
 def xray_gen_config():
     XRAY_CONFIG = Path("/etc/xray/config.json")
@@ -1102,18 +1155,26 @@ def xray_reload():
     xray_build_config()
 
 def install_xray():
-    if sh("command -v xray 2>/dev/null") != "": return
+    if sh("command -v xray 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ Xray déjà installé.{C['RST']}");return
     DOMAIN = _ensure_domain() or get_ip()
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
     if sh("command -v xray 2>/dev/null") == "":
         sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)' 2>/dev/null || true")
+    if sh("command -v xray 2>/dev/null") == "":
+        print(f" {C['RED']}✗ Échec installation Xray.{C['RST']}");return
     Path("/etc/xray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/xray").mkdir(parents=True, exist_ok=True)
     if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
-    if not Path("/etc/xray/xray.crt").exists():
-        sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
-    sh("cat /etc/xray/xray.crt /etc/xray/xray.key > /etc/xray/xray.pem 2>/dev/null || true")
-    sh("chmod 600 /etc/xray/xray.key /etc/xray/xray.pem 2>/dev/null || true")
+    ok=_acme_cert(DOMAIN, "/etc/xray")
+    if not ok:
+        if not Path("/etc/xray/xray.crt").exists():
+            sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    if not Path("/etc/xray/xray.pem").exists():
+        crt=Path("/etc/xray/fullchain.pem") if Path("/etc/xray/fullchain.pem").exists() else Path("/etc/xray/xray.crt")
+        key=Path("/etc/xray/privkey.pem") if Path("/etc/xray/privkey.pem").exists() else Path("/etc/xray/xray.key")
+        sh(f"cat {crt} {key} > /etc/xray/xray.pem 2>/dev/null || true")
+    sh("chmod 600 /etc/xray/xray.key /etc/xray/xray.pem /etc/xray/privkey.pem 2>/dev/null || true")
     xray_gen_config()
     xray_gen_haproxy()
     svc = """[Unit]
@@ -1154,6 +1215,12 @@ WantedBy=multi-user.target
         if cmd not in existing:
             sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
     _install_xray_watchdog()
+    x_ok=sh("systemctl is-active xray 2>/dev/null")
+    h_ok=sh("systemctl is-active haproxy 2>/dev/null")
+    if x_ok=="active" and h_ok=="active":
+        print(f" {C['GREEN']}✔ Xray + HAProxy installés et actifs.{C['RST']}")
+    else:
+        print(f" {C['YELLOW']}⚠ Xray={x_ok} HAProxy={h_ok}.{C['RST']}")
 
 def _install_xray_watchdog():
     watchdog_script = """#!/bin/bash
@@ -1205,9 +1272,12 @@ def uninstall_xray():
     _remove_nft("xray"); sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_v2ray():
-    if sh("command -v v2ray 2>/dev/null") != "": return
+    if sh("command -v v2ray 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ V2ray déjà installé.{C['RST']}");return
     _ensure_domain()
     sh("bash -c '$(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)' 2>/dev/null || true")
+    if sh("command -v v2ray 2>/dev/null") == "":
+        print(f" {C['RED']}✗ Échec installation V2ray.{C['RST']}");return
     V2RAY_CONFIG = Path("/etc/v2ray/config.json")
     V2RAY_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     Path("/var/log/v2ray").mkdir(parents=True, exist_ok=True)
@@ -1236,21 +1306,48 @@ def install_v2ray():
         if Path(f).exists():
             txt=Path(f).read_text().replace("/usr/local/etc/v2ray/config.json","/etc/v2ray/config.json").replace("User=nobody","User=root")
             Path(f).write_text(txt)
+    if not Path("/etc/systemd/system/v2ray.service").exists():
+        v2svc="""[Unit]
+Description=V2Ray Service
+After=network.target
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/v2ray -config /etc/v2ray/config.json
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target
+"""
+        Path("/etc/systemd/system/v2ray.service").write_text(v2svc)
     sh("rm -rf /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
     v2raydns_apply()
     sh("systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true")
+    if sh("systemctl is-active v2ray 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ V2ray-DNS installé et actif (port 5401).{C['RST']}")
+    else:
+        print(f" {C['RED']}✗ V2ray-DNS: échec démarrage.{C['RST']}")
 
 def uninstall_v2ray():
     sh("systemctl disable --now v2ray 2>/dev/null || true")
     sh("rm -f /usr/local/bin/v2ray 2>/dev/null; rm -rf /etc/v2ray 2>/dev/null || true")
     _remove_nft("v2ray"); sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ V2ray désinstallé.{C['RST']}")
 
 def install_hysteria():
-    if sh("command -v hysteria-linux-amd64 2>/dev/null") != "": return
-    sh("curl -fsSL 'https://github.com/apernet/hysteria/releases/download/v1.3.4/hysteria-linux-amd64' -o /usr/local/bin/hysteria-linux-amd64 2>/dev/null && chmod +x /usr/local/bin/hysteria-linux-amd64 2>/dev/null")
+    if sh("command -v hysteria-linux-amd64 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ Hysteria déjà installé.{C['RST']}");return
+    r=sh("curl -fsSL 'https://github.com/apernet/hysteria/releases/download/v1.3.4/hysteria-linux-amd64' -o /usr/local/bin/hysteria-linux-amd64 2>/dev/null && chmod +x /usr/local/bin/hysteria-linux-amd64 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement Hysteria.{C['RST']}");return
     Path("/etc/hysteria").mkdir(parents=True, exist_ok=True)
     DOMAIN = _ensure_domain() or "hysteria.local"
-    sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    if not Path("/etc/hysteria/fullchain.pem").exists():
+        _acme_cert(DOMAIN, "/etc/hysteria")
+    if not Path("/etc/hysteria/hysteria.crt").exists():
+        sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    if Path("/etc/hysteria/fullchain.pem").exists():
+        sh("cp /etc/hysteria/fullchain.pem /etc/hysteria/hysteria.crt && cp /etc/hysteria/privkey.pem /etc/hysteria/hysteria.key 2>/dev/null || true")
     sh("chmod 600 /etc/hysteria/hysteria.key 2>/dev/null; chmod 644 /etc/hysteria/hysteria.crt 2>/dev/null || true")
     hy_cfg = '{\"listen\":\":20000\",\"cert\":\"/etc/hysteria/hysteria.crt\",\"key\":\"/etc/hysteria/hysteria.key\",\"obfs\":\"hysteria\",\"up_mbps\":150,\"down_mbps\":150,\"recv_window_conn\":33554432,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,5667,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
     Path("/etc/hysteria/config.json").write_text(hy_cfg)
@@ -1279,6 +1376,9 @@ WantedBy=multi-user.target
     iface = get_main_iface()
     _deploy_nft("hysteria", f'table inet hysteria {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }}; chain prerouting {{ type nat hook prerouting priority dstnat; policy accept; iifname "{iface}" udp dport 20000-50000 dnat to :20000; }}; }}')
     sh("systemctl daemon-reload && systemctl enable --now hysteria.service 2>/dev/null || true")
+    if sh("systemctl is-active hysteria.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ Hysteria installé et actif (port 20000).{C['RST']}")
+    else: print(f" {C['RED']}✗ Hysteria: échec démarrage.{C['RST']}")
 
 def uninstall_hysteria():
     sh("systemctl disable --now hysteria.service 2>/dev/null || true")
@@ -1286,10 +1386,13 @@ def uninstall_hysteria():
     sh("rm -f /usr/local/bin/hysteria-linux-amd64 2>/dev/null; rm -rf /etc/hysteria 2>/dev/null || true")
     _remove_nft("hysteria")
     sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ Hysteria désinstallé.{C['RST']}")
 
 def install_zivpn():
-    if sh("command -v zivpn 2>/dev/null") != "": return
-    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-zivpn-linux-amd64' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null")
+    if sh("command -v zivpn 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ ZIVPN déjà installé.{C['RST']}");return
+    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-zivpn-linux-amd64' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ZIVPN.{C['RST']}");return
     Path("/etc/zivpn").mkdir(parents=True, exist_ok=True)
     DOMAIN = _ensure_domain() or "zivpn.local"
     sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/zivpn/zivpn.key -out /etc/zivpn/zivpn.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
@@ -1321,6 +1424,9 @@ WantedBy=multi-user.target
     iface = get_main_iface()
     _deploy_nft("zivpn", f'table inet zivpn {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 6000-19999 dnat to :5667; }}; }}')
     sh("systemctl daemon-reload && systemctl enable --now zivpn.service 2>/dev/null || true")
+    if sh("systemctl is-active zivpn.service 2>/dev/null")=="active":
+        print(f" {C['GREEN']}✔ ZIVPN installé et actif (port 5667).{C['RST']}")
+    else: print(f" {C['RED']}✗ ZIVPN: échec démarrage.{C['RST']}")
 
 def uninstall_zivpn():
     sh("systemctl disable --now zivpn.service 2>/dev/null || true")
@@ -1328,6 +1434,7 @@ def uninstall_zivpn():
     sh("rm -f /usr/local/bin/zivpn 2>/dev/null; rm -rf /etc/zivpn 2>/dev/null || true")
     _remove_nft("zivpn")
     sh("systemctl daemon-reload 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ ZIVPN désinstallé.{C['RST']}")
 
 def setup_config():
     df=Path("/etc/kighmu/domain.txt")
