@@ -3115,6 +3115,7 @@ if __name__ == "__main__":
             self_install()
             clear_screen()
             _verify_license()
+            install_dropbear()
             main_menu()
         elif arg == "--watchdog":
             _license_watchdog()
