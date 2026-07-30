@@ -1271,18 +1271,21 @@ frontend xray-ntls
     acl is_vless_ws   req.payload(0,11) -m bin 474554202f766c65737320
     acl is_vmess_ws   req.payload(0,12) -m bin 474554202f766d65737320
     acl is_trojan_ws  req.payload(0,13) -m bin 474554202f74726f6a616e20
+    acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
+    acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
     use_backend grpc_router        if is_h2
     use_backend xray-vless-ws      if is_vless_ws
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
     use_backend xray-vmess-tcp     if !is_vless
+    use_backend v2ray-tcp          if is_v2ray_ukj or is_v2ray_opl
     default_backend xray-vless-tcp
 
 frontend xray-tls
     bind *:443 ssl crt {panel_crt} alpn h2,http/1.1
     tcp-request inspect-delay 5s
-    tcp-request content accept if {{ req.len ge 5 }}
+    tcp-request content accept if {{ req.len ge 21 }}
     acl is_h2         req.payload(0,3) -m bin 505249
     acl is_http       req.payload(0,4) -m bin 474554202f
     acl is_post       req.payload(0,4) -m bin 504f5354
@@ -1290,6 +1293,8 @@ frontend xray-tls
     acl is_vless_ws   req.payload(0,11) -m bin 474554202f766c65737320
     acl is_vmess_ws   req.payload(0,12) -m bin 474554202f766d65737320
     acl is_trojan_ws  req.payload(0,13) -m bin 474554202f74726f6a616e20
+    acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
+    acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
     use_backend grpc_router        if is_h2
     use_backend xray-vless-ws      if is_vless_ws
     use_backend xray-vmess-ws      if is_vmess_ws
@@ -1297,6 +1302,7 @@ frontend xray-tls
     use_backend grpc_router        if is_http or is_post
     use_backend xray-vmess-tcp     if !is_vless
     use_backend xray-trojan-tcp    if !is_vless
+    use_backend v2ray-tcp          if is_v2ray_ukj or is_v2ray_opl
     default_backend xray-vless-tcp
 
 frontend grpc_router
@@ -1354,6 +1360,8 @@ backend xray-trojan-grpc
 backend xray-vless-hupgrade
     mode http
     server s1 127.0.0.1:10018
+backend v2ray-tcp
+    server s1 127.0.0.1:5401
 """
     Path("/etc/haproxy/haproxy.cfg").write_text(haproxy_cfg)
 
