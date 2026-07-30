@@ -995,7 +995,7 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 Type=simple
-Environment=LISTEN=0.0.0.0:53
+Environment=LISTEN=0.0.0.0:5300
 Environment=ROUTES={ns4}=127.0.0.1:5353,{nv4}=127.0.0.1:5354
 Environment=TIMEOUT=5
 ExecStart=/usr/local/bin/slowdns-router
@@ -1009,9 +1009,12 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
     Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
     _deploy_nft("slowdns", """table inet slowdns {
-    chain prerouting { type nat hook prerouting priority -100; }
+    chain prerouting { type nat hook prerouting priority -100; policy accept;
+        iifname "eth0" udp dport 53 redirect to :5300;
+    }
     chain input { type filter hook input priority 0; policy accept;
-        udp dport 53 accept; udp dport 5353 accept; udp dport 5354 accept;
+        udp dport 53 accept; udp dport 5300 accept;
+        udp dport 5353 accept; udp dport 5354 accept;
         tcp dport 109 accept; tcp dport 5401 accept;
     }
 }""")
