@@ -484,6 +484,7 @@ def _ensure_nat_catchall():
         nft_src_parts.append(f"""table {family} nat {{
     chain PREROUTING {{
         type nat hook prerouting priority dstnat; policy accept;
+        iifname "{iface}" udp dport 53 return
         iifname "{iface}" udp dport {{ 2900-5600 }} counter dnat to :36712
     }}
 }}""")
