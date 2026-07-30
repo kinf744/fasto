@@ -906,6 +906,7 @@ WantedBy=multi-user.target
         sh(f"systemctl daemon-reload 2>/dev/null || true")
         sh(f"systemctl enable --now {svc_name}.service 2>/dev/null || true")
     Path("/root/Kighmu/slowdns-router").mkdir(parents=True, exist_ok=True)
+    Path("/root/Kighmu/slowdns-router/go.mod").write_text("module slowdns-router\n")
     go_src = '''package main
 
 import (
