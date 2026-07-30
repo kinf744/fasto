@@ -906,7 +906,7 @@ WantedBy=multi-user.target
         sh(f"systemctl daemon-reload 2>/dev/null || true")
         sh(f"systemctl enable --now {svc_name}.service 2>/dev/null || true")
     router_py = """#!/usr/bin/env python3
-import socket, signal, sys, os
+import socket, signal, sys, os, threading, time
 
 LISTEN_RAW = os.environ.get("LISTEN", "53")
 if ":" in LISTEN_RAW: LISTEN = int(LISTEN_RAW.split(":")[1])
@@ -920,28 +920,35 @@ for part in ROUTES_DEF.replace(" ", "").split(","):
     d, b = part.split("=", 1)
     routes.append((d.strip().lower().rstrip("."), b.strip()))
 
+LOG = open("/var/log/slowdns/router.log", "a")
+def log(s):
+    LOG.write(s + "\n"); LOG.flush()
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.settimeout(30)
 sock.bind(("0.0.0.0", LISTEN))
+log("READY on %d routes=%s" % (LISTEN, ROUTES_DEF))
+
+lk = threading.Lock()
 
 def parse_qname(pkt):
-    if len(pkt) < 12: return None
+    if len(pkt) < 12: return (None, "too short")
     labels, pos, seen = [], 12, set()
     while pos < len(pkt):
         l = pkt[pos]
         if l == 0: break
         if l & 0xC0:
-            if pos in seen: return None
+            if pos in seen: return (None, "loop at %d" % pos)
             seen.add(pos)
             off = ((l & 0x3F) << 8) | pkt[pos+1]
-            if off < 12 or off >= len(pkt): return None
+            if off < 12 or off >= len(pkt): return (None, "bad ptr %d" % off)
             pos = off; continue
         pos += 1
-        if pos + l > len(pkt): return None
+        if pos + l > len(pkt): return (None, "overflow")
         try: labels.append(pkt[pos:pos+l].decode(errors="replace"))
-        except: return None
+        except: return (None, "decode err")
         pos += l
-    return ".".join(labels)
+    return (".".join(labels), None)
 
 def send_refused(conn, addr, req):
     if len(req) < 12: return
@@ -952,13 +959,15 @@ def send_refused(conn, addr, req):
     try: conn.sendto(bytes(resp), addr)
     except: pass
 
-signal.signal(signal.SIGTERM, lambda *_: exit(0))
+signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
 
 while True:
     try:
         data, addr = sock.recvfrom(4096)
-        qname = parse_qname(data)
-        if not qname:
+        t0 = time.time()
+        qname, err = parse_qname(data)
+        if err or not qname:
+            lk.acquire(); log("%s REFUSED qname=None err=%s from %s:%d" % (t0, err, addr[0], addr[1])); lk.release()
             send_refused(sock, addr, data)
             continue
         qname = qname.lower()
@@ -975,15 +984,20 @@ while True:
                     sock.sendto(resp, addr)
                     bc.close()
                     forwarded = True
-                except:
+                    dt = time.time()-t0
+                    lk.acquire(); log("%s FORWARD %s -> %s:%s dt=%.2f qname=%s" % (t0, addr[0], h, p, dt, qname)); lk.release()
+                except Exception as e:
+                    lk.acquire(); log("%s FORWARD_ERR %s -> %s:%s err=%s qname=%s" % (t0, addr[0], h, p, e, qname)); lk.release()
                     try: bc.close()
                     except: pass
                 break
         if not forwarded:
+            lk.acquire(); log("%s NOROUTE qname=%s from %s:%d" % (t0, qname, addr[0], addr[1])); lk.release()
             send_refused(sock, addr, data)
     except socket.timeout:
         continue
-    except:
+    except Exception as e:
+        lk.acquire(); log("%s LOOP_ERR %s" % (time.time(), e)); lk.release()
         continue
 """
         Path("/usr/local/bin/slowdns-router").write_text(router_py)
