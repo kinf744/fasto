@@ -1153,8 +1153,10 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
     Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
     _deploy_nft("slowdns", """table inet slowdns {
+    chain prerouting { type nat hook prerouting priority -100; }
     chain input { type filter hook input priority 0; policy accept;
         udp dport 53 accept; udp dport 5353 accept; udp dport 5354 accept;
+        tcp dport 109 accept; tcp dport 5401 accept;
     }
 }""")
     sh("systemctl daemon-reload 2>/dev/null || true")
@@ -1556,9 +1558,14 @@ def install_v2ray():
     if sh("command -v v2ray 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ V2ray déjà installé.{C['RST']}");return
     _ensure_domain()
-    sh("sysctl -w net.core.rmem_default=26214400 net.core.wmem_default=26214400 net.core.rmem_max=67108864 net.core.wmem_max=67108864 net.ipv4.tcp_rmem='4096 87380 33554432' net.ipv4.tcp_wmem='4096 65536 33554432' net.ipv4.tcp_congestion_control=bbr net.core.default_qdisc=fq 2>/dev/null || true")
+    sh("sysctl -w net.core.rmem_default=26214400 net.core.wmem_default=26214400 net.core.rmem_max=67108864 net.core.wmem_max=67108864 net.core.optmem_max=25165824 net.core.netdev_max_backlog=250000 net.ipv4.tcp_rmem='4096 87380 33554432' net.ipv4.tcp_wmem='4096 65536 33554432' net.ipv4.tcp_congestion_control=bbr net.core.default_qdisc=fq net.ipv4.ip_forward=1 net.ipv4.udp_mem='102400 873800 16777216' net.ipv4.tcp_fastopen=3 net.ipv4.tcp_mtu_probing=1 2>/dev/null || true")
     if not Path("/etc/sysctl.d/99-v2ray.conf").exists():
-        Path("/etc/sysctl.d/99-v2ray.conf").write_text("net.core.rmem_default=26214400\nnet.core.wmem_default=26214400\nnet.core.rmem_max=67108864\nnet.core.wmem_max=67108864\nnet.ipv4.tcp_rmem=4096 87380 33554432\nnet.ipv4.tcp_wmem=4096 65536 33554432\nnet.ipv4.tcp_congestion_control=bbr\nnet.core.default_qdisc=fq\n")
+        Path("/etc/sysctl.d/99-v2ray.conf").write_text("net.core.rmem_default=26214400\nnet.core.wmem_default=26214400\nnet.core.rmem_max=67108864\nnet.core.wmem_max=67108864\nnet.core.optmem_max=25165824\nfs.file-max=1000000\nnet.core.netdev_max_backlog=250000\nnet.ipv4.tcp_rmem=4096 87380 33554432\nnet.ipv4.tcp_wmem=4096 65536 33554432\nnet.ipv4.tcp_congestion_control=bbr\nnet.core.default_qdisc=fq\nnet.ipv4.ip_forward=1\nnet.ipv4.udp_mem=102400 873800 16777216\nnet.ipv4.tcp_fastopen=3\nnet.ipv4.tcp_mtu_probing=1\n")
+    iface = sh("ip route show default 2>/dev/null") or ""
+    iface = iface.split("dev ")[-1].split()[0] if "dev " in iface else ""
+    if iface:
+        sh(f"tc qdisc del dev {iface} root 2>/dev/null || true")
+        sh(f"tc qdisc add dev {iface} root fq 2>/dev/null || true")
     sh("curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash 2>/dev/null || true")
     if sh("command -v v2ray 2>/dev/null") == "":
         print(f" {C['RED']}✗ Échec installation V2ray.{C['RST']}");return
@@ -1585,7 +1592,7 @@ def install_v2ray():
     V2RAY_CONFIG.write_text(json.dumps(v2cfg, indent=2))
     if not V2RAY_USERS.exists():
         V2RAY_USERS.write_text('{"vless":[]}')
-    _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; }')
+    _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 5401 accept; }; }')
     v2svc="""[Unit]
 Description=V2Ray Service
 After=network-online.target
@@ -1594,13 +1601,13 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/v2ray run -config /etc/v2ray/config.json
+    ExecStart=/usr/local/bin/v2ray run -config /etc/v2ray/config.json
     Restart=always
-    RestartSec=3
+    RestartSec=5
     StartLimitIntervalSec=0
     StartLimitBurst=0
-    LimitNOFILE=1048576
-    KillMode=mixed
+    LimitNOFILE=65536
+    KillMode=process
     KillSignal=SIGTERM
 TimeoutStopSec=10
 [Install]
