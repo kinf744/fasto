@@ -1598,7 +1598,7 @@ TimeoutStopSec=10
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/v2ray.service").write_text(v2svc)
-    sh("rm -f /etc/systemd/system/v2ray@.service 2>/dev/null || true")
+    sh("rm -f /etc/systemd/system/v2ray@.service 2>/dev/null; rm -rf /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true")
     v2raydns_apply()
     if "v2ray-watchdog" not in sh("crontab -l 2>/dev/null"):
