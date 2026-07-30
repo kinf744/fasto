@@ -717,7 +717,7 @@ async def proxy(ws):
         try: writer.close()
         except: pass
 async def main():
-    async with websockets.serve(proxy, "0.0.0.0", LISTEN, max_size=2**24, read_limit=2**24, write_limit=2**24):
+    async with websockets.serve(proxy, "0.0.0.0", LISTEN, max_size=2**24):
         await asyncio.Future()
 asyncio.run(main())
 '''
