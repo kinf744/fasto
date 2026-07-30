@@ -1056,7 +1056,9 @@ func sendRefused(conn *net.UDPConn, clientAddr *net.UDPAddr, req []byte) {
         router_py = """#!/usr/bin/env python3
 import socket, signal, sys, os
 
-LISTEN = int(os.environ.get("LISTEN", 53))
+LISTEN_RAW = os.environ.get("LISTEN", "53")
+if ":" in LISTEN_RAW: LISTEN = int(LISTEN_RAW.split(":")[1])
+else: LISTEN = int(LISTEN_RAW)
 TIMEOUT = int(os.environ.get("TIMEOUT", 5))
 ROUTES_DEF = os.environ.get("ROUTES", "")
 
