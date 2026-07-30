@@ -593,6 +593,8 @@ def _force_domain():
     df = Path("/etc/kighmu/domain.txt")
     if not df.parent.exists(): df.parent.mkdir(parents=True)
     cur = df.read_text().strip() if df.exists() else ""
+    if cur:
+        return cur
     print(f"\n {C['YELLOW']}╔═══ CONFIGURATION DOMAINE POUR XRAY ═══╗{C['RST']}")
     dom = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Domain (e.g. vpn.example.com){C['RST']} [{C['GREEN']}{cur}{C['RST']}]: ").strip() or cur
     while not dom: dom = input(f" {C['RED']}✗{C['RST']} Domain required: ").strip()
