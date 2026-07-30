@@ -1010,7 +1010,7 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 Type=simple
-Environment=LISTEN=0.0.0.0:5300
+Environment=LISTEN=0.0.0.0:53
 Environment=ROUTES={ns4}=127.0.0.1:5353,{nv4}=127.0.0.1:5354
 Environment=TIMEOUT=5
 ExecStart=/usr/local/bin/slowdns-router
@@ -1024,9 +1024,7 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
     Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
     _deploy_nft("slowdns", """table inet slowdns {
-    chain prerouting { type nat hook prerouting priority -100; policy accept;
-        iifname "eth0" udp dport 53 redirect to :5300;
-    }
+    chain prerouting { type nat hook prerouting priority -100; policy accept; }
     chain input { type filter hook input priority 0; policy accept;
         udp dport 53 accept; udp dport 5300 accept;
         udp dport 5353 accept; udp dport 5354 accept;
@@ -1865,7 +1863,7 @@ def scr_main():
     RT=ram_total_g();RF=ram_free_g();RU=ram_used_g();RPCT=ram_pct();CPCT=cpu_pct();BUF=ram_buffer_m()
     ports=[("SSH","22","sshd"),("Dropbear","109","dropbear-custom"),("V2Ray-DNS","5401","v2ray"),
            ("HAProxy","447","haproxy"),("SSH-WS","80","sshws"),("SSH-SSL","444","ssl_tls"),
-           ("Xray","8880/443","xray"),("SlowDNS","5300","slowdns-router"),("ZIVPN","5667","zivpn"),
+           ("Xray","8880/443","xray"),("SlowDNS","53","slowdns-router"),("ZIVPN","5667","zivpn"),
            ("Hysteria","20000","hysteria"),("BadVPN","7100-7300","badvpn@7100"),("UDP-Custom","36712","udp-custom")]
     cw=max(len(f"{n}: {p}") for n,p,_ in ports) if ports else 20
     pg=[""]
@@ -2132,7 +2130,7 @@ def menu_protocol_installer():
         elif CH in ("5","05"): proto_action("V2RAY-DNS (VLESS TCP 5401)", install_v2ray, uninstall_v2ray)
         elif CH in ("6","06"): proto_action("BADVPN (UDPGW 7100/7200/7300)", install_badvpn, uninstall_badvpn)
         elif CH in ("7","07"): proto_action("UDP CUSTOM (36712)", install_udp_custom, uninstall_udp_custom)
-        elif CH in ("8","08"): proto_action("SLOWDNS (5300/5353/5354)", install_slowdns, uninstall_slowdns, configure_slowdns)
+        elif CH in ("8","08"): proto_action("SLOWDNS (53/5353/5354)", install_slowdns, uninstall_slowdns, configure_slowdns)
         elif CH in ("9","09"): proto_action("HYSTERIA (20000-50000)", install_hysteria, uninstall_hysteria)
         elif CH in ("10",): proto_action("ZIVPN (5667 / 6000-19999)", install_zivpn, uninstall_zivpn)
         elif CH in ("11","12"): (install_all_missing if CH=="11" else uninstall_all_active)();press_enter()
@@ -2313,7 +2311,7 @@ def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
        f"   {C['YELLOW']}[4] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}WS PAYLOAD{C['RST']}",
        f"%FREE%   {C['GRAY']}GET / HTTP/1.1[crlf]Host: {dom}[crlf]Connection: Upgrade[crlf]User-Agent: {ua}[crlf]Upgrade: websocket[crlf][crlf]{C['RST']}",
-       "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}SLOWDNS (PORT 5300){C['RST']}",
+       "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}SLOWDNS (PORT 53){C['RST']}",
        f"%FREE%   {C['WHITE']}Public Key :{C['RST']} {pub}",f"   {C['WHITE']}NameServer :{C['RST']} {ns}","%SEP%"]
     render_screen(L);press_enter()
 
