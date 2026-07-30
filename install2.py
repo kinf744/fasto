@@ -676,9 +676,67 @@ WantedBy=multi-user.target
         print(f" {C['YELLOW']}⚠ Service systemd sshws déjà existant.{C['RST']}")
     sh("systemctl reset-failed sshws.service 2>/dev/null || true")
     _deploy_nft("sshws", 'table inet sshws { chain input { type filter hook input priority 0; policy accept; tcp dport 80 accept; }; }')
+    _install_ws_proxies()
     if sh("systemctl is-active sshws.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ SSHWS installé et actif.{C['RST']}")
     else: print(f" {C['RED']}✗ SSHWS: échec démarrage.{C['RST']}")
+
+def _install_ws_proxies():
+    for name, listen_port, target in [("ws-dropbear", 2095, ("127.0.0.1", 109)), ("ws-stunnel", 700, ("127.0.0.1", 444))]:
+        svc_name = f"{name}.service"
+        script = Path(f"/usr/local/bin/{name}.py")
+        script.parent.mkdir(parents=True, exist_ok=True)
+        ws_py = f'''#!/usr/bin/env python3
+import asyncio, websockets, sys
+LISTEN = "{listen_port}"
+TARGET_HOST = "{target[0]}"
+TARGET_PORT = {target[1]}
+async def proxy(ws):
+    try:
+        reader, writer = await asyncio.open_connection(TARGET_HOST, TARGET_PORT)
+        async def fwd_rx():
+            try:
+                while True:
+                    data = await ws.recv()
+                    if isinstance(data, str): data = data.encode()
+                    writer.write(data)
+                    await writer.drain()
+            except: pass
+        async def fwd_tx():
+            try:
+                while True:
+                    data = await reader.read(4096)
+                    if not data: break
+                    await ws.send(data)
+            except: pass
+        await asyncio.gather(fwd_rx(), fwd_tx())
+    except: pass
+    finally:
+        try: writer.close()
+        except: pass
+async def main():
+    async with websockets.serve(proxy, "0.0.0.0", LISTEN, max_size=2**24, read_limit=2**24, write_limit=2**24):
+        await asyncio.Future()
+asyncio.run(main())
+'''
+        script.write_text(ws_py)
+        script.chmod(0o755)
+        svc_unit = f"""[Unit]
+Description={name} WS Proxy
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {script}
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+KillMode=mixed
+[Install]
+WantedBy=multi-user.target
+"""
+        Path(f"/etc/systemd/system/{svc_name}").write_text(svc_unit)
+        sh(f"systemctl daemon-reload 2>/dev/null; systemctl enable --now {svc_name} 2>/dev/null || true")
+        _deploy_nft(name, f'table inet {name} {{ chain input {{ type filter hook input priority 0; policy accept; tcp dport {listen_port} accept; }}; }}')
 
 def uninstall_sshws():
     sh("systemctl stop sshws.service 2>/dev/null || true")
@@ -797,25 +855,13 @@ def install_slowdns():
     DIR.mkdir(parents=True, exist_ok=True)
     (DIR / "ns4").mkdir(parents=True, exist_ok=True)
     (DIR / "nv4").mkdir(parents=True, exist_ok=True)
-    try:
-        from cryptography.hazmat.primitives.asymmetric import x25519
-        from cryptography.hazmat.primitives.serialization import PrivateFormat, PublicFormat, NoEncryption, Encoding
-        priv_k = x25519.X25519PrivateKey.generate()
-        pub_k = priv_k.public_key()
-        priv_hex = priv_k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex()
-        pub_hex = pub_k.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
-    except (ImportError, AttributeError):
-        sh("apt-get install -y -qq python3-cryptography 2>/dev/null || pip3 install cryptography --break-system-packages 2>/dev/null || true")
-        from cryptography.hazmat.primitives.asymmetric import x25519
-        from cryptography.hazmat.primitives.serialization import PrivateFormat, PublicFormat, NoEncryption, Encoding
-        priv_k = x25519.X25519PrivateKey.generate()
-        pub_k = priv_k.public_key()
-        priv_hex = priv_k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex()
-        pub_hex = pub_k.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
-    (DIR / "server.key").write_text(priv_hex + "\n")
-    (DIR / "server.pub").write_text(pub_hex + "\n")
+    DNSTT_PRIV = "4ab3af05fc004cb69d50c89de2cd5d138be1c397a55788b8867088e801f7fcaa"
+    DNSTT_PUB = "2cb39d63928451bd67f5954ffa5ac16c8d903562a10c4b21756de4f1a82d581c"
+    (DIR / "server.key").write_text(DNSTT_PRIV + "\n")
+    (DIR / "server.pub").write_text(DNSTT_PUB + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
-    sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/dnstt-server' -o /usr/local/bin/dnstt-server 2>/dev/null && chmod +x /usr/local/bin/dnstt-server 2>/dev/null")
+    tmp = sh("mktemp 2>/dev/null") or "/tmp/dnstt-server"
+    sh(f"curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/dnstt-server' -o {tmp} 2>/dev/null && mv {tmp} /usr/local/bin/dnstt-server && chmod +x /usr/local/bin/dnstt-server")
     domain = _ensure_domain() or get_ip()
     ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null")
     nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null")
@@ -829,9 +875,10 @@ def install_slowdns():
         nv4 = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}NV4 subdomain (e.g. {default_nv4}): {C['RST']}").strip() or default_nv4
     (DIR / "ns.conf").write_text(ns4 + "\n")
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
-    # dnstt-server start scripts
-    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5353 -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
-    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5354 -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
+    print(f" {C['GREEN']}✔ SlowDNS config: NS4={ns4}, NV4={nv4}{C['RST']}")
+    Path(DIR / "install.env").write_text("MODE=man\nNS4=%s\nNV4=%s\n" % (ns4, nv4))
+    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
+    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
     Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
     Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
     for f in ["/usr/local/bin/slowdns-ns4-start.sh","/usr/local/bin/slowdns-nv4-start.sh"]: Path(f).chmod(0o755)
@@ -845,6 +892,8 @@ ExecStartPre=/bin/sleep 5
 ExecStart=/usr/local/bin/{svc_name}-start.sh
 Restart=always
 RestartSec=5
+StartLimitIntervalSec=0
+StartLimitBurst=0
 LimitNOFILE=1048576
 StandardOutput=append:/var/log/slowdns/{svc_name}.log
 StandardError=append:/var/log/slowdns/{svc_name}.log
@@ -852,29 +901,172 @@ StandardError=append:/var/log/slowdns/{svc_name}.log
 WantedBy=multi-user.target
 """
         Path(f"/etc/systemd/system/{svc_name}.service").write_text(svc)
-    router_py = """#!/usr/bin/env python3
-import socket, signal, sys, os, struct, threading
+        sh(f"systemctl daemon-reload 2>/dev/null || true")
+        sh(f"systemctl enable --now {svc_name}.service 2>/dev/null || true")
+    Path("/root/Kighmu/slowdns-router").mkdir(parents=True, exist_ok=True)
+    go_src = '''package main
 
-LISTEN = int(os.environ.get("LISTEN", 5300))
+import (
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+type route struct {
+	domain string
+	addr   *net.UDPAddr
+}
+
+type stats struct {
+	mu      sync.Mutex
+	total   int64
+	routed  map[string]int64
+	refused int64
+	errors  int64
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" { return v }
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &fallback); n == 1 && err == nil { return fallback }
+	}
+	return fallback
+}
+
+func main() {
+	listen := getEnv("LISTEN", "0.0.0.0:53")
+	timeout := time.Duration(getEnvInt("TIMEOUT", 5)) * time.Second
+	routesDef := getEnv("ROUTES", "")
+
+	var routes []route
+	for _, part := range strings.Split(routesDef, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" { continue }
+		eq := strings.IndexByte(part, '=')
+		if eq < 1 { log.Fatalf("invalid route %q", part) }
+		domain := strings.ToLower(strings.TrimSuffix(part[:eq], "."))
+		addr, err := net.ResolveUDPAddr("udp4", part[eq+1:])
+		if err != nil { log.Fatalf("resolve: %v", err) }
+		routes = append(routes, route{domain: domain, addr: addr})
+	}
+	if len(routes) == 0 { log.Fatal("no routes configured") }
+
+	var st stats; st.routed = make(map[string]int64)
+	laddr, _ := net.ResolveUDPAddr("udp4", listen)
+	conn, err := net.ListenUDP("udp4", laddr)
+	if err != nil { log.Fatalf("listen: %v", err) }
+	defer conn.Close()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		conn.Close()
+	}()
+
+	log.Printf("slowdns-router on %s", listen)
+	for _, r := range routes { log.Printf("  %s -> %s", r.domain, r.addr) }
+
+	buf := make([]byte, 4096)
+	for {
+		n, clientAddr, err := conn.ReadFromUDP(buf)
+		if err != nil { break }
+		st.mu.Lock(); st.total++; st.mu.Unlock()
+		packet := make([]byte, n); copy(packet, buf[:n])
+		go handle(conn, clientAddr, packet, routes, timeout, &st)
+	}
+}
+
+func handle(conn *net.UDPConn, clientAddr *net.UDPAddr, packet []byte, routes []route, timeout time.Duration, st *stats) {
+	qname, err := extractQName(packet)
+	if err != nil { return }
+	qname = strings.ToLower(qname)
+	if !strings.HasSuffix(qname, ".") { qname += "." }
+
+	for _, r := range routes {
+		if strings.HasSuffix(qname, r.domain+".") {
+			resp, err := forward(packet, r.addr, timeout)
+			if err != nil {
+				st.mu.Lock(); st.errors++; st.mu.Unlock()
+				sendRefused(conn, clientAddr, packet)
+				return
+			}
+			st.mu.Lock(); st.routed[r.domain]++; st.mu.Unlock()
+			conn.WriteToUDP(resp, clientAddr)
+			return
+		}
+	}
+	st.mu.Lock(); st.refused++; st.mu.Unlock()
+	sendRefused(conn, clientAddr, packet)
+}
+
+func extractQName(packet []byte) (string, error) {
+	if len(packet) < 12 { return "", fmt.Errorf("too short") }
+	var labels []string; pos := 12
+	for {
+		if pos >= len(packet) { return "", fmt.Errorf("truncated") }
+		length := int(packet[pos])
+		if length == 0 { pos++; break }
+		if length&0xC0 != 0 { return "", fmt.Errorf("compressed") }
+		pos++
+		if pos+length > len(packet) { return "", fmt.Errorf("overflow") }
+		labels = append(labels, string(packet[pos:pos+length]))
+		pos += length
+	}
+	return strings.Join(labels, "."), nil
+}
+
+func forward(packet []byte, backend *net.UDPAddr, timeout time.Duration) ([]byte, error) {
+	bc, err := net.DialUDP("udp4", nil, backend)
+	if err != nil { return nil, err }
+	defer bc.Close()
+	bc.SetDeadline(time.Now().Add(timeout))
+	if _, err := bc.Write(packet); err != nil { return nil, err }
+	resp := make([]byte, 4096)
+	n, err := bc.Read(resp)
+	if err != nil { return nil, err }
+	out := make([]byte, n); copy(out, resp[:n])
+	return out, nil
+}
+
+func sendRefused(conn *net.UDPConn, clientAddr *net.UDPAddr, req []byte) {
+	if len(req) < 12 { return }
+	resp := make([]byte, len(req)); copy(resp, req)
+	resp[2] = (req[2] & 0x01) | 0x80
+	resp[3] = 0x85; resp[6] = 0; resp[7] = 0
+	resp[8] = 0; resp[9] = 0; resp[10] = 0; resp[11] = 0
+	conn.WriteToUDP(resp, clientAddr)
+}
+'''
+    Path("/root/Kighmu/slowdns-router/main.go").write_text(go_src)
+    sh("cd /root/Kighmu/slowdns-router && go build -o slowdns-router . 2>/dev/null && cp slowdns-router /usr/local/bin/slowdns-router 2>/dev/null || true")
+    if not Path("/usr/local/bin/slowdns-router").exists():
+        router_py = """#!/usr/bin/env python3
+import socket, signal, sys, os
+
+LISTEN = int(os.environ.get("LISTEN", 53))
 TIMEOUT = int(os.environ.get("TIMEOUT", 5))
-NS4_FILE = "/etc/slowdns/ns.conf"
-NV4_FILE = "/etc/slowdns/nv4/ns.conf"
-NS4_BACKEND = os.environ.get("NS4_BACKEND", "127.0.0.1:5353")
-NV4_BACKEND = os.environ.get("NV4_BACKEND", "127.0.0.1:5354")
+ROUTES_DEF = os.environ.get("ROUTES", "")
 
-def read_domain(f):
-    try: return open(f).read().strip().rstrip(".")
-    except: return ""
+routes = []
+for part in ROUTES_DEF.replace(" ", "").split(","):
+    if "=" not in part: continue
+    d, b = part.split("=", 1)
+    routes.append((d.strip().lower().rstrip("."), b.strip()))
 
-def load_routes():
-    return [(read_domain(NS4_FILE), NS4_BACKEND), (read_domain(NV4_FILE), NV4_BACKEND)]
-
-ROUTES = load_routes()
-
-sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.settimeout(30)
-sock.bind(("", LISTEN))
+sock.bind(("0.0.0.0", LISTEN))
 
 def parse_qname(pkt):
     if len(pkt) < 12: return None
@@ -885,7 +1077,8 @@ def parse_qname(pkt):
         if l & 0xC0: return None
         pos += 1
         if pos + l > len(pkt): return None
-        labels.append(pkt[pos:pos+l].decode(errors="replace"))
+        try: labels.append(pkt[pos:pos+l].decode(errors="replace"))
+        except: return None
         pos += l
     return ".".join(labels)
 
@@ -898,102 +1091,73 @@ def send_refused(conn, addr, req):
     try: conn.sendto(bytes(resp), addr)
     except: pass
 
-def match_domain(qname, domain):
-    if not domain: return False
-    q = qname.lower()
-    d = domain.lower()
-    return q == d or q.endswith("." + d) or q.endswith("." + d + ".")
-
-def handle(conn, data, addr):
-    qname = parse_qname(data)
-    if not qname:
-        sys.stderr.write("[slowdns] parse fail from %s:%s\\n" % (addr[0], addr[1]))
-        send_refused(conn, addr, data)
-        return
-    for domain, backend in ROUTES:
-        if match_domain(qname, domain):
-            try:
-                bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                bc.settimeout(TIMEOUT)
-                h, p = backend.split(":", 1)
-                bc.sendto(data, (h, int(p)))
-                resp, _ = bc.recvfrom(4096)
-                conn.sendto(resp, addr)
-                bc.close()
-            except socket.timeout:
-                sys.stderr.write("[slowdns] timeout %s->%s from %s\\n" % (domain, backend, addr[0]))
-                send_refused(conn, addr, data)
-            except Exception as e:
-                sys.stderr.write("[slowdns] error %s->%s: %s\\n" % (domain, backend, e))
-                send_refused(conn, addr, data)
-            finally:
-                try: bc.close()
-                except: pass
-            return
-    sys.stderr.write("[slowdns] no route for %s from %s\\n" % (qname, addr[0]))
-    send_refused(conn, addr, data)
-
-def reload_routes(signum=None, frame=None):
-    global ROUTES
-    ROUTES = load_routes()
-    for d, b in ROUTES:
-        sys.stderr.write("  reloaded route %s -> %s\\n" % (d, b))
-    sys.stderr.flush()
-
 signal.signal(signal.SIGTERM, lambda *_: exit(0))
-signal.signal(signal.SIGHUP, reload_routes)
-
-reload_routes()
-sys.stderr.write("slowdns-router on %s\\n" % LISTEN)
-sys.stderr.flush()
 
 while True:
     try:
         data, addr = sock.recvfrom(4096)
-        t = threading.Thread(target=handle, args=(sock, data, addr), daemon=True)
-        t.start()
+        qname = parse_qname(data)
+        if not qname:
+            send_refused(sock, addr, data)
+            continue
+        qname = qname.lower()
+        if not qname.endswith("."): qname += "."
+        forwarded = False
+        for domain, backend in routes:
+            if qname == domain + "." or qname.endswith("." + domain + "."):
+                try:
+                    bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    bc.settimeout(TIMEOUT)
+                    h, p = backend.split(":", 1)
+                    bc.sendto(data, (h, int(p)))
+                    resp, _ = bc.recvfrom(4096)
+                    sock.sendto(resp, addr)
+                    bc.close()
+                    forwarded = True
+                except:
+                    try: bc.close()
+                    except: pass
+                break
+        if not forwarded:
+            send_refused(sock, addr, data)
     except socket.timeout:
         continue
-    except OSError:
-        continue
-    except Exception:
+    except:
         continue
 """
-    Path("/usr/local/bin/slowdns-router").write_text(router_py)
-    Path("/usr/local/bin/slowdns-router").chmod(0o755)
+        Path("/usr/local/bin/slowdns-router").write_text(router_py)
+        Path("/usr/local/bin/slowdns-router").chmod(0o755)
     svc = f"""[Unit]
-Description=SlowDNS Router (53->5353/5354)
-After=network-online.target
+Description=SlowDNS Go Router
+After=network-online.target slowdns-ns4.service slowdns-nv4.service
 Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 Type=simple
-Environment=LISTEN=5300
+Environment=LISTEN=0.0.0.0:53
+Environment=ROUTES={ns4}=127.0.0.1:5353,{nv4}=127.0.0.1:5354
 Environment=TIMEOUT=5
-ExecStart=/usr/bin/python3 /usr/local/bin/slowdns-router
+ExecStart=/usr/local/bin/slowdns-router
 Restart=always
-RestartSec=5
+RestartSec=3
 LimitNOFILE=1048576
-StandardOutput=append:/var/log/slowdns/slowdns-router.log
-StandardError=append:/var/log/slowdns/slowdns-router.log
+KillMode=mixed
 [Install]
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
     Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
-    # nftables rules for SlowDNS
-    iface = get_main_iface()
-    _deploy_nft("slowdns", f"""table inet slowdns {{
-    chain prerouting {{ type nat hook prerouting priority -100; policy accept;
-        iif "{iface}" udp dport 53 redirect to :5300
-    }}
-    chain input {{ type filter hook input priority 0; policy accept;
-        udp dport {{53,5300,5353,5354}} accept
-    }}
-}}""")
+    _deploy_nft("slowdns", """table inet slowdns {
+    chain input { type filter hook input priority 0; policy accept;
+        udp dport 53 accept; udp dport 5353 accept; udp dport 5354 accept;
+    }
+}""")
     sh("systemctl daemon-reload 2>/dev/null || true")
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
-    print(f" {C['GREEN']}✔ SlowDNS installé (NS4:5353, NV4:5354, Router:5300).{C['RST']}")
+    sh("chattr -i /etc/resolv.conf 2>/dev/null || true")
+    Path("/etc/resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    sh("chattr +i /etc/resolv.conf 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ SlowDNS installé (53→5353/5354 via slowdns-router).{C['RST']}")
 
 def configure_slowdns():
     DIR = Path("/etc/slowdns")
@@ -1069,12 +1233,16 @@ def xray_gen_config():
     XRAY_CONFIG.write_text(json.dumps(config, indent=2))
 
 def xray_gen_haproxy():
-    haproxy_cfg = """global
+    PEM_DIR = "/etc/xray"
+    panel_crt = f"{PEM_DIR}/xray.pem"
+    domain = sh("cat /etc/kighmu/domain.txt 2>/dev/null") or "localhost"
+    haproxy_cfg = f"""global
     daemon
     maxconn 65535
     tune.ssl.default-dh-param 2048
     ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
     ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+    ssl-server-verify none
 
 defaults
     mode tcp
@@ -1090,7 +1258,7 @@ defaults
 frontend xray-ntls
     bind *:8880
     tcp-request inspect-delay 5s
-    tcp-request content accept if { req.len ge 21 }
+    tcp-request content accept if {{ req.len ge 21 }}
     acl is_h2         req.payload(0,3) -m bin 505249
     acl is_http       req.payload(0,4) -m bin 474554202f
     acl is_post       req.payload(0,4) -m bin 504f5354
@@ -1107,8 +1275,9 @@ frontend xray-ntls
     default_backend xray-vless-tcp
 
 frontend xray-tls
+    bind *:443 ssl crt {panel_crt} alpn h2,http/1.1
     tcp-request inspect-delay 5s
-    tcp-request content accept if { req.len ge 5 }
+    tcp-request content accept if {{ req.len ge 5 }}
     acl is_h2         req.payload(0,3) -m bin 505249
     acl is_http       req.payload(0,4) -m bin 474554202f
     acl is_post       req.payload(0,4) -m bin 504f5354
@@ -1129,16 +1298,16 @@ frontend grpc_router
     bind 127.0.0.1:9898
     mode http
     timeout http-request 5s
-    use_backend xray-vmess-grpc   if { path_beg /vmess-grpc }
-    use_backend xray-vless-grpc   if { path_beg /vless-grpc }
-    use_backend xray-trojan-grpc  if { path_beg /trojan-grpc }
-    use_backend xray-vmess-grpc   if { path_beg /vmess-h2 }
-    use_backend xray-vless-grpc   if { path_beg /vless-h2 }
-    use_backend xray-trojan-grpc  if { path_beg /trojan-h2 }
-    use_backend xray-vmess-xhttp  if { path_beg /vmess-xhttp }
-    use_backend xray-vless-xhttp  if { path_beg /vless-xhttp }
-    use_backend xray-trojan-xhttp if { path_beg /trojan-xhttp }
-    use_backend xray-vless-hupgrade  if { path_beg /vless-hupgrade }
+    use_backend xray-vmess-grpc   if {{ path_beg /vmess-grpc }}
+    use_backend xray-vless-grpc   if {{ path_beg /vless-grpc }}
+    use_backend xray-trojan-grpc  if {{ path_beg /trojan-grpc }}
+    use_backend xray-vmess-grpc   if {{ path_beg /vmess-h2 }}
+    use_backend xray-vless-grpc   if {{ path_beg /vless-h2 }}
+    use_backend xray-trojan-grpc  if {{ path_beg /trojan-h2 }}
+    use_backend xray-vmess-xhttp  if {{ path_beg /vmess-xhttp }}
+    use_backend xray-vless-xhttp  if {{ path_beg /vless-xhttp }}
+    use_backend xray-trojan-xhttp if {{ path_beg /trojan-xhttp }}
+    use_backend xray-vless-hupgrade  if {{ path_beg /vless-hupgrade }}
     default_backend xray-vless-grpc
 
 backend grpc_router
@@ -1266,13 +1435,13 @@ def install_xray():
     if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
     ok=_acme_cert(DOMAIN, "/etc/xray")
     if not ok:
-        print(f" {C['RED']}✗ Xray requiert un certificat Let's Encrypt valide pour {DOMAIN}.{C['RST']}")
-        print(f" {C['YELLOW']}► Vérifiez que votre domaine pointe vers cette IP et que le port 80 est accessible.{C['RST']}")
-        return
+        print(f" {C['YELLOW']}⚠ ACME failed for {DOMAIN}, generating self-signed cert...{C['RST']}")
+        sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/privkey.pem -out /etc/xray/fullchain.pem -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
     if not Path("/etc/xray/xray.pem").exists():
         crt=Path("/etc/xray/fullchain.pem")
         key=Path("/etc/xray/privkey.pem")
         sh(f"cat {crt} {key} > /etc/xray/xray.pem 2>/dev/null || true")
+        sh(f"cat {crt} {key} > /etc/haproxy/panel.pem 2>/dev/null || true")
     sh("chmod 600 /etc/xray/xray.key /etc/xray/xray.pem /etc/xray/privkey.pem 2>/dev/null || true")
     xray_gen_config()
     xray_gen_haproxy()
@@ -1299,7 +1468,7 @@ WantedBy=multi-user.target
     sh("rm -rf /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d 2>/dev/null || true")
     Path("/etc/systemd/system/haproxy.service.d").mkdir(parents=True, exist_ok=True)
     Path("/etc/systemd/system/haproxy.service.d/override.conf").write_text("[Service]\nRestart=always\nStartLimitIntervalSec=0\nStartLimitBurst=0\n")
-    _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880,10001,10085,9898} accept; }; }')
+    _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880} accept; }; }')
     xray_build_config()
     sh("systemctl daemon-reload 2>/dev/null || true")
     sh("systemctl enable --now xray haproxy 2>/dev/null || true; sleep 2")
@@ -1374,16 +1543,19 @@ def install_v2ray():
     if sh("command -v v2ray 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ V2ray déjà installé.{C['RST']}");return
     _ensure_domain()
+    sh("sysctl -w net.core.rmem_default=26214400 net.core.wmem_default=26214400 net.core.rmem_max=67108864 net.core.wmem_max=67108864 net.ipv4.tcp_rmem='4096 87380 33554432' net.ipv4.tcp_wmem='4096 65536 33554432' net.ipv4.tcp_congestion_control=bbr net.core.default_qdisc=fq 2>/dev/null || true")
+    if not Path("/etc/sysctl.d/99-v2ray.conf").exists():
+        Path("/etc/sysctl.d/99-v2ray.conf").write_text("net.core.rmem_default=26214400\nnet.core.wmem_default=26214400\nnet.core.rmem_max=67108864\nnet.core.wmem_max=67108864\nnet.ipv4.tcp_rmem=4096 87380 33554432\nnet.ipv4.tcp_wmem=4096 65536 33554432\nnet.ipv4.tcp_congestion_control=bbr\nnet.core.default_qdisc=fq\n")
     sh("curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash 2>/dev/null || true")
     if sh("command -v v2ray 2>/dev/null") == "":
         print(f" {C['RED']}✗ Échec installation V2ray.{C['RST']}");return
-    V2RAY_CONFIG = Path("/etc/v2ray/config.json")
-    V2RAY_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    Path("/etc/v2ray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/v2ray").mkdir(parents=True, exist_ok=True)
+    V2RAY_CONFIG = Path("/etc/v2ray/config.json")
     v2cfg = {
         "log": {"loglevel": "warning", "access": "/var/log/v2ray/access.log", "error": "/var/log/v2ray/error.log"},
         "inbounds": [{
-            "port": 5401, "listen": "::", "protocol": "vless",
+            "port": 5401, "listen": "0.0.0.0", "protocol": "vless",
             "settings": {"clients": [], "decryption": "none"},
             "streamSettings": {"network": "tcp", "security": "none"},
             "tag": "VLESS-TCP"
@@ -1410,22 +1582,23 @@ StartLimitIntervalSec=0
 Type=simple
 User=root
 ExecStart=/usr/local/bin/v2ray run -config /etc/v2ray/config.json
-Restart=always
-RestartSec=5
-StartLimitBurst=0
-LimitNOFILE=65536
-KillMode=process
-KillSignal=SIGTERM
+    Restart=always
+    RestartSec=3
+    StartLimitIntervalSec=0
+    StartLimitBurst=0
+    LimitNOFILE=1048576
+    KillMode=mixed
+    KillSignal=SIGTERM
 TimeoutStopSec=10
 [Install]
 WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/v2ray.service").write_text(v2svc)
-    sh("rm -f /etc/systemd/system/v2ray@.service /etc/systemd/system/v2ray.service.d/* 2>/dev/null || true")
-    sh("rmdir /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
-    sh("rm -rf /etc/systemd/system/v2ray.service.d 2>/dev/null || true")
+    sh("rm -f /etc/systemd/system/v2ray@.service 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl enable --now v2ray 2>/dev/null || true")
     v2raydns_apply()
+    if "v2ray-watchdog" not in sh("crontab -l 2>/dev/null"):
+        sh('(crontab -l 2>/dev/null; echo "*/2 * * * * systemctl is-active --quiet v2ray || systemctl restart v2ray") | crontab - 2>/dev/null || true')
     if sh("systemctl is-active v2ray 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ V2ray-DNS installé et actif (port 5401).{C['RST']}")
     else:
