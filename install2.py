@@ -879,8 +879,8 @@ def install_slowdns():
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     print(f" {C['GREEN']}✔ SlowDNS config: NS4={ns4}, NV4={nv4}{C['RST']}")
     Path(DIR / "install.env").write_text("MODE=man\nNS4=%s\nNV4=%s\n" % (ns4, nv4))
-    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
-    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
+    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -mtu 512 -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
+    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -mtu 512 -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
     Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
     Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
     for f in ["/usr/local/bin/slowdns-ns4-start.sh","/usr/local/bin/slowdns-nv4-start.sh"]: Path(f).chmod(0o755)
