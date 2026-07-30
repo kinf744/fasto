@@ -905,156 +905,7 @@ WantedBy=multi-user.target
         Path(f"/etc/systemd/system/{svc_name}.service").write_text(svc)
         sh(f"systemctl daemon-reload 2>/dev/null || true")
         sh(f"systemctl enable --now {svc_name}.service 2>/dev/null || true")
-    Path("/root/Kighmu/slowdns-router").mkdir(parents=True, exist_ok=True)
-    Path("/root/Kighmu/slowdns-router/go.mod").write_text("module slowdns-router\n")
-    go_src = '''package main
-
-import (
-	"fmt"
-	"log"
-	"net"
-	"os"
-	"os/signal"
-	"strings"
-	"sync"
-	"syscall"
-	"time"
-)
-
-type route struct {
-	domain string
-	addr   *net.UDPAddr
-}
-
-type stats struct {
-	mu      sync.Mutex
-	total   int64
-	routed  map[string]int64
-	refused int64
-	errors  int64
-}
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" { return v }
-	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := fmt.Sscanf(v, "%d", &fallback); n == 1 && err == nil { return fallback }
-	}
-	return fallback
-}
-
-func main() {
-	listen := getEnv("LISTEN", "0.0.0.0:53")
-	timeout := time.Duration(getEnvInt("TIMEOUT", 5)) * time.Second
-	routesDef := getEnv("ROUTES", "")
-
-	var routes []route
-	for _, part := range strings.Split(routesDef, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" { continue }
-		eq := strings.IndexByte(part, '=')
-		if eq < 1 { log.Fatalf("invalid route %q", part) }
-		domain := strings.ToLower(strings.TrimSuffix(part[:eq], "."))
-		addr, err := net.ResolveUDPAddr("udp4", part[eq+1:])
-		if err != nil { log.Fatalf("resolve: %v", err) }
-		routes = append(routes, route{domain: domain, addr: addr})
-	}
-	if len(routes) == 0 { log.Fatal("no routes configured") }
-
-	var st stats; st.routed = make(map[string]int64)
-	laddr, _ := net.ResolveUDPAddr("udp4", listen)
-	conn, err := net.ListenUDP("udp4", laddr)
-	if err != nil { log.Fatalf("listen: %v", err) }
-	defer conn.Close()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		conn.Close()
-	}()
-
-	log.Printf("slowdns-router on %s", listen)
-	for _, r := range routes { log.Printf("  %s -> %s", r.domain, r.addr) }
-
-	buf := make([]byte, 4096)
-	for {
-		n, clientAddr, err := conn.ReadFromUDP(buf)
-		if err != nil { break }
-		st.mu.Lock(); st.total++; st.mu.Unlock()
-		packet := make([]byte, n); copy(packet, buf[:n])
-		go handle(conn, clientAddr, packet, routes, timeout, &st)
-	}
-}
-
-func handle(conn *net.UDPConn, clientAddr *net.UDPAddr, packet []byte, routes []route, timeout time.Duration, st *stats) {
-	qname, err := extractQName(packet)
-	if err != nil { return }
-	qname = strings.ToLower(qname)
-	if !strings.HasSuffix(qname, ".") { qname += "." }
-
-	for _, r := range routes {
-		if strings.HasSuffix(qname, r.domain+".") {
-			resp, err := forward(packet, r.addr, timeout)
-			if err != nil {
-				st.mu.Lock(); st.errors++; st.mu.Unlock()
-				sendRefused(conn, clientAddr, packet)
-				return
-			}
-			st.mu.Lock(); st.routed[r.domain]++; st.mu.Unlock()
-			conn.WriteToUDP(resp, clientAddr)
-			return
-		}
-	}
-	st.mu.Lock(); st.refused++; st.mu.Unlock()
-	sendRefused(conn, clientAddr, packet)
-}
-
-func extractQName(packet []byte) (string, error) {
-	if len(packet) < 12 { return "", fmt.Errorf("too short") }
-	var labels []string; pos := 12
-	for {
-		if pos >= len(packet) { return "", fmt.Errorf("truncated") }
-		length := int(packet[pos])
-		if length == 0 { pos++; break }
-		if length&0xC0 != 0 { return "", fmt.Errorf("compressed") }
-		pos++
-		if pos+length > len(packet) { return "", fmt.Errorf("overflow") }
-		labels = append(labels, string(packet[pos:pos+length]))
-		pos += length
-	}
-	return strings.Join(labels, "."), nil
-}
-
-func forward(packet []byte, backend *net.UDPAddr, timeout time.Duration) ([]byte, error) {
-	bc, err := net.DialUDP("udp4", nil, backend)
-	if err != nil { return nil, err }
-	defer bc.Close()
-	bc.SetDeadline(time.Now().Add(timeout))
-	if _, err := bc.Write(packet); err != nil { return nil, err }
-	resp := make([]byte, 4096)
-	n, err := bc.Read(resp)
-	if err != nil { return nil, err }
-	out := make([]byte, n); copy(out, resp[:n])
-	return out, nil
-}
-
-func sendRefused(conn *net.UDPConn, clientAddr *net.UDPAddr, req []byte) {
-	if len(req) < 12 { return }
-	resp := make([]byte, len(req)); copy(resp, req)
-	resp[2] = (req[2] & 0x01) | 0x80
-	resp[3] = 0x85; resp[6] = 0; resp[7] = 0
-	resp[8] = 0; resp[9] = 0; resp[10] = 0; resp[11] = 0
-	conn.WriteToUDP(resp, clientAddr)
-}
-'''
-    Path("/root/Kighmu/slowdns-router/main.go").write_text(go_src)
-    sh("cd /root/Kighmu/slowdns-router && go build -o slowdns-router . 2>/dev/null && cp slowdns-router /usr/local/bin/slowdns-router 2>/dev/null || true")
-    if not Path("/usr/local/bin/slowdns-router").exists():
-        router_py = """#!/usr/bin/env python3
+    router_py = """#!/usr/bin/env python3
 import socket, signal, sys, os
 
 LISTEN_RAW = os.environ.get("LISTEN", "53")
@@ -1075,11 +926,16 @@ sock.bind(("0.0.0.0", LISTEN))
 
 def parse_qname(pkt):
     if len(pkt) < 12: return None
-    labels, pos = [], 12
+    labels, pos, seen = [], 12, set()
     while pos < len(pkt):
         l = pkt[pos]
         if l == 0: break
-        if l & 0xC0: return None
+        if l & 0xC0:
+            if pos in seen: return None
+            seen.add(pos)
+            off = ((l & 0x3F) << 8) | pkt[pos+1]
+            if off < 12 or off >= len(pkt): return None
+            pos = off; continue
         pos += 1
         if pos + l > len(pkt): return None
         try: labels.append(pkt[pos:pos+l].decode(errors="replace"))
@@ -1133,7 +989,7 @@ while True:
         Path("/usr/local/bin/slowdns-router").write_text(router_py)
         Path("/usr/local/bin/slowdns-router").chmod(0o755)
     svc = f"""[Unit]
-Description=SlowDNS Go Router
+Description=SlowDNS Router
 After=network-online.target slowdns-ns4.service slowdns-nv4.service
 Wants=network-online.target
 StartLimitIntervalSec=0
