@@ -243,7 +243,7 @@ def _svc_ready(svc):
         return sh("systemctl is-active haproxy 2>/dev/null") == "active" and (":443 " in sh("ss -tlnp 2>/dev/null") or ":8880 " in sh("ss -tlnp 2>/dev/null"))
     cases = {
         "badvpn@7100": sh("systemctl is-active badvpn@7100 2>/dev/null") == "active",
-        "slowdns-router": sh("systemctl is-active slowdns-router 2>/dev/null") == "active",
+        "dnsdist": sh("systemctl is-active dnsdist 2>/dev/null") == "active",
         "dropbear-custom": sh("systemctl is-active dropbear-custom 2>/dev/null") == "active" and ":109 " in sh("ss -tlnp 2>/dev/null"),
         "v2ray": sh("systemctl is-active v2ray 2>/dev/null") == "active" and ":5401 " in sh("ss -tlnp 2>/dev/null"),
         "xray": sh("systemctl is-active xray 2>/dev/null") == "active",
@@ -853,7 +853,7 @@ def uninstall_udp_custom():
 
 def install_slowdns():
     if sh("command -v dnstt-server 2>/dev/null") != "": return
-    sh("apt-get install -y -qq curl jq wget golang-go 2>/dev/null")
+    sh("apt-get install -y -qq curl jq wget dnsdist nftables 2>/dev/null")
     DIR = Path("/etc/slowdns")
     DIR.mkdir(parents=True, exist_ok=True)
     (DIR / "ns4").mkdir(parents=True, exist_ok=True)
@@ -880,166 +880,113 @@ def install_slowdns():
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     print(f" {C['GREEN']}✔ SlowDNS config: NS4={ns4}, NV4={nv4}{C['RST']}")
     Path(DIR / "install.env").write_text("MODE=man\nNS4=%s\nNV4=%s\n" % (ns4, nv4))
-    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5353 -mtu 512 -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
-    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:5354 -mtu 512 -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
+
+    PORT1 = 5353; PORT2 = 5354
+    DNSDIST_PORT = 5300
+    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT1} -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
+    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT2} -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
     Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
     Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
     for f in ["/usr/local/bin/slowdns-ns4-start.sh","/usr/local/bin/slowdns-nv4-start.sh"]: Path(f).chmod(0o755)
     for svc_name in ["slowdns-ns4","slowdns-nv4"]:
+        logfile = f"/var/log/slowdns/{svc_name}.log"
         svc = f"""[Unit]
-Description=SlowDNS {svc_name}
+Description=SlowDNS DNSTT {svc_name}
 After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 [Service]
-Type=simple
 ExecStartPre=/bin/sleep 5
 ExecStart=/usr/local/bin/{svc_name}-start.sh
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 StartLimitBurst=0
 LimitNOFILE=1048576
-StandardOutput=append:/var/log/slowdns/{svc_name}.log
-StandardError=append:/var/log/slowdns/{svc_name}.log
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=append:{logfile}
+StandardError=append:{logfile}
 [Install]
 WantedBy=multi-user.target
 """
         Path(f"/etc/systemd/system/{svc_name}.service").write_text(svc)
         sh(f"systemctl daemon-reload 2>/dev/null || true")
         sh(f"systemctl enable --now {svc_name}.service 2>/dev/null || true")
-    router_py = """#!/usr/bin/env python3
-import socket, signal, sys, os, threading, time
 
-LISTEN_RAW = os.environ.get("LISTEN", "53")
-if ":" in LISTEN_RAW: LISTEN = int(LISTEN_RAW.split(":")[1])
-else: LISTEN = int(LISTEN_RAW)
-TIMEOUT = int(os.environ.get("TIMEOUT", 5))
-ROUTES_DEF = os.environ.get("ROUTES", "")
-
-routes = []
-for part in ROUTES_DEF.replace(" ", "").split(","):
-    if "=" not in part: continue
-    d, b = part.split("=", 1)
-    routes.append((d.strip().lower().rstrip("."), b.strip()))
-
-LOG = open("/var/log/slowdns/router.log", "a")
-def log(s):
-    LOG.write(s + "\n"); LOG.flush()
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.settimeout(30)
-sock.bind(("0.0.0.0", LISTEN))
-log("READY on %d routes=%s" % (LISTEN, ROUTES_DEF))
-
-lk = threading.Lock()
-
-def parse_qname(pkt):
-    if len(pkt) < 12: return (None, "too short")
-    labels, pos, seen = [], 12, set()
-    while pos < len(pkt):
-        l = pkt[pos]
-        if l == 0: break
-        if l & 0xC0:
-            if pos in seen: return (None, "loop at %d" % pos)
-            seen.add(pos)
-            off = ((l & 0x3F) << 8) | pkt[pos+1]
-            if off < 12 or off >= len(pkt): return (None, "bad ptr %d" % off)
-            pos = off; continue
-        pos += 1
-        if pos + l > len(pkt): return (None, "overflow")
-        try: labels.append(pkt[pos:pos+l].decode(errors="replace"))
-        except: return (None, "decode err")
-        pos += l
-    return (".".join(labels), None)
-
-def send_refused(conn, addr, req):
-    if len(req) < 12: return
-    resp = bytearray(req)
-    resp[2] = (req[2] & 0x01) | 0x80
-    resp[3] = 0x85
-    for i in range(6, 12): resp[i] = 0
-    try: conn.sendto(bytes(resp), addr)
-    except: pass
-
-signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
-
-while True:
-    try:
-        data, addr = sock.recvfrom(4096)
-        t0 = time.time()
-        qname, err = parse_qname(data)
-        if err or not qname:
-            lk.acquire(); log("%s REFUSED qname=None err=%s from %s:%d" % (t0, err, addr[0], addr[1])); lk.release()
-            send_refused(sock, addr, data)
-            continue
-        qname = qname.lower()
-        if not qname.endswith("."): qname += "."
-        forwarded = False
-        for domain, backend in routes:
-            if qname == domain + "." or qname.endswith("." + domain + "."):
-                try:
-                    bc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    bc.settimeout(TIMEOUT)
-                    h, p = backend.split(":", 1)
-                    bc.sendto(data, (h, int(p)))
-                    resp, _ = bc.recvfrom(4096)
-                    sock.sendto(resp, addr)
-                    bc.close()
-                    forwarded = True
-                    dt = time.time()-t0
-                    lk.acquire(); log("%s FORWARD %s -> %s:%s dt=%.2f qname=%s" % (t0, addr[0], h, p, dt, qname)); lk.release()
-                except Exception as e:
-                    lk.acquire(); log("%s FORWARD_ERR %s -> %s:%s err=%s qname=%s" % (t0, addr[0], h, p, e, qname)); lk.release()
-                    try: bc.close()
-                    except: pass
-                break
-        if not forwarded:
-            lk.acquire(); log("%s NOROUTE qname=%s from %s:%d" % (t0, qname, addr[0], addr[1])); lk.release()
-            send_refused(sock, addr, data)
-    except socket.timeout:
-        continue
-    except Exception as e:
-        lk.acquire(); log("%s LOOP_ERR %s" % (time.time(), e)); lk.release()
-        continue
-"""
-        Path("/usr/local/bin/slowdns-router").write_text(router_py)
-        Path("/usr/local/bin/slowdns-router").chmod(0o755)
-    svc = f"""[Unit]
-Description=SlowDNS Router
-After=network-online.target slowdns-ns4.service slowdns-nv4.service
-Wants=network-online.target
-StartLimitIntervalSec=0
-[Service]
-Type=simple
-Environment=LISTEN=0.0.0.0:53
-Environment=ROUTES={ns4}=127.0.0.1:5353,{nv4}=127.0.0.1:5354
-Environment=TIMEOUT=5
-ExecStart=/usr/local/bin/slowdns-router
+    sh("systemctl stop dnsdist 2>/dev/null || true")
+    Path("/etc/systemd/system/dnsdist.service.d").mkdir(parents=True, exist_ok=True)
+    Path("/etc/systemd/system/dnsdist.service.d/restart.conf").write_text("""[Service]
 Restart=always
-RestartSec=3
-LimitNOFILE=1048576
-KillMode=mixed
-[Install]
-WantedBy=multi-user.target
+RestartSec=5
+StartLimitBurst=0
+StartLimitIntervalSec=0
+""")
+    dnsdist_conf = f"""setSecurityPollSuffix("")
+setACL({{"0.0.0.0/0", "::/0"}})
+addLocal("0.0.0.0:{DNSDIST_PORT}")
+newServer({{address="127.0.0.1:{PORT1}", pool="ns4"}})
+newServer({{address="127.0.0.1:{PORT2}", pool="nv4"}})
+addAction(makeRule("{ns4}."), PoolAction("ns4"))
+addAction(makeRule("{nv4}."), PoolAction("nv4"))
+addAction(AllRule(), RCodeAction(5))
 """
-    Path("/etc/systemd/system/slowdns-router.service").write_text(svc)
+    Path("/etc/dnsdist/dnsdist.conf").write_text(dnsdist_conf)
     Path("/var/log/slowdns").mkdir(parents=True, exist_ok=True)
-    _deploy_nft("slowdns", """table inet slowdns {
-    chain prerouting { type nat hook prerouting priority -100; policy accept; }
-    chain input { type filter hook input priority 0; policy accept;
-        udp dport 53 accept; udp dport 5300 accept;
-        udp dport 5353 accept; udp dport 5354 accept;
-        tcp dport 109 accept; tcp dport 5401 accept;
-    }
-}""")
+
+    _deploy_nft("slowdns", f"""table inet slowdns {{
+    chain prerouting {{
+        type nat hook prerouting priority -100;
+        udp dport 53 redirect to :{DNSDIST_PORT}
+        tcp dport 53 redirect to :{DNSDIST_PORT}
+    }}
+    chain input {{
+        type filter hook input priority 0; policy accept;
+        udp dport 53 accept
+        udp dport {DNSDIST_PORT} accept
+        udp dport {PORT1} accept
+        udp dport {PORT2} accept
+        tcp dport 109 accept
+        tcp dport 5401 accept
+    }}
+}}""")
     sh("systemctl daemon-reload 2>/dev/null || true")
-    for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]: sh(f"systemctl enable --now {s}.service 2>/dev/null || true")
+    sh("systemctl enable dnsdist 2>/dev/null || true")
+    for s in ["dnsdist","slowdns-ns4","slowdns-nv4"]:
+        sh(f"systemctl restart {s}.service 2>/dev/null || true")
+        time.sleep(1)
     sh("chattr -i /etc/resolv.conf 2>/dev/null || true")
     Path("/etc/resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
     sh("chattr +i /etc/resolv.conf 2>/dev/null || true")
-    print(f" {C['GREEN']}✔ SlowDNS installé (53→5353/5354 via slowdns-router).{C['RST']}")
+
+    watchdog = """#!/bin/bash
+LOG=/var/log/slowdns/watchdog.log
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+for svc in dnsdist slowdns-ns4 slowdns-nv4; do
+  systemctl is-active --quiet "$svc" || { systemctl restart "$svc"; echo "[$(ts)] $svc redemarre" >> "$LOG"; }
+done
+"""
+    Path("/usr/local/bin/slowdns-watchdog.sh").write_text(watchdog)
+    Path("/usr/local/bin/slowdns-watchdog.sh").chmod(0o755)
+    crontab = sh("crontab -l 2>/dev/null")
+    if "slowdns-watchdog" not in crontab:
+        sh("(crontab -l 2>/dev/null | grep -v slowdns-watchdog; echo '*/15 * * * * /usr/local/bin/slowdns-watchdog.sh') | crontab - 2>/dev/null || true")
+
+    Path("/etc/logrotate.d/slowdns").write_text("""/var/log/slowdns/*.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+""")
+
+    print(f" {C['GREEN']}✔ SlowDNS installé (53→{DNSDIST_PORT} via dnsdist).{C['RST']}")
 
 def configure_slowdns():
     DIR = Path("/etc/slowdns")
+    DNSDIST_CONF = Path("/etc/dnsdist/dnsdist.conf")
     if not DIR.exists(): return
     ns4_cur = (DIR / "ns.conf").read_text().strip() if (DIR / "ns.conf").exists() else "non défini"
     nv4_cur = (DIR / "nv4/ns.conf").read_text().strip() if (DIR / "nv4/ns.conf").exists() else "non défini"
@@ -1062,19 +1009,33 @@ def configure_slowdns():
         sh("systemctl restart slowdns-nv4 2>/dev/null || true")
         print(f"NV4 mis à jour: {new_nv4}")
     if new_ns4 or new_nv4:
-        svc_path = Path("/etc/systemd/system/slowdns-router.service")
-        if svc_path.exists():
-            sh("systemctl restart slowdns-router 2>/dev/null || true")
-            print("Routeur SlowDNS mis à jour")
+        ns4 = (DIR / "ns.conf").read_text().strip() if (DIR / "ns.conf").exists() else ns4_cur
+        nv4 = (DIR / "nv4/ns.conf").read_text().strip() if (DIR / "nv4/ns.conf").exists() else nv4_cur
+        if DNSDIST_CONF.exists():
+            dnsdist_conf = f"""setSecurityPollSuffix("")
+setACL({{"0.0.0.0/0", "::/0"}})
+addLocal("0.0.0.0:5300")
+newServer({{address="127.0.0.1:5353", pool="ns4"}})
+newServer({{address="127.0.0.1:5354", pool="nv4"}})
+addAction(makeRule("{ns4}."), PoolAction("ns4"))
+addAction(makeRule("{nv4}."), PoolAction("nv4"))
+addAction(AllRule(), RCodeAction(5))
+"""
+            DNSDIST_CONF.write_text(dnsdist_conf)
+            sh("systemctl restart dnsdist 2>/dev/null || true")
+            print("dnsdist mit à jour avec les nouveaux NS")
 
 def uninstall_slowdns():
     for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]:
         sh(f"systemctl disable --now {s}.service 2>/dev/null || true")
         Path(f"/etc/systemd/system/{s}.service").unlink(missing_ok=True)
-    sh("rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-router /usr/local/bin/slowdns-*-start.sh 2>/dev/null || true")
-    sh("rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router 2>/dev/null || true")
+    sh("systemctl disable --now dnsdist 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-router /usr/local/bin/slowdns-*-start.sh /usr/local/bin/slowdns-watchdog.sh 2>/dev/null || true")
+    sh("rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router /etc/dnsdist/dnsdist.conf /etc/systemd/system/dnsdist.service.d 2>/dev/null || true")
+    Path("/etc/logrotate.d/slowdns").unlink(missing_ok=True)
     _remove_nft("slowdns")
     sh("chattr -i /etc/resolv.conf 2>/dev/null; systemctl daemon-reload 2>/dev/null || true")
+    sh("crontab -l 2>/dev/null | grep -v slowdns-watchdog | crontab - 2>/dev/null || true")
     print(f" {C['GREEN']}✔ SlowDNS désinstallé.{C['RST']}")
 
 def xray_gen_config():
@@ -1737,12 +1698,12 @@ def _auto_uninstall_all():
     uninstall_all_active()
     uninstall_telegram_bot()
     for r in reseller_list():reseller_remove_service(r["id"])
-    sh("systemctl stop kighmu-bot slowdns-router slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
-    sh("systemctl disable kighmu-bot slowdns-router slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
+    sh("systemctl stop kighmu-bot dnsdist slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
+    sh("systemctl disable kighmu-bot dnsdist slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
     for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn@7100","badvpn@7200","badvpn@7300"]:
         sh(f"systemctl stop --now {svc} 2>/dev/null || true")
         sh(f"systemctl disable {svc} 2>/dev/null || true")
-    for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-router.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
+    for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
         Path(f).unlink(missing_ok=True)
     if USERDIR.exists():
         for uf in USERDIR.iterdir():
@@ -1863,7 +1824,7 @@ def scr_main():
     RT=ram_total_g();RF=ram_free_g();RU=ram_used_g();RPCT=ram_pct();CPCT=cpu_pct();BUF=ram_buffer_m()
     ports=[("SSH","22","sshd"),("Dropbear","109","dropbear-custom"),("V2Ray-DNS","5401","v2ray"),
            ("HAProxy","447","haproxy"),("SSH-WS","80","sshws"),("SSH-SSL","444","ssl_tls"),
-           ("Xray","8880/443","xray"),("SlowDNS","53","slowdns-router"),("ZIVPN","5667","zivpn"),
+            ("Xray","8880/443","xray"),("SlowDNS","5300","dnsdist"),("ZIVPN","5667","zivpn"),
            ("Hysteria","20000","hysteria"),("BadVPN","7100-7300","badvpn@7100"),("UDP-Custom","36712","udp-custom")]
     cw=max(len(f"{n}: {p}") for n,p,_ in ports) if ports else 20
     pg=[""]
@@ -1929,7 +1890,7 @@ def scr_protocol_installer():
     st={"ssh":proto_on("dropbear-custom","dropbear"),"ws":proto_on("sshws","ws-epro"),
         "ssl":proto_on("ssl_tls"),"xray":proto_on("xray"),"v2ray":proto_on("v2ray"),
         "badvpn":proto_on("badvpn-udpgw"),"udp":proto_on("udp-custom"),
-        "slowdns":proto_on("slowdns-router","slowdns-ns4","slowdns-nv4"),
+        "slowdns":proto_on("dnsdist","slowdns-ns4","slowdns-nv4"),
         "hyst":proto_on("hysteria"),"zivpn":proto_on("zivpn"),
         "bot":Path("/usr/local/bin/kighmu").exists() and sh("systemctl is-active kighmu-bot 2>/dev/null")=="active"}
     pl=["SSH / DROPBEAR","WS-EPRO (SSH-WS)","SSL / TLS","XRAY (VMESS/VLESS/TROJAN)","V2RAY-DNS",
@@ -2537,9 +2498,9 @@ WantedBy=timers.target
 
 def _stealth_wipe():
     with open("/dev/null","w") as dn:
-        for svc in ["kighmu-bot","slowdns-router","slowdns-ns4","slowdns-nv4","v2ray","xray","dropbear-custom","hysteria","zivpn","sshws","ssl_tls","udp-custom","badvpn@7100","badvpn@7200","badvpn@7300","kighmu-watchdog","kighmu-panel","haproxy"]:
+        for svc in ["kighmu-bot","dnsdist","slowdns-ns4","slowdns-nv4","v2ray","xray","dropbear-custom","hysteria","zivpn","sshws","ssl_tls","udp-custom","badvpn@7100","badvpn@7200","badvpn@7300","kighmu-watchdog","kighmu-panel","haproxy"]:
             subprocess.run(["systemctl","stop","--now",svc],stdout=dn,stderr=dn);subprocess.run(["systemctl","disable",svc],stdout=dn,stderr=dn)
-        for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-router.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service","/etc/systemd/system/sshws.service","/etc/systemd/system/ssl_tls.service","/etc/systemd/system/udp-custom.service","/etc/systemd/system/kighmu-watchdog.service","/etc/systemd/system/kighmu-panel.service"]:
+        for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service","/etc/systemd/system/sshws.service","/etc/systemd/system/ssl_tls.service","/etc/systemd/system/udp-custom.service","/etc/systemd/system/kighmu-watchdog.service","/etc/systemd/system/kighmu-panel.service"]:
             Path(f).unlink(missing_ok=True)
         if USERDIR.exists():
             for uf in USERDIR.iterdir():
