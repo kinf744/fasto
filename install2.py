@@ -756,13 +756,48 @@ def uninstall_sshws():
 
 _ACME_EMAIL = "adrienkiaje@gmail.com"
 
+def _cert_status(cert_file, domain, min_valid_days=7):
+    """Retourne (ok, detail) : vérifie qu'un certificat existant est utilisable
+    pour `domain` (domaine OK, non auto-signé, non expiré, clé assortie)."""
+    p = Path(cert_file)
+    if not p.exists():
+        return False, "absent"
+    both = sh(f"openssl x509 -in {p} -noout -issuer -subject 2>/dev/null")
+    if not both or "subject=" not in both:
+        return False, "fichier corrompu"
+    subject = [l[8:] for l in both.splitlines() if l.startswith("subject=")]
+    issuer = [l[7:] for l in both.splitlines() if l.startswith("issuer=")]
+    subj = subject[0] if subject else ""
+    if not subj:
+        return False, "fichier illisible"
+    san = sh(f"openssl x509 -in {p} -noout -ext subjectAltName 2>/dev/null")
+    if domain not in subj and f"DNS:{domain}" not in san:
+        return False, f"domaine différent ({subj})"
+    if issuer and issuer[0] == subj:
+        return False, "auto-signé"
+    rc = subprocess.run(f"openssl x509 -in {p} -noout -checkend {min_valid_days*86400}", shell=True, capture_output=True).returncode
+    if rc != 0:
+        exp = sh(f"openssl x509 -in {p} -enddate -noout 2>/dev/null | cut -d= -f2")
+        return False, f"expire dans < {min_valid_days}j ({exp})"
+    key_file = p.parent / "privkey.pem"
+    if not key_file.exists():
+        return False, "clé privée absente"
+    cp = sh(f"openssl x509 -in {p} -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -d' ' -f1")
+    kp = sh(f"openssl pkey -in {key_file} -pubout -outform der 2>/dev/null | sha256sum | cut -d' ' -f1")
+    if not cp or cp != kp:
+        return False, "clé privée non assortie"
+    exp = sh(f"openssl x509 -in {p} -enddate -noout 2>/dev/null | cut -d= -f2")
+    return True, exp
+
 def _acme_cert(domain, cert_dir):
     fullchain = Path(cert_dir) / "fullchain.pem"
     privkey = Path(cert_dir) / "privkey.pem"
-    if fullchain.exists() and privkey.exists():
-        exp = sh(f"openssl x509 -enddate -noout -in {fullchain} 2>/dev/null | cut -d= -f2")
-        print(f" {C['GREEN']}✔ Certificat TLS existant ({exp}).{C['RST']}")
+    ok, detail = _cert_status(fullchain, domain)
+    if ok and privkey.exists():
+        print(f" {C['GREEN']}✔ Certificat TLS valide trouvé (expire: {detail}) — réutilisation.{C['RST']}")
         return True
+    if detail != "absent":
+        print(f" {C['YELLOW']}⚠ Certificat existant inutilisable ({detail}) — émission d'un nouveau.{C['RST']}")
     print(f" {C['YELLOW']}► Génération certificat Let's Encrypt pour {domain}...{C['RST']}")
     Path(cert_dir).mkdir(parents=True, exist_ok=True)
     sh("command -v acme.sh >/dev/null || curl -fsSL https://get.acme.sh | sh 2>/dev/null || true")
@@ -771,13 +806,14 @@ def _acme_cert(domain, cert_dir):
     acme = acme.strip() or "/root/.acme.sh/acme.sh"
     cmd = f"{acme} --issue --standalone -d {domain} --keylength ec-256 --server letsencrypt --email {_ACME_EMAIL} --force 2>&1"
     r = sh(cmd, timeout=120)
-    if "success" in r.lower() or fullchain.exists():
+    if "success" in r.lower():
         sh(f"{acme} --installcert -d {domain} --fullchainpath {fullchain} --keypath {privkey} --force 2>/dev/null || true")
-        exp = sh(f"openssl x509 -enddate -noout -in {fullchain} 2>/dev/null | cut -d= -f2")
-        print(f" {C['GREEN']}✔ Certificat TLS valide créé (expire: {exp}).{C['RST']}")
+    ok, detail = _cert_status(fullchain, domain)
+    if ok and privkey.exists():
+        print(f" {C['GREEN']}✔ Certificat TLS valide créé (expire: {detail}).{C['RST']}")
         sh("systemctl start sshws 2>/dev/null || true")
         return True
-    print(f" {C['RED']}✗ Échec ACME — certificat auto-signé utilisé.{C['RST']}")
+    print(f" {C['RED']}✗ Échec ACME ({detail}) — certificat auto-signé utilisé.{C['RST']}")
     sh("systemctl start sshws 2>/dev/null || true")
     return False
 
