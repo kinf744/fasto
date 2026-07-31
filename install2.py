@@ -2455,15 +2455,6 @@ def show_hysteria_details_screen(mode,user,passwd,exp,quota="0"):
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',19)}{C['RST']} expires {exp_color(exp)}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',19)}{C['RST']} {C['WHITE']}{quota} GB{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%",
-       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CLIENT CONFIG{C['RST']}","",
-       f"   {C['YELLOW']}Server   :{C['RST']} {ip}:20000",
-       f"   {C['YELLOW']}Port     :{C['RST']} 20000",
-       f"   {C['YELLOW']}Password :{C['RST']} {passwd}",
-       f"   {C['YELLOW']}Obfs     :{C['RST']} hysteria",
-       f"   {C['YELLOW']}SNI      :{C['RST']} {dom}",
-       f"   {C['YELLOW']}Up/Down  :{C['RST']} 150 Mbps / 150 Mbps",
-       f"   {C['YELLOW']}recv_window_conn  :{C['RST']} 33554432 (32 Mo)",
-       f"   {C['YELLOW']}recv_window_client:{C['RST']} 67108864 (64 Mo)","%SEP%",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HYSTERIA2 CONFIG JSON{C['RST']}","",
        f"%FREE%   {C['GREEN']}{{ \"server\": \"{ip}:20000\", \"auth\": \"{passwd}\", \"obfs\": \"hysteria\", \"up\": \"150 Mbps\", \"down\": \"150 Mbps\", \"sni\": \"{dom}\", \"insecure\": true }}{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
