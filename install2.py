@@ -1757,25 +1757,43 @@ def upd_remove():
 def _auto_uninstall_all():
     uninstall_all_active()
     uninstall_telegram_bot()
-    for r in reseller_list():reseller_remove_service(r["id"])
-    sh("systemctl stop kighmu-bot dnsdist slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
-    sh("systemctl disable kighmu-bot dnsdist slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
-    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn-7100","badvpn-7200","badvpn-7300"]:
-        sh(f"systemctl stop --now {svc} 2>/dev/null || true")
-        sh(f"systemctl disable {svc} 2>/dev/null || true")
-    for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/badvpn-7100.service","/etc/systemd/system/badvpn-7200.service","/etc/systemd/system/badvpn-7300.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
+    for r in reseller_list(): reseller_remove_service(r["id"])
+    pats = "kighmu|xray|v2ray|slowdns|dnsdist|haproxy|hysteria|zivpn|sshws|ssl_tls|udp-custom|badvpn|dropbear-custom|ws-dropbear|nftables-nat|nftables-restore|nftables-tunnel"
+    units = sh(f"systemctl list-unit-files 2>/dev/null | awk '{{print $1}}' | grep -E '^({pats})[-@]?[^.]*\\.(service|timer)$' | sort -u")
+    for u in units.splitlines():
+        sh(f"systemctl disable --now {u} 2>/dev/null || true")
+    for pat in ["kighmu-*","kighmu@*","xray*","v2ray*","slowdns*","dnsdist*","haproxy*","hysteria*","zivpn*","sshws*","ssl_tls*","udp-custom*","badvpn-*","badvpn@*","dropbear-custom*","ws-dropbear*","nftables-nat*","nftables-restore*","nftables-tunnel@*"]:
+        for f in Path("/etc/systemd/system").glob(pat):
+            sh(f"rm -rf {f} 2>/dev/null || true")
+    for b in ["kighmu","kighmu.bak","kighmu-panel","kighmu-panel.sh","kighmu.pps_backup","kighmu-bot","menu","menu.pps_backup","menu-ssh","install2","ventes","sshws","ssl_tls","xray","v2ray","dnstt-server","dnstt-client","badvpn-udpgw","udp-custom","hysteria-linux-amd64","zivpn","slowdns-ns4-start.sh","slowdns-nv4-start.sh","slowdns-watchdog.sh","init-nftables-kighmu.sh"]:
+        sh(f"rm -f /usr/local/bin/{b} 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/xray-* /usr/local/bin/dropbear* /usr/local/sbin/dropbear 2>/dev/null || true")
+    for d in ["/etc/kighmu","/etc/ventes","/etc/xray","/etc/v2ray","/etc/slowdns","/etc/hysteria","/etc/zivpn","/etc/udp-custom","/etc/dnsdist","/etc/nftables","/etc/haproxy","/etc/sshws","/etc/ssl_tls","/etc/dropbear","/etc/logrotate.d/slowdns"]:
+        sh(f"rm -rf {d} 2>/dev/null || true")
+    for d in ["/var/log/xray","/var/log/slowdns","/var/log/hysteria","/var/log/v2ray","/var/log/sshws","/var/log/ssl_tls","/var/log/zivpn","/var/log/kighmu"]:
+        sh(f"rm -rf {d} 2>/dev/null || true")
+    for f in ["/var/log/haproxy.log*","/var/log/haproxy-watchdog.log","/var/log/hysteria.log","/var/log/zivpn.log","/var/log/udp-custom.log","/var/log/kighmu-bot.log","/var/log/kighmu-install.log","/var/log/kighmu-panel.log","/var/log/kighmu-reseller-*.log","/var/log/xray-watchdog.log","/var/log/v2ray_watchdog.log*","/var/log/v2ray_install.log","/var/log/restart_v2ray.log","/var/log/slowdns-watchdog.log","/var/log/auto-clean.log","/var/log/dnsdist*"]:
+        sh(f"rm -rf {f} 2>/dev/null || true")
+    for f in ["/etc/sysctl.d/99-kighmu.conf","/etc/sysctl.d/99-slowdns.conf"]:
         Path(f).unlink(missing_ok=True)
     if USERDIR.exists():
         for uf in USERDIR.iterdir():
             if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
                 sh(f"userdel -f {uf.name} 2>/dev/null || true")
-    sh("rm -rf /etc/kighmu /etc/ventes /etc/dnsdist /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/kighmu /usr/local/bin/menu /usr/local/bin/install2 /usr/local/bin/dnstt-server /root/fasto /root/backup /tmp/nuitka-build 2>/dev/null || true")
-    sh("rm -f /root/install2.py /root/install2.bin 2>/dev/null || true")
-    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog\\|vnstat --reset\\|reseller-cleanup' | crontab - 2>/dev/null || true")
+    sh("chattr -i /etc/resolv.conf 2>/dev/null || true")
+    Path("/etc/resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    sh("crontab -l > /root/crontab.backup 2>/dev/null || true")
+    sh("crontab -r 2>/dev/null || true")
     sh("nft flush ruleset 2>/dev/null || true")
+    if Path("/etc/nftables.conf").exists():
+        sh("nft -f /etc/nftables.conf 2>/dev/null || true")
+    sh("apt-get remove -y -qq haproxy dnsdist 2>/dev/null || true")
+    sh("rm -rf /root/Kighmu /root/fasto /root/backup /tmp/nuitka-build /root/backup-* /root/backup_users*.json 2>/dev/null || true")
+    sh("rm -f /root/install2.py /root/install2.bin /root/install.sh /root/ventes.sh /root/apply_and_check.sh /root/apply_xray.py /root/check_xray.py /root/check_tunnels.sh /root/auto_install.py 2>/dev/null || true")
+    sh("sysctl --system 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
-    sh("pkill -f kighmu 2>/dev/null || true")
+    sh("pkill -f kighmu 2>/dev/null || true; pkill -f install2 2>/dev/null || true; pkill -f ventes 2>/dev/null || true")
     os._exit(0)
 
 def delete_user(user):
