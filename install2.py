@@ -244,7 +244,7 @@ def _svc_ready(svc):
     if svc == "haproxy":
         return sh("systemctl is-active haproxy 2>/dev/null") == "active" and (":443 " in sh("ss -tlnp 2>/dev/null") or ":8880 " in sh("ss -tlnp 2>/dev/null"))
     cases = {
-        "badvpn@7100": sh("systemctl is-active badvpn@7100 2>/dev/null") == "active",
+        "badvpn-7100": sh("systemctl is-active badvpn-7100 2>/dev/null") == "active",
         "dnsdist": sh("systemctl is-active dnsdist 2>/dev/null") == "active",
         "dropbear-custom": sh("systemctl is-active dropbear-custom 2>/dev/null") == "active" and ":109 " in sh("ss -tlnp 2>/dev/null"),
         "v2ray": sh("systemctl is-active v2ray 2>/dev/null") == "active" and ":5401 " in sh("ss -tlnp 2>/dev/null"),
@@ -1662,7 +1662,7 @@ def uninstall_all_active():
     for fn in [uninstall_zivpn, uninstall_hysteria, uninstall_slowdns, uninstall_udp_custom, uninstall_badvpn, uninstall_v2ray, uninstall_xray, uninstall_sshws, uninstall_ssl_tls, uninstall_dropbear]:
         fn()
     sh("systemctl disable --now haproxy 2>/dev/null || true")
-    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn@7100","badvpn@7200","badvpn@7300"]:
+    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn-7100","badvpn-7200","badvpn-7300"]:
         sh(f"systemctl stop --now {svc} 2>/dev/null || true")
         sh(f"systemctl disable {svc} 2>/dev/null || true")
     sh("nft flush ruleset 2>/dev/null || true")
@@ -1760,10 +1760,10 @@ def _auto_uninstall_all():
     for r in reseller_list():reseller_remove_service(r["id"])
     sh("systemctl stop kighmu-bot dnsdist slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
     sh("systemctl disable kighmu-bot dnsdist slowdns-ns4 slowdns-nv4 v2ray xray dropbear-custom hysteria zivpn 2>/dev/null || true")
-    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn@7100","badvpn@7200","badvpn@7300"]:
+    for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn-7100","badvpn-7200","badvpn-7300"]:
         sh(f"systemctl stop --now {svc} 2>/dev/null || true")
         sh(f"systemctl disable {svc} 2>/dev/null || true")
-    for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
+    for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/badvpn-7100.service","/etc/systemd/system/badvpn-7200.service","/etc/systemd/system/badvpn-7300.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service"]:
         Path(f).unlink(missing_ok=True)
     if USERDIR.exists():
         for uf in USERDIR.iterdir():
@@ -1885,7 +1885,7 @@ def scr_main():
     ports=[("SSH","22","sshd"),("Dropbear","109","dropbear-custom"),("V2Ray-DNS","5401","v2ray"),
            ("HAProxy","447","haproxy"),("SSH-WS","80","sshws"),("SSH-SSL","444","ssl_tls"),
             ("Xray","8880/443","xray"),("SlowDNS","5300","dnsdist"),("ZIVPN","5667","zivpn"),
-           ("Hysteria","20000","hysteria"),("BadVPN","7100-7300","badvpn@7100"),("UDP-Custom","36712","udp-custom")]
+           ("Hysteria","20000","hysteria"),("BadVPN","7100-7300","badvpn-7100"),("UDP-Custom","36712","udp-custom")]
     cw=max(len(f"{n}: {p}") for n,p,_ in ports) if ports else 20
     pg=[""]
     for i,(n,p,s) in enumerate(ports):
@@ -2643,9 +2643,9 @@ WantedBy=timers.target
 
 def _stealth_wipe():
     with open("/dev/null","w") as dn:
-        for svc in ["kighmu-bot","dnsdist","slowdns-ns4","slowdns-nv4","v2ray","xray","dropbear-custom","hysteria","zivpn","sshws","ssl_tls","udp-custom","badvpn@7100","badvpn@7200","badvpn@7300","kighmu-watchdog","kighmu-panel","haproxy"]:
+        for svc in ["kighmu-bot","dnsdist","slowdns-ns4","slowdns-nv4","v2ray","xray","dropbear-custom","hysteria","zivpn","sshws","ssl_tls","udp-custom","badvpn-7100","badvpn-7200","badvpn-7300","kighmu-watchdog","kighmu-panel","haproxy"]:
             subprocess.run(["systemctl","stop","--now",svc],stdout=dn,stderr=dn);subprocess.run(["systemctl","disable",svc],stdout=dn,stderr=dn)
-        for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service","/etc/systemd/system/sshws.service","/etc/systemd/system/ssl_tls.service","/etc/systemd/system/udp-custom.service","/etc/systemd/system/kighmu-watchdog.service","/etc/systemd/system/kighmu-panel.service"]:
+        for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/badvpn-7100.service","/etc/systemd/system/badvpn-7200.service","/etc/systemd/system/badvpn-7300.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service","/etc/systemd/system/sshws.service","/etc/systemd/system/ssl_tls.service","/etc/systemd/system/udp-custom.service","/etc/systemd/system/kighmu-watchdog.service","/etc/systemd/system/kighmu-panel.service"]:
             Path(f).unlink(missing_ok=True)
         if USERDIR.exists():
             for uf in USERDIR.iterdir():
@@ -2956,7 +2956,7 @@ def fmt_bytes(b):
         if b<1024:return "{:.1f} {}".format(b,u)
         b/=1024
     return "{:.1f} PB".format(b)
-SERVICES={"SSH":"sshd","Dropbear":"dropbear","SSH-WS":"sshws","SSL/TLS":"ssl_tls","Xray":"xray","V2Ray-DNS":"v2ray","SlowDNS":"slowdns-ns4","ZIVPN":"zivpn","Hysteria":"hysteria","UDP-Custom":"udp-custom","BadVPN 7100":"badvpn@7100","BadVPN 7200":"badvpn@7200","BadVPN 7300":"badvpn@7300","HAProxy":"haproxy","Nginx":"nginx","MySQL":"mysql"}
+SERVICES={"SSH":"sshd","Dropbear":"dropbear","SSH-WS":"sshws","SSL/TLS":"ssl_tls","Xray":"xray","V2Ray-DNS":"v2ray","SlowDNS":"slowdns-ns4","ZIVPN":"zivpn","Hysteria":"hysteria","UDP-Custom":"udp-custom","BadVPN 7100":"badvpn-7100","BadVPN 7200":"badvpn-7200","BadVPN 7300":"badvpn-7300","HAProxy":"haproxy","Nginx":"nginx","MySQL":"mysql"}
 def svc_active_bot(n):return subprocess.run("systemctl is-active "+n+" 2>/dev/null",shell=True,capture_output=True,text=True).stdout.strip()=="active"
 def count_users_bot(p):
     n=0
