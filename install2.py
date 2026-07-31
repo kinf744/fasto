@@ -2283,6 +2283,9 @@ def ui_create_wizard(protos):
         elif proto=="zivpn":
             clear_screen()
             show_zivpn_details_screen("created",user,p or passwd,exp)
+        elif proto=="hysteria":
+            clear_screen()
+            show_hysteria_details_screen("created",user,p or passwd,exp,q)
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
     elif rc==1: print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter()
     elif rc==2: print(f" {C['RED']}✗ User exists{C['RST']}");press_enter()
@@ -2389,6 +2392,7 @@ def ui_info_wizard():
     proto=_meta_get(user,"proto");exp=_meta_get(user,"exp");passwd=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");quota=_meta_get(user,"quota") or"0"
     if proto=="ssh": show_ssh_details_screen("details",user,passwd,exp,quota)
     elif proto in("vless","trojan","vmess","v2raydns"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
+    elif proto=="hysteria": show_hysteria_details_screen("details",user,passwd,exp,quota)
     else: clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}User: {user}  Proto: {proto}  Exp: {exp}{C['RST']}");press_enter()
 
 def ui_delete_expired_wizard():
@@ -2439,6 +2443,29 @@ def show_zivpn_details_screen(mode,user,passwd,exp):
        f"   {C['YELLOW']}Obfs     :{C['RST']} zivpn",
        f"   {C['YELLOW']}recv_window_conn  :{C['RST']} 15728640 (15 Mo)",
        f"   {C['YELLOW']}recv_window_client:{C['RST']} 67108864 (64 Mo)","%SEP%"]
+    render_screen(L);press_enter()
+
+def show_hysteria_details_screen(mode,user,passwd,exp,quota="0"):
+    clear_screen()
+    dom=get_domain();ip=get_ip()
+    L=["%SEP%",_detail_title(mode,"HYSTERIA"),"%SEP%",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('USER',19)}{C['RST']} {C['WHITE']}{user}{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('SERVER',19)}{C['RST']} {C['WHITE']}{ip}:20000{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('SNI',19)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',19)}{C['RST']} expires {exp_color(exp)}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',19)}{C['RST']} {C['WHITE']}{quota} GB{C['RST']}",
+       "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CLIENT CONFIG{C['RST']}","",
+       f"   {C['YELLOW']}Server   :{C['RST']} {ip}:20000",
+       f"   {C['YELLOW']}Port     :{C['RST']} 20000",
+       f"   {C['YELLOW']}Password :{C['RST']} {passwd}",
+       f"   {C['YELLOW']}Obfs     :{C['RST']} hysteria",
+       f"   {C['YELLOW']}SNI      :{C['RST']} {dom}",
+       f"   {C['YELLOW']}Up/Down  :{C['RST']} 150 Mbps / 150 Mbps",
+       f"   {C['YELLOW']}recv_window_conn  :{C['RST']} 33554432 (32 Mo)",
+       f"   {C['YELLOW']}recv_window_client:{C['RST']} 67108864 (64 Mo)","%SEP%",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HYSTERIA2 CONFIG JSON{C['RST']}","",
+       f"%FREE%   {C['GREEN']}{{ \"server\": \"{ip}:20000\", \"auth\": \"{passwd}\", \"obfs\": \"hysteria\", \"up\": \"150 Mbps\", \"down\": \"150 Mbps\", \"sni\": \"{dom}\", \"insecure\": true }}{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
 
 def show_detail_screen(mode,proto,user,**kw):
