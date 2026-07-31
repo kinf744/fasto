@@ -2453,6 +2453,8 @@ def show_hysteria_details_screen(mode,user,passwd,exp,quota="0"):
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('SERVER',19)}{C['RST']} {C['WHITE']}{ip}:20000{C['RST']}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('SNI',19)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',19)}{C['RST']} expires {exp_color(exp)}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('OBFS',19)}{C['RST']} {C['WHITE']}hysteria{C['RST']}",
+       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('PORT RANGE',19)}{C['RST']} {C['WHITE']}20000-50000{C['RST']}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',19)}{C['RST']} {C['WHITE']}{quota} GB{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
