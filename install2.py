@@ -77,8 +77,10 @@ def dot(lbl, w=18):
     return f"{lbl} {'•' * n}"
 
 def _client_name():
-    try: return f"Verified - {Path('/etc/kighmu/.client_name').read_text().strip()} tech tutorials oficial ©"
-    except: return "Verified - --- tech tutorials oficial ©"
+    try: n = Path('/etc/kighmu/.client_name').read_text().strip()
+    except: n = ""
+    if not n or n == "Verified": n = "Kighmu"
+    return f"Verified - {n} tech tutorials oficial ©"
 
 def _detail_title(mode, proto, variant=""):
     if mode == "created":
