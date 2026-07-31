@@ -852,7 +852,9 @@ def uninstall_udp_custom():
     print(f" {C['GREEN']}✔ UDP-Custom désinstallé.{C['RST']}")
 
 def install_slowdns():
-    if sh("command -v dnstt-server 2>/dev/null") != "": return
+    if sh("command -v dnstt-server 2>/dev/null") != "" and sh("systemctl list-unit-files 2>/dev/null | grep -q '^dnsdist' && echo OK") == "OK": return
+    sh("systemctl disable --now slowdns-router 2>/dev/null || true")
+    sh("rm -f /usr/local/bin/slowdns-router /etc/systemd/system/slowdns-router.service 2>/dev/null || true")
     sh("apt-get install -y -qq curl jq wget dnsdist nftables 2>/dev/null")
     DIR = Path("/etc/slowdns")
     DIR.mkdir(parents=True, exist_ok=True)
@@ -864,7 +866,17 @@ def install_slowdns():
     (DIR / "server.pub").write_text(DNSTT_PUB + "\n")
     sh("chmod 600 /etc/slowdns/server.key 2>/dev/null || true")
     tmp = sh("mktemp 2>/dev/null") or "/tmp/dnstt-server"
-    sh(f"curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/dnstt-server' -o {tmp} 2>/dev/null && mv {tmp} /usr/local/bin/dnstt-server && chmod +x /usr/local/bin/dnstt-server")
+    if sh("command -v dnstt-server 2>/dev/null") != "":
+        print(f" {C['GREEN']}✔ dnstt-server déjà présent.{C['RST']}")
+    else:
+        r = sh(f"curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o {tmp} 2>/dev/null && stat -c%s {tmp} 2>/dev/null")
+        try: size = int(r)
+        except: size = 0
+        if size < 1048576:
+            print(f" {C['RED']}✗ Binaire dnstt-server corrompu ({size} octets).{C['RST']}")
+            sh(f"rm -f {tmp} 2>/dev/null || true")
+        else:
+            sh(f"mv {tmp} /usr/local/bin/dnstt-server && chmod +x /usr/local/bin/dnstt-server")
     domain = _ensure_domain() or get_ip()
     ns4 = sh("head -1 /etc/slowdns/ns.conf 2>/dev/null")
     nv4 = sh("head -1 /etc/slowdns/nv4/ns.conf 2>/dev/null")
