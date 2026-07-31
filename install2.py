@@ -1975,18 +1975,91 @@ def scr_protocol_installer():
 
 def scr_update_remove():
     SB=flag_status("backup_before_update")
-    ul=["CHECK FOR UPDATES","UPDATE SCRIPT (LATEST VERSION)","CHANGELOG / VERSION HISTORY",
+    ul=["CHECK FOR UPDATES","DOMAIN & TUNNEL SETTINGS","UPDATE SCRIPT (LATEST VERSION)","CHANGELOG / VERSION HISTORY",
         "BACKUP BEFORE UPDATE","REINSTALL SCRIPT (CLEAN)","REMOVE SCRIPT (UNINSTALL)"]
     uw=max(len(l) for l in ul)
     L=[];push_header(L,"full",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}UPDATE / REMOVE{C['RST']}")
     L+=[f" {C['GREEN']}[01]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[0]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
-        f" {C['GREEN']}[02]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[1]}{C['RST']}",
+        f" {C['GREEN']}[02]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[1]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
         f" {C['GREEN']}[03]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[2]}{C['RST']}",
-        f" {C['GREEN']}[04]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[3]:<{uw}}{C['RST']}  {SB}",
-        f" {C['GREEN']}[05]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}{ul[4]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
+        f" {C['GREEN']}[04]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[3]}{C['RST']}",
+        f" {C['GREEN']}[05]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[4]:<{uw}}{C['RST']}  {SB}",
         f" {C['GREEN']}[06]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}{ul[5]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
+        f" {C['GREEN']}[07]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}{ul[6]:<{uw}}{C['RST']}  {C['RED']}[!]{C['RST']}",
         "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO MAIN MENU ] {C['RST']}","%SEP%"]
     render_panel(L)
+
+def scr_domain_tunnel():
+    ul=["CHANGE / UPDATE DOMAIN","UPDATE DOMAIN + ACME TLS (XRAY)","CHANGE SLOWDNS NAMESERVERS (NS)"]
+    uw=max(len(l) for l in ul)
+    L=[];push_header(L,"full",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}DOMAIN & TUNNEL{C['RST']}")
+    L+=[f" {C['GREEN']}[01]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[0]:<{uw}}{C['RST']}",
+        f" {C['GREEN']}[02]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[1]:<{uw}}{C['RST']}",
+        f" {C['GREEN']}[03]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{ul[2]:<{uw}}{C['RST']}",
+        "%SEP%",f" {C['BTNBG']} [0] ⇦ [ BACK TO UPDATE / REMOVE MENU ] {C['RST']}","%SEP%"]
+    render_panel(L)
+
+def _get_current_domain():
+    df = Path("/etc/kighmu/domain.txt")
+    return df.read_text().strip() if df.exists() else ""
+
+def _valid_domain(d):
+    return "." in d and bool(re.match(r'^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$', d))
+
+def _ui_change_domain():
+    cur = _get_current_domain()
+    print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CHANGE / UPDATE DOMAIN{C['RST']}")
+    print(f" {C['GRAY']}Current domain: {C['GREEN']}{cur or 'none'}{C['RST']}\n")
+    nd = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}New domain (empty = cancel): {C['RST']}").strip().lower()
+    if not nd:
+        print(f" {C['YELLOW']}⚠ Annulé.{C['RST']}");return
+    if not _valid_domain(nd):
+        print(f" {C['RED']}✗ Domaine invalide.{C['RST']}");return
+    if nd == cur:
+        print(f" {C['YELLOW']}⚠ Domain unchanged.{C['RST']}");return
+    Path("/etc/kighmu/domain.txt").write_text(nd + "\n")
+    print(f" {C['GREEN']}✔ Domain updated: {C['WHITE']}{cur or 'none'} → {nd}{C['RST']}")
+    print(f" {C['GRAY']}Note: DNS A/AAAA de {nd} doit pointer vers l'IP du serveur.{C['RST']}")
+
+def _xray_rebuild_pem():
+    crt=Path("/etc/xray/fullchain.pem")
+    key=Path("/etc/xray/privkey.pem")
+    if crt.exists() and key.exists():
+        sh(f"cat {crt} {key} > /etc/xray/xray.pem 2>/dev/null || true")
+        sh(f"cat {crt} {key} > /etc/haproxy/panel.pem 2>/dev/null || true")
+        sh("chmod 600 /etc/xray/xray.pem /etc/haproxy/panel.pem 2>/dev/null || true")
+
+def _ui_domain_acme_xray():
+    cur = _get_current_domain()
+    print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}UPDATE DOMAIN + ACME TLS (XRAY){C['RST']}")
+    print(f" {C['GRAY']}Current domain: {C['GREEN']}{cur or 'none'}{C['RST']}\n")
+    nd = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}New domain (empty = reuse current): {C['RST']}").strip().lower()
+    if nd:
+        if not _valid_domain(nd):
+            print(f" {C['RED']}✗ Domaine invalide.{C['RST']}");return
+        Path("/etc/kighmu/domain.txt").write_text(nd + "\n")
+        print(f" {C['GREEN']}✔ Domain updated: {nd}{C['RST']}")
+    else:
+        nd = cur
+        if not nd:
+            print(f" {C['RED']}✗ No domain configured.{C['RST']}");return
+    if sh("command -v xray 2>/dev/null") == "":
+        print(f" {C['RED']}✗ Xray non installé.{C['RST']}");return
+    ok=_acme_cert(nd, "/etc/xray")
+    if not ok:
+        print(f" {C['YELLOW']}⚠ Certificat auto-signé utilisé.{C['RST']}")
+    _xray_rebuild_pem()
+    xray_gen_haproxy()
+    sh("systemctl reload haproxy 2>/dev/null || systemctl restart haproxy 2>/dev/null || true")
+    print(f" {C['GREEN']}✔ Xray tunnel mis à jour pour {nd}.{C['RST']}")
+
+def menu_domain_tunnel():
+    while True:
+        scr_domain_tunnel();CH=input().strip()
+        if CH in("1","01"): _ui_change_domain();press_enter()
+        elif CH in("2","02"): _ui_domain_acme_xray();press_enter()
+        elif CH in("3","03"): configure_slowdns();press_enter()
+        elif CH in("0",): return
 
 # Optimization
 def opt_enable():
@@ -2162,11 +2235,12 @@ def menu_update_remove():
     while True:
         scr_update_remove();CH=input().strip()
         if CH in("1","01"): upd_check();press_enter()
-        elif CH in("2","02"): upd_update();press_enter()
-        elif CH in("3","03"): upd_changelog();press_enter()
-        elif CH in("4","04"): toggle_flag("backup_before_update")
-        elif CH in("5","05"): upd_reinstall();press_enter()
-        elif CH in("6","06"): upd_remove()
+        elif CH in("2","02"): menu_domain_tunnel()
+        elif CH in("3","03"): upd_update();press_enter()
+        elif CH in("4","04"): upd_changelog();press_enter()
+        elif CH in("5","05"): toggle_flag("backup_before_update")
+        elif CH in("6","06"): upd_reinstall();press_enter()
+        elif CH in("7","07"): upd_remove()
         elif CH in("0",): return
 
 def ui_create_wizard(protos):
