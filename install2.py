@@ -952,6 +952,11 @@ addAction(AllRule(), RCodeAction(5))
         udp dport 53 redirect to :{DNSDIST_PORT}
         tcp dport 53 redirect to :{DNSDIST_PORT}
     }}
+    chain output {{
+        type nat hook output priority -100;
+        udp dport 53 fib daddr type local redirect to :{DNSDIST_PORT}
+        tcp dport 53 fib daddr type local redirect to :{DNSDIST_PORT}
+    }}
     chain input {{
         type filter hook input priority 0; policy accept;
         udp dport 53 accept
