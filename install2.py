@@ -1301,6 +1301,7 @@ def install_xray():
             return
     Path("/etc/xray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/xray").mkdir(parents=True, exist_ok=True)
+    sh("rm -f /var/log/xray/access.log /var/log/xray/error.log 2>/dev/null; touch /var/log/xray/access.log /var/log/xray/error.log 2>/dev/null || true")
     if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
     ok=_acme_cert(DOMAIN, "/etc/xray")
     if not ok:
@@ -1321,8 +1322,8 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
 NoNewPrivileges=true
 ExecStart=/usr/local/bin/xray -config /etc/xray/config.json
 Restart=always
