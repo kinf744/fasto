@@ -2246,7 +2246,18 @@ def menu_update_remove():
         elif CH in("0",): return
 
 def ui_create_wizard(protos):
-    cleanup_panel_residues();clear_screen();proto=protos[0]
+    cleanup_panel_residues();clear_screen()
+    proto=protos[0]
+    if len(protos)>1:
+        print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CREATE USER — CHOOSE PROTOCOL{C['RST']}\n")
+        for i,p in enumerate(protos,1):
+            print(f"   {C['GREEN']}{i}{C['RST']}) {C['WHITE']}{p.upper()}{C['RST']}")
+        print(f"   {C['GRAY']}0{C['RST']}) Cancel")
+        sel=input(f"\n {C['YELLOW']}►{C['RST']} Protocol: ").strip()
+        if not sel.isdigit() or int(sel)<1 or int(sel)>len(protos):
+            press_enter();return
+        proto=protos[int(sel)-1]
+    clear_screen()
     print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CREATE {proto.upper()} USER{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
     if not valid_name(user): print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter();return
