@@ -1647,7 +1647,7 @@ def install_all_missing():
 def uninstall_all_active():
     clear_screen()
     print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
-    print(f" {C['RED']}║{C['RST']}      {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
+    print(f" {C['RED']}║{C['RST']}         {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
     print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
     print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer TOUS les tunnels :{C['RST']}")
     print(f" {C['GRAY']}  • SSH / Dropbear      • WS-EPRO (SSH-WS)      • SSL / TLS{C['RST']}")
@@ -1741,7 +1741,7 @@ def upd_reinstall():
 def upd_remove():
     clear_screen()
     print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
-    print(f" {C['RED']}║{C['RST']}     {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
+    print(f" {C['RED']}║{C['RST']}         {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
     print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
     print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer:{C['RST']}")
     print(f" {C['GRAY']}  • Tous les tunnels et services{C['RST']}")
