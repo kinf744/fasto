@@ -2454,9 +2454,7 @@ def show_hysteria_details_screen(mode,user,passwd,exp,quota="0"):
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('SNI',19)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',19)}{C['RST']} expires {exp_color(exp)}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',19)}{C['RST']} {C['WHITE']}{quota} GB{C['RST']}",
-       "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%",
-       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}HYSTERIA2 CONFIG JSON{C['RST']}","",
-       f"%FREE%   {C['GREEN']}{{ \"server\": \"{ip}:20000\", \"auth\": \"{passwd}\", \"obfs\": \"hysteria\", \"up\": \"150 Mbps\", \"down\": \"150 Mbps\", \"sni\": \"{dom}\", \"insecure\": true }}{C['RST']}","%SEP%"]
+       "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
 
 def show_detail_screen(mode,proto,user,**kw):
