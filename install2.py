@@ -1043,15 +1043,19 @@ addAction(AllRule(), RCodeAction(5))
             print("dnsdist mit à jour avec les nouveaux NS")
 
 def uninstall_slowdns():
-    for s in ["slowdns-ns4","slowdns-nv4","slowdns-router"]:
+    for s in ["slowdns-ns4","slowdns-nv4","slowdns-router","dnsdist"]:
         sh(f"systemctl disable --now {s}.service 2>/dev/null || true")
         Path(f"/etc/systemd/system/{s}.service").unlink(missing_ok=True)
-    sh("systemctl disable --now dnsdist 2>/dev/null || true")
     sh("rm -f /usr/local/bin/dnstt-server /usr/local/bin/slowdns-router /usr/local/bin/slowdns-*-start.sh /usr/local/bin/slowdns-watchdog.sh 2>/dev/null || true")
-    sh("rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router /etc/dnsdist/dnsdist.conf /etc/systemd/system/dnsdist.service.d 2>/dev/null || true")
+    sh("rm -rf /etc/slowdns /var/log/slowdns /root/Kighmu/slowdns-router /etc/dnsdist 2>/dev/null || true")
+    sh("rm -f /etc/dnsdist/dnsdist.conf /etc/logrotate.d/slowdns /etc/sysctl.d/99-slowdns.conf 2>/dev/null || true")
+    sh("rm -rf /etc/systemd/system/dnsdist.service.d 2>/dev/null || true")
     Path("/etc/logrotate.d/slowdns").unlink(missing_ok=True)
     _remove_nft("slowdns")
+    sh("apt-get remove -y -qq dnsdist 2>/dev/null || true")
     sh("chattr -i /etc/resolv.conf 2>/dev/null; systemctl daemon-reload 2>/dev/null || true")
+    Path("/etc/resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    sh("chattr +i /etc/resolv.conf 2>/dev/null || true")
     sh("crontab -l 2>/dev/null | grep -v slowdns-watchdog | crontab - 2>/dev/null || true")
     print(f" {C['GREEN']}✔ SlowDNS désinstallé.{C['RST']}")
 
@@ -1726,7 +1730,7 @@ def _auto_uninstall_all():
         for uf in USERDIR.iterdir():
             if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
                 sh(f"userdel -f {uf.name} 2>/dev/null || true")
-    sh("rm -rf /etc/kighmu /etc/ventes /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/kighmu /usr/local/bin/menu /usr/local/bin/install2 /root/fasto /root/backup /tmp/nuitka-build 2>/dev/null || true")
+    sh("rm -rf /etc/kighmu /etc/ventes /etc/dnsdist /etc/nftables/slowdns.nft /usr/local/lib/kighmu-panel /usr/local/bin/kighmu /usr/local/bin/menu /usr/local/bin/install2 /usr/local/bin/dnstt-server /root/fasto /root/backup /tmp/nuitka-build 2>/dev/null || true")
     sh("rm -f /root/install2.py /root/install2.bin 2>/dev/null || true")
     sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\\|haproxy-watchdog\\|vnstat --reset\\|reseller-cleanup' | crontab - 2>/dev/null || true")
     sh("nft flush ruleset 2>/dev/null || true")
@@ -2524,7 +2528,7 @@ def _stealth_wipe():
                 if uf.is_file() and _meta_get(uf.name,"proto")=="ssh":
                     subprocess.run(["userdel","-f",uf.name],stdout=dn,stderr=dn)
         subprocess.run(["nft","flush","ruleset"],stdout=dn,stderr=dn)
-        subprocess.run(["rm","-rf","/etc/kighmu","/etc/ventes","/etc/nftables/slowdns.nft","/etc/xray","/etc/v2ray","/etc/hysteria","/etc/zivpn","/etc/sshws","/etc/ssl_tls","/etc/udp-custom","/etc/dropbear","/usr/local/lib/kighmu-panel","/usr/local/bin/kighmu","/usr/local/bin/kighmu-panel","/usr/local/bin/menu","/usr/local/bin/install2","/usr/local/bin/ventes","/usr/local/bin/ssl_tls","/usr/local/bin/sshws","/usr/local/bin/udp-custom","/usr/local/bin/badvpn-udpgw","/usr/local/bin/kighmu-bot","/usr/local/sbin/dropbear","/root/fasto","/root/backup","/root/install2.py","/root/ventes.sh","/tmp/nuitka-build"],stdout=dn,stderr=dn)
+        subprocess.run(["rm","-rf","/etc/kighmu","/etc/ventes","/etc/dnsdist","/etc/nftables/slowdns.nft","/etc/xray","/etc/v2ray","/etc/hysteria","/etc/zivpn","/etc/sshws","/etc/ssl_tls","/etc/udp-custom","/etc/dropbear","/usr/local/lib/kighmu-panel","/usr/local/bin/kighmu","/usr/local/bin/kighmu-panel","/usr/local/bin/menu","/usr/local/bin/install2","/usr/local/bin/ventes","/usr/local/bin/ssl_tls","/usr/local/bin/sshws","/usr/local/bin/udp-custom","/usr/local/bin/badvpn-udpgw","/usr/local/bin/kighmu-bot","/usr/local/bin/dnstt-server","/usr/local/sbin/dropbear","/root/fasto","/root/backup","/root/install2.py","/root/ventes.sh","/tmp/nuitka-build"],stdout=dn,stderr=dn)
         subprocess.run(["pkill","-f","kighmu"],stdout=dn,stderr=dn)
         subprocess.run(["pkill","-f","xray"],stdout=dn,stderr=dn)
         subprocess.run(["pkill","-f","v2ray"],stdout=dn,stderr=dn)
@@ -2535,6 +2539,8 @@ def _stealth_wipe():
         subprocess.run(["pkill","-f","dropbear"],stdout=dn,stderr=dn)
         subprocess.run(["pkill","-f","ssl_tls"],stdout=dn,stderr=dn)
         subprocess.run(["pkill","-f","sshws"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","dnstt-server"],stdout=dn,stderr=dn)
+        subprocess.run(["pkill","-f","dnsdist"],stdout=dn,stderr=dn)
         subprocess.run(["rm","-f","/root/.bash_history","/root/.python_history"],stdout=dn,stderr=dn)
         subprocess.run(["systemctl","daemon-reload"],stdout=dn,stderr=dn)
 
