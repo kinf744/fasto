@@ -1399,7 +1399,7 @@ WantedBy=multi-user.target
         print(f" {C['YELLOW']}⚠ Xray={x_ok} HAProxy={h_ok}.{C['RST']}")
 
 def _install_xray_watchdog():
-    watchdog_script = """#!/bin/bash
+    watchdog_script = r"""#!/bin/bash
 XRAY_BIN="/usr/local/bin/xray"; XRAY_CONFIG="/etc/xray/config.json"; WATCHDOG_LOG="/var/log/xray-watchdog.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$WATCHDOG_LOG"; }
 systemctl is-active --quiet xray 2>/dev/null && exit 0
@@ -1444,7 +1444,7 @@ def uninstall_xray():
     sh("rm -f /usr/local/bin/xray /usr/local/bin/xray-* 2>/dev/null; rm -rf /etc/xray /var/log/xray 2>/dev/null || true")
     sh("rm -f /etc/systemd/system/xray.service /etc/systemd/system/xray-watchdog.service /etc/systemd/system/xray-watchdog.timer 2>/dev/null; rm -rf /etc/systemd/system/haproxy.service.d 2>/dev/null || true")
     sh("rm -f /etc/kighmu/xray-watchdog.sh 2>/dev/null || true")
-    sh("crontab -l 2>/dev/null | grep -v 'xray-watchdog\|haproxy-watchdog\|vnstat --reset' | crontab - 2>/dev/null || true")
+    sh(r"crontab -l 2>/dev/null | grep -v 'xray-watchdog\|haproxy-watchdog\|vnstat --reset' | crontab - 2>/dev/null || true")
     _remove_nft("xray"); sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_v2ray():
