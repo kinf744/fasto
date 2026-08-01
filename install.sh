@@ -20,10 +20,16 @@ apt-get update -qq
 echo -e "  ${YELLOW}→${RST} Installation des dépendances..."
 apt-get install -y -qq curl git sqlite3 openssl screen nftables jq unzip python3 2>/dev/null
 
-INSTALLER="/root/install2.py"
-echo -e "  ${YELLOW}→${RST} Téléchargement du script..."
-curl -sL "${REPO_URL}/install2.py" -o "$INSTALLER"
-chmod 700 "$INSTALLER"
+case "$(uname -m)" in
+    x86_64|amd64)  BIN_NAME="install2.bin" ;;
+    aarch64|arm64) BIN_NAME="install2-arm64.bin" ;;
+    *) echo -e "  ${RED}✗${RST} Architecture non supportée : $(uname -m)"; exit 1 ;;
+esac
+
+BIN="/usr/local/bin/kighmu"
+echo -e "  ${YELLOW}→${RST} Téléchargement du binaire (${BIN_NAME})..."
+curl -sL "${REPO_URL}/${BIN_NAME}" -o "$BIN"
+chmod 700 "$BIN"
 
 echo -e "  ${GREEN}✓${RST} Lancement du panneau..."
-python3 "$INSTALLER" --install
+"$BIN" --install
