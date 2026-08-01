@@ -1081,7 +1081,7 @@ done
 }
 """)
 
-    print(f" {C['GREEN']}✔ SlowDNS installé (53→{DNSDIST_PORT} via dnsdist).{C['RST']}")
+    print(f" {C['GREEN']}✔ SlowDNS installé (53→{DNSDIST_PORT} via dnsfast).{C['RST']}")
 
 def configure_slowdns():
     DIR = Path("/etc/slowdns")
