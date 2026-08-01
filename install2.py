@@ -1843,15 +1843,15 @@ def uninstall_telegram_bot(silent=False):
 # ── Update functions ──────────────────────────────────────────────────────────
 def upd_check():
     print(f" {C['YELLOW']}Checking for updates...{C['RST']}")
-    sh("cd /root && git fetch origin 2>/dev/null || true")
+    sh("cd /root && git fetch origin 2>/dev/null || cd /root/fasto-push && git fetch origin 2>/dev/null || true")
 
 def upd_update():
     print(f" {C['YELLOW']}Updating...{C['RST']}")
-    sh("cd /root && git pull origin main 2>/dev/null || true")
+    sh("cd /root && git pull origin main 2>/dev/null || cd /root/fasto-push && git pull origin main 2>/dev/null || true")
 
 def upd_changelog():
     print(f" {C['YELLOW']}Changelog:{C['RST']}")
-    sh("cd /root && git log --oneline -10 2>/dev/null || echo 'No git history'")
+    sh("cd /root && git log --oneline -10 2>/dev/null || cd /root/fasto-push && git log --oneline -10 2>/dev/null || echo 'No git history'")
 
 def upd_reinstall():
     c = input(f" {C['RED']}Reinstall? (will keep users) [y/N]: {C['RST']}").strip().lower()
