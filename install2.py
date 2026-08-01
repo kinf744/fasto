@@ -1353,6 +1353,29 @@ def xray_build_config():
     except Exception as e:
         print(f" {C['RED']}✗ xray_build_config: {e}{C['RST']}")
 
+def _rebuild_xray_users():
+    XRAY_USERS.parent.mkdir(parents=True, exist_ok=True)
+    today = date.today().isoformat()
+    fresh = {"vmess": [], "vless": [], "trojan": [], "shadow": []}
+    if USERDIR.exists():
+        for f in USERDIR.iterdir():
+            if not f.is_file(): continue
+            p = _meta_get(f.name, "proto")
+            if p not in ("vmess", "vless", "trojan"): continue
+            exp = _meta_get(f.name, "exp")
+            if exp and exp < today: continue
+            if is_locked(f.name): continue
+            q = float(_meta_get(f.name, "quota") or "0")
+            if p in ("vmess", "vless"):
+                uuid = _meta_get(f.name, "uuid")
+                if not uuid: continue
+                fresh[p].append({"id": uuid, "email": f.name, "level": 0, "expire": exp, "quota": q})
+            elif p == "trojan":
+                pw = _meta_get(f.name, "pass")
+                if not pw: continue
+                fresh["trojan"].append({"password": pw, "email": f.name, "level": 0, "expire": exp, "quota": q})
+    XRAY_USERS.write_text(json.dumps(fresh, indent=2))
+
 def xray_add_user(proto, user, cred, exp, quota):
     XRAY_USERS.parent.mkdir(parents=True, exist_ok=True)
     if not XRAY_USERS.exists():
@@ -1382,7 +1405,7 @@ def install_xray():
     Path("/etc/xray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/xray").mkdir(parents=True, exist_ok=True)
     sh("rm -f /var/log/xray/access.log /var/log/xray/error.log 2>/dev/null; touch /var/log/xray/access.log /var/log/xray/error.log 2>/dev/null || true")
-    if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
+    if not XRAY_USERS.exists(): _rebuild_xray_users()
     ok=_acme_cert(DOMAIN, "/etc/xray")
     if not ok:
         print(f" {C['YELLOW']}⚠ ACME failed for {DOMAIN}, generating self-signed cert...{C['RST']}")
@@ -1621,6 +1644,7 @@ WantedBy=multi-user.target
     iface = get_main_iface()
     _deploy_nft("hysteria", f'table inet hysteria {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 20000-50000 accept; }}; chain prerouting {{ type nat hook prerouting priority dstnat; policy accept; iifname "{iface}" udp dport 20000-50000 dnat to :20000; }}; }}')
     sh("systemctl daemon-reload && systemctl enable --now hysteria.service 2>/dev/null || true")
+    hysteria_apply()
     if sh("systemctl is-active hysteria.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ Hysteria installé et actif (port 20000).{C['RST']}")
     else: print(f" {C['RED']}✗ Hysteria: échec démarrage.{C['RST']}")
@@ -1669,6 +1693,7 @@ WantedBy=multi-user.target
     iface = get_main_iface()
     _deploy_nft("zivpn", f'table inet zivpn {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 6000-19999 dnat to :5667; }}; }}')
     sh("systemctl daemon-reload && systemctl enable --now zivpn.service 2>/dev/null || true")
+    zivpn_apply()
     if sh("systemctl is-active zivpn.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ ZIVPN installé et actif (port 5667).{C['RST']}")
     else: print(f" {C['RED']}✗ ZIVPN: échec démarrage.{C['RST']}")
@@ -1725,21 +1750,22 @@ def install_all_missing():
     _install_global_watchdog()
     sh("systemctl daemon-reload 2>/dev/null || true")
 
-def uninstall_all_active():
-    clear_screen()
-    print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
-    print(f" {C['RED']}║{C['RST']}         {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
-    print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
-    print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer TOUS les tunnels :{C['RST']}")
-    print(f" {C['GRAY']}  • SSH / Dropbear      • WS-EPRO (SSH-WS)      • SSL / TLS{C['RST']}")
-    print(f" {C['GRAY']}  • XRAY                • V2RAY-DNS             • BadVPN{C['RST']}")
-    print(f" {C['GRAY']}  • UDP Custom          • SlowDNS               • Hysteria{C['RST']}")
-    print(f" {C['GRAY']}  • ZIVPN               • HAProxy               • NFTables{C['RST']}\n")
-    c = input(f" {C['RED']}► Tapez 'yes' pour confirmer :{C['RST']} ").strip().lower()
-    if c != "yes":
-        print(f" {C['GREEN']}✔ Annulé.{C['RST']}")
-        press_enter()
-        return
+def uninstall_all_active(silent=False):
+    if not silent:
+        clear_screen()
+        print(f" {C['RED']}╔════════════════════════════════════════╗{C['RST']}")
+        print(f" {C['RED']}║{C['RST']}         {C['WHITE']}DÉSINSTALLATION TOTALE{C['RST']}         {C['RED']}║{C['RST']}")
+        print(f" {C['RED']}╚════════════════════════════════════════╝{C['RST']}\n")
+        print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer TOUS les tunnels :{C['RST']}")
+        print(f" {C['GRAY']}  • SSH / Dropbear      • WS-EPRO (SSH-WS)      • SSL / TLS{C['RST']}")
+        print(f" {C['GRAY']}  • XRAY                • V2RAY-DNS             • BadVPN{C['RST']}")
+        print(f" {C['GRAY']}  • UDP Custom          • SlowDNS               • Hysteria{C['RST']}")
+        print(f" {C['GRAY']}  • ZIVPN               • HAProxy               • NFTables{C['RST']}\n")
+        c = input(f" {C['RED']}► Tapez 'yes' pour confirmer :{C['RST']} ").strip().lower()
+        if c != "yes":
+            print(f" {C['GREEN']}✔ Annulé.{C['RST']}")
+            press_enter()
+            return
     for fn in [uninstall_zivpn, uninstall_hysteria, uninstall_slowdns, uninstall_udp_custom, uninstall_badvpn, uninstall_v2ray, uninstall_xray, uninstall_sshws, uninstall_ssl_tls, uninstall_dropbear]:
         fn()
     sh("systemctl disable --now haproxy 2>/dev/null || true")
@@ -1753,7 +1779,8 @@ def uninstall_all_active():
     sh("nft delete table ip6 nat 2>/dev/null || true")
     sh("systemctl disable --now nftables-nat.service nftables-tunnel.service 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Tous les tunnels ont été désinstallés.{C['RST']}")
-    press_enter()
+    if not silent:
+        press_enter()
 
 def install_telegram_bot():
     clear_screen()
@@ -1790,7 +1817,7 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/kighmu-bot.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now kighmu-bot 2>/dev/null || true")
 
-def uninstall_telegram_bot():
+def uninstall_telegram_bot(silent=False):
     sh("systemctl stop kighmu-bot 2>/dev/null || true; systemctl disable kighmu-bot 2>/dev/null || true")
     sh("systemctl stop kighmu-reseller-* 2>/dev/null || true; systemctl disable kighmu-reseller-* 2>/dev/null || true")
     for f in Path("/etc/systemd/system").glob("kighmu-reseller-*.service"):
@@ -1806,7 +1833,8 @@ def uninstall_telegram_bot():
     sh("pip3 uninstall python-telegram-bot -y --break-system-packages 2>/dev/null || pip3 uninstall python-telegram-bot -y 2>/dev/null || true")
     sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ Telegram Bot complètement désinstallé{C['RST']}")
-    press_enter()
+    if not silent:
+        press_enter()
 
 # ── Update functions ──────────────────────────────────────────────────────────
 def upd_check():
@@ -1842,8 +1870,8 @@ def upd_remove():
     _auto_uninstall_all()
 
 def _auto_uninstall_all():
-    uninstall_all_active()
-    uninstall_telegram_bot()
+    uninstall_all_active(silent=True)
+    uninstall_telegram_bot(silent=True)
     for r in reseller_list(): reseller_remove_service(r["id"])
     pats = "kighmu|xray|v2ray|slowdns|dnsdist|haproxy|hysteria|zivpn|sshws|ssl_tls|udp-custom|badvpn|dropbear-custom|ws-dropbear|nftables-nat|nftables-restore|nftables-tunnel"
     units = sh(f"systemctl list-unit-files 2>/dev/null | awk '{{print $1}}' | grep -E '^({pats})[-@]?[^.]*\\.(service|timer)$' | sort -u")
@@ -1852,7 +1880,7 @@ def _auto_uninstall_all():
     for pat in ["kighmu-*","kighmu@*","xray*","v2ray*","slowdns*","dnsdist*","haproxy*","hysteria*","zivpn*","sshws*","ssl_tls*","udp-custom*","badvpn-*","badvpn@*","dropbear-custom*","ws-dropbear*","nftables-nat*","nftables-restore*","nftables-tunnel@*"]:
         for f in Path("/etc/systemd/system").glob(pat):
             sh(f"rm -rf {f} 2>/dev/null || true")
-    for b in ["kighmu","kighmu.bak","kighmu-panel","kighmu-panel.sh","kighmu.pps_backup","kighmu-bot","menu","menu.pps_backup","menu-ssh","install2","ventes","sshws","ssl_tls","xray","v2ray","dnstt-server","dnstt-client","badvpn-udpgw","udp-custom","hysteria-linux-amd64","zivpn","slowdns-ns4-start.sh","slowdns-nv4-start.sh","slowdns-watchdog.sh","init-nftables-kighmu.sh"]:
+    for b in ["kighmu","kighmu.bak","kighmu-panel","kighmu-panel.sh","kighmu.pps_backup","kighmu-bot","kighmu-watchdog.sh","menu","menu.pps_backup","menu-ssh","install2","panel_install.py","ventes","sshws","ssl_tls","xray","v2ray","dnstt-server","dnstt-client","badvpn-udpgw","udp-custom","hysteria-linux-amd64","zivpn","slowdns-ns4-start.sh","slowdns-nv4-start.sh","slowdns-watchdog.sh","init-nftables-kighmu.sh"]:
         sh(f"rm -f /usr/local/bin/{b} 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray-* /usr/local/bin/dropbear* /usr/local/sbin/dropbear 2>/dev/null || true")
     for u in panel_system_accounts():
@@ -1881,6 +1909,8 @@ def _auto_uninstall_all():
     sh("rm -rf /root/Kighmu /root/fasto /root/backup /tmp/nuitka-build /root/backup-* /root/backup_users*.json 2>/dev/null || true")
     sh("rm -f /root/install2.py /root/install2.bin /root/install.sh /root/ventes.sh /root/apply_and_check.sh /root/apply_xray.py /root/check_xray.py /root/check_tunnels.sh /root/auto_install.py 2>/dev/null || true")
     sh("sysctl --system 2>/dev/null || true")
+    sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
+    sh("rm -f /etc/systemd/system/kighmu-reseller-*.service /etc/systemd/system/slowdns-router.service /etc/systemd/system/xray-watchdog.* /etc/systemd/system/kighmu-watchdog.* /etc/systemd/system/slowdns-watchdog.* 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
     sh("pkill -f kighmu 2>/dev/null || true; pkill -f install2 2>/dev/null || true; pkill -f ventes 2>/dev/null || true")
