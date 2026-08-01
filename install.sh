@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-REPO_URL="https://github.com/kinf744/fasto/raw/main"
+REPO_URL="https://frav.kingom.ggff.net/fasto/raw/main"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 WHITE='\033[0;97m'; RST='\033[0m'
 
