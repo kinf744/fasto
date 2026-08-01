@@ -262,14 +262,16 @@ def _svc_ready(svc):
     return cases.get(svc, False)
 
 def _meta_get(user, field):
+    if not user: return ""
     f = USERDIR / user
-    if not f.exists(): return ""
+    if not f.is_file(): return ""
     for line in f.read_text().splitlines():
         if line.startswith(f"{field}="): return line.split("=",1)[1]
     return ""
 def _meta_set(user, field, value):
+    if not user: return
     f = USERDIR / user
-    if not f.exists(): return
+    if not f.is_file(): return
     lines = f.read_text().splitlines(); new = []
     found = False
     for line in lines:
@@ -310,11 +312,13 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         if ns: sh(f"echo '{user}|{passwd}|{limit}|{exp}|{get_ip()}|{get_domain()}|{ns}' >> /etc/kighmu/users.list 2>/dev/null || true")
     elif proto in ("vmess","vless"):
         uuid = gen_uuid()
+        if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
         sh(f"jq '.{proto} += [{{\"id\":\"{uuid}\",\"email\":\"{user}\",\"level\":0,\"expire\":\"{exp}\",\"quota\":{float(quota) or 0}}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
         write_meta(user, proto, exp, "", "", uuid, quota)
         xray_build_config()
     elif proto == "trojan":
         passwd = passwd or gen_pass()
+        if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
         sh(f"jq '.trojan += [{{\"password\":\"{passwd}\",\"email\":\"{user}\",\"level\":0,\"expire\":\"{exp}\",\"quota\":{float(quota) or 0}}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
         write_meta(user, "trojan", exp, "", passwd, "", quota)
         xray_build_config()
@@ -2509,14 +2513,14 @@ def ui_delete_wizard(protos=None):
 def ui_renew_wizard():
     cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}RENEW{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
-    if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
+    if not user or not (USERDIR/user).is_file(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     ds=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Days (def 30): {C['RST']}").strip();days=int(ds) if ds.isdigit() else 30
     renew_user(user,days);print(f" {C['GREEN']}✔ Extended{C['RST']}");press_enter()
 
 def ui_lock_wizard():
     cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}LOCK/UNLOCK{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
-    if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
+    if not user or not (USERDIR/user).is_file(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     if is_locked(user): unlock_user(user);print(f" {C['GREEN']}✔ Unlocked{C['RST']}")
     else: lock_user(user);print(f" {C['GREEN']}✔ Locked{C['RST']}")
     press_enter()
@@ -2524,14 +2528,14 @@ def ui_lock_wizard():
 def ui_passwd_wizard():
     cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CHANGE PASSWORD{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
-    if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
+    if not user or not (USERDIR/user).is_file(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     np=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}New pass (empty=auto): {C['RST']}").strip()
     np=change_password(user,np);print(f" {C['GREEN']}✔ Updated: {np}{C['RST']}");press_enter()
 
 def ui_info_wizard():
     cleanup_panel_residues();clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION INFO{C['RST']}\n")
     user=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Username: {C['RST']}").strip()
-    if not (USERDIR/user).exists(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
+    if not user or not (USERDIR/user).is_file(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     proto=_meta_get(user,"proto");exp=_meta_get(user,"exp");passwd=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");quota=_meta_get(user,"quota") or"0"
     if proto=="ssh": show_ssh_details_screen("details",user,passwd,exp,quota)
     elif proto in("vless","trojan","vmess","v2raydns"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
@@ -3109,7 +3113,10 @@ def xray_user_count_bot():
     try:
         with open(XRAY_USERS)as f:d=json.load(f)
         return len(d.get("vmess",[]))+len(d.get("vless",[]))+len(d.get("trojan",[]))+len(d.get("shadow",[]))
-    except: return 0
+    except:
+        if USERDIR.exists():
+            return sum(1 for f in USERDIR.iterdir() if f.is_file() and _meta_get(f.name,"proto") in ("vmess","vless","trojan"))
+        return 0
 def get_users_by_proto(proto):
     pm={"ssh":"ssh","xray":None,"v2ray":"v2raydns","zivpn":"zivpn","hyst":"hysteria"}
     r=pm.get(proto,proto);users=[]
@@ -3344,6 +3351,14 @@ if BOT_AVAILABLE:
                     if not f.is_file():continue
                     pp=_meta_get(f.name,"proto")
                     if(p=="ssh"and pp=="ssh")or(p=="zivpn"and pp=="zivpn")or(p=="hyst"and pp=="hysteria"):rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),0))
+            if not rows and p in("xray","v2ray") and USERDIR.exists():
+                for f in sorted(USERDIR.iterdir()):
+                    if not f.is_file():continue
+                    pp=_meta_get(f.name,"proto")
+                    if p=="xray" and pp in("vmess","vless","trojan"):
+                        rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_xray_traffic(f.name)))
+                    elif p=="v2ray" and pp=="v2raydns":
+                        rows.append((f.name,"V2RAY",_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_v2ray_traffic(f.name)))
             if not rows: t=f"📋 *No {pn} users.*"
             else:
                 l=[f"📋 *{pn}* ({len(rows)})\n\n",f"`  User      Proto    Exp         Traffic`",f"`{'─'*54}`"]
