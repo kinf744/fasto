@@ -165,6 +165,8 @@ def cpu_pct():
     except: return 0
 def pct_color(p): return f"{C['RED']}{p}%{C['RST']}" if p > 90 else f"{C['YELLOW']}{p}%{C['RST']}"
 def count_ssh_total(): return int(sh(r"awk -F: '$3>=1000 && $7 ~ /(bash|sh)$/ {n++} END{print n+0}' /etc/passwd") or "0")
+def panel_system_accounts():
+    return [l.strip() for l in sh("awk -F: '$3>=1000 && $3<65534 && $6==\"/home/\"$1 && $7 ~ /(bash|sh|nologin)$/ {print $1}' /etc/passwd").splitlines() if l.strip()]
 def count_xray_total(): return int(sh("jq '[.vmess,.vless,.trojan]|map(length)|add' /etc/xray/users.json 2>/dev/null") or "0")
 def count_total_users():
     if not USERDIR.exists(): return 0
@@ -1853,6 +1855,13 @@ def _auto_uninstall_all():
     for b in ["kighmu","kighmu.bak","kighmu-panel","kighmu-panel.sh","kighmu.pps_backup","kighmu-bot","menu","menu.pps_backup","menu-ssh","install2","ventes","sshws","ssl_tls","xray","v2ray","dnstt-server","dnstt-client","badvpn-udpgw","udp-custom","hysteria-linux-amd64","zivpn","slowdns-ns4-start.sh","slowdns-nv4-start.sh","slowdns-watchdog.sh","init-nftables-kighmu.sh"]:
         sh(f"rm -f /usr/local/bin/{b} 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray-* /usr/local/bin/dropbear* /usr/local/sbin/dropbear 2>/dev/null || true")
+    for u in panel_system_accounts():
+        sh(f"userdel -f {u} 2>/dev/null || true")
+        sh(f"rm -rf /home/{u} 2>/dev/null || true")
+    if USERDIR.exists():
+        for uf in USERDIR.iterdir():
+            if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
+                sh(f"userdel -f {uf.name} 2>/dev/null || true")
     for d in ["/etc/kighmu","/etc/ventes","/etc/xray","/etc/v2ray","/etc/slowdns","/etc/hysteria","/etc/zivpn","/etc/udp-custom","/etc/dnsdist","/etc/nftables","/etc/haproxy","/etc/sshws","/etc/ssl_tls","/etc/dropbear","/etc/logrotate.d/slowdns"]:
         sh(f"rm -rf {d} 2>/dev/null || true")
     for d in ["/var/log/xray","/var/log/slowdns","/var/log/hysteria","/var/log/v2ray","/var/log/sshws","/var/log/ssl_tls","/var/log/zivpn","/var/log/kighmu"]:
@@ -1861,10 +1870,6 @@ def _auto_uninstall_all():
         sh(f"rm -rf {f} 2>/dev/null || true")
     for f in ["/etc/sysctl.d/99-kighmu.conf","/etc/sysctl.d/99-slowdns.conf"]:
         Path(f).unlink(missing_ok=True)
-    if USERDIR.exists():
-        for uf in USERDIR.iterdir():
-            if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
-                sh(f"userdel -f {uf.name} 2>/dev/null || true")
     sh("chattr -i /etc/resolv.conf 2>/dev/null || true")
     Path("/etc/resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
     sh("crontab -l > /root/crontab.backup 2>/dev/null || true")
@@ -1883,10 +1888,11 @@ def _auto_uninstall_all():
 
 def delete_user(user):
     f = USERDIR / user
-    if not f.exists(): return 2
+    if not f.exists() and user not in panel_system_accounts(): return 2
     proto = _meta_get(user, "proto")
-    if proto == "ssh":
+    if proto == "ssh" or (not f.exists() and user in panel_system_accounts()):
         sh(f"userdel -f {user} 2>/dev/null || true")
+        sh(f"rm -rf /home/{user} 2>/dev/null || true")
         sh(f"sed -i '/^{user}|/d' /etc/kighmu/users.list 2>/dev/null || true")
     elif proto in ("vmess","vless","trojan","xray"):
         for p in ("vmess","vless","trojan"):
@@ -2423,6 +2429,10 @@ def ui_delete_wizard(protos=None):
                 if protos and p not in protos: continue
                 e = _meta_get(f.name, "exp")
                 entries.append((f.name, p, e))
+        if not protos or "ssh" in protos:
+            for u in panel_system_accounts():
+                if not (USERDIR / u).exists():
+                    entries.append((u, "ssh", ""))
         if not entries:
             print(f" {C['RED']}✗ No users found.{C['RST']}");press_enter();return
         cleanup_panel_residues();clear_screen()
