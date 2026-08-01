@@ -358,8 +358,10 @@ def _reload_passwords(config_path, service, proto):
         tmp.write_text(json.dumps(data, indent=2))
         ok = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
         if ok:
+            before = config.read_bytes() if config.exists() else b""
             tmp.replace(config)
-            sh(f"systemctl restart {service} 2>/dev/null || true")
+            if config.read_bytes() != before:
+                sh(f"systemctl restart {service} 2>/dev/null || true")
         else:
             print(f" {C['RED']}✗ {service}: JSON invalide, annulé{C['RST']}")
             tmp.unlink(missing_ok=True)
@@ -400,8 +402,10 @@ def v2raydns_apply():
         tmp.write_text(json.dumps(data, indent=2))
         valid = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
         if valid:
+            before = V2RAY_CONFIG.read_bytes() if V2RAY_CONFIG.exists() else b""
             tmp.replace(V2RAY_CONFIG)
-            sh("systemctl restart v2ray 2>/dev/null || true")
+            if V2RAY_CONFIG.read_bytes() != before:
+                sh("systemctl restart v2ray 2>/dev/null || true")
         else:
             print(f" {C['RED']}✗ v2raydns: JSON invalide, annulé{C['RST']}")
             tmp.unlink(missing_ok=True)
@@ -488,7 +492,7 @@ def _ensure_nat_catchall():
         nft_src_parts.append(f"""table {family} nat {{
     chain PREROUTING {{
         type nat hook prerouting priority dstnat; policy accept;
-        iifname "{iface}" udp dport 53 return
+        iifname "{iface}" udp dport {{ 53,5300,5353,5354,5667,20000,7100,7200,7300 }} return
         iifname "{iface}" udp dport {{ 2900-5600 }} counter dnat to :36712
     }}
 }}""")
@@ -540,7 +544,7 @@ def uninstall_udp_stack():
     uninstall_udp_custom()
 
 def install_dropbear():
-    if sh("command -v /usr/local/sbin/dropbear 2>/dev/null") != "": return
+    if sh("command -v /usr/local/sbin/dropbear 2>/dev/null") != "" and Path("/etc/systemd/system/dropbear-custom.service").exists(): return
     sh("apt-get install -y -qq build-essential bzip2 zlib1g-dev wget tar 2>/dev/null")
     sh("cd /usr/local/src && wget -q 'https://matt.ucc.asn.au/dropbear/releases/dropbear-2022.83.tar.bz2' -O dropbear-2022.83.tar.bz2 2>/dev/null")
     sh("cd /usr/local/src && tar -xjf dropbear-2022.83.tar.bz2 2>/dev/null && cd dropbear-2022.83 && ./configure --prefix=/usr/local >/dev/null 2>&1 && make -j$(nproc) >/dev/null 2>&1 && make install >/dev/null 2>&1")
@@ -556,6 +560,9 @@ HostKeyAlgorithms ssh-ed25519,ssh-rsa,ecdsa-sha2-nistp256
     svc = """[Unit]
 Description=Dropbear Custom (port 109)
 After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/local/sbin/dropbear -F -E -p 109 -b /etc/dropbear/banner.txt -R
@@ -608,7 +615,7 @@ def _force_domain():
     return dom
 
 def install_ssl_tls():
-    if sh("command -v ssl_tls 2>/dev/null") != "":
+    if sh("command -v ssl_tls 2>/dev/null") != "" and Path("/etc/systemd/system/ssl_tls.service").exists():
         print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
     sh("apt-get install -y -qq curl file 2>/dev/null")
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
@@ -619,8 +626,10 @@ def install_ssl_tls():
         print(f" {C['RED']}✗ Binaire ssl_tls ne s'exécute pas.{C['RST']}");return
     svc = """[Unit]
 Description=Tunnel SSL/TLS (ssl_tls)
-After=network.target
-Wants=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/ssl_tls -listen 444 -target-host 127.0.0.1 -target-port 109
@@ -652,9 +661,11 @@ def uninstall_ssl_tls():
     print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
 
 def install_sshws():
-    if sh("command -v sshws 2>/dev/null") != "":
+    if sh("command -v sshws 2>/dev/null") != "" and Path("/etc/systemd/system/sshws.service").exists():
         print(f" {C['GREEN']}✔ SSHWS déjà installé.{C['RST']}");return
-    sh("apt-get install -y -qq curl 2>/dev/null")
+    sh("apt-get install -y -qq curl python3-websockets 2>/dev/null || true")
+    if sh("python3 -c 'import websockets' 2>/dev/null && echo OK") != "OK":
+        sh("pip3 install websockets --quiet --break-system-packages 2>/dev/null || true")
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement sshws.{C['RST']}");return
     if "ELF" not in sh("file /usr/local/bin/sshws 2>/dev/null"):
@@ -663,7 +674,10 @@ def install_sshws():
     if "OK" not in r: print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
     svc = """[Unit]
 Description=SSHWS Slipstream Tunnel
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 User=root
@@ -699,8 +713,13 @@ LISTEN = "{listen_port}"
 TARGET_HOST = "{target[0]}"
 TARGET_PORT = {target[1]}
 async def proxy(ws):
+    writer = None
     try:
-        reader, writer = await asyncio.open_connection(TARGET_HOST, TARGET_PORT)
+        try:
+            reader, writer = await asyncio.open_connection(TARGET_HOST, TARGET_PORT)
+        except Exception:
+            await asyncio.sleep(2)
+            raise
         async def fwd_rx():
             try:
                 while True:
@@ -730,7 +749,10 @@ asyncio.run(main())
         script.chmod(0o755)
         svc_unit = f"""[Unit]
 Description={name} WS Proxy
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 {script}
@@ -753,6 +775,12 @@ def uninstall_sshws():
     sh("rm -f /usr/local/bin/sshws 2>/dev/null || true")
     sh("rm -rf /var/log/sshws 2>/dev/null || true")
     _remove_nft("sshws")
+    for name in ["ws-dropbear", "ws-stunnel"]:
+        sh(f"systemctl stop {name}.service 2>/dev/null || true")
+        sh(f"systemctl disable {name}.service 2>/dev/null || true")
+        Path(f"/etc/systemd/system/{name}.service").unlink(missing_ok=True)
+        Path(f"/usr/local/bin/{name}.py").unlink(missing_ok=True)
+        _remove_nft(name)
     sh("systemctl daemon-reload 2>/dev/null || true")
     sh("systemctl reset-failed sshws.service 2>/dev/null || true")
     sh('screen -ls 2>/dev/null | awk \'/sshws/ {print $1}\' | xargs -r -n1 screen -S {} -X quit 2>/dev/null || true')
@@ -811,7 +839,8 @@ def _acme_cert(domain, cert_dir):
     cmd = f"{acme} --issue --standalone -d {domain} --keylength ec-256 --server letsencrypt --email {_ACME_EMAIL} --force 2>&1"
     r = sh(cmd, timeout=120)
     if "success" in r.lower():
-        sh(f"{acme} --installcert -d {domain} --fullchainpath {fullchain} --keypath {privkey} --force 2>/dev/null || true")
+        reloadcmd = f"cat {fullchain} {privkey} > /etc/xray/xray.pem && cat {fullchain} {privkey} > /etc/haproxy/panel.pem && chmod 600 /etc/xray/xray.pem /etc/haproxy/panel.pem && systemctl reload haproxy"
+        sh(f"{acme} --installcert -d {domain} --fullchainpath {fullchain} --keypath {privkey} --reloadcmd '{reloadcmd}' --force 2>/dev/null || true")
     ok, detail = _cert_status(fullchain, domain)
     if ok and privkey.exists():
         print(f" {C['GREEN']}✔ Certificat TLS valide créé (expire: {detail}).{C['RST']}")
@@ -822,17 +851,20 @@ def _acme_cert(domain, cert_dir):
     return False
 
 def install_badvpn():
-    if sh("command -v badvpn-udpgw 2>/dev/null") != "": return
+    if sh("command -v badvpn-udpgw 2>/dev/null") != "" and Path("/etc/systemd/system/badvpn-7100.service").exists(): return
     sh("apt-get install -y -qq cmake build-essential git 2>/dev/null")
     sh("cd /tmp && rm -rf badvpn && git clone --depth 1 https://github.com/ambrop72/badvpn.git 2>/dev/null")
     sh("cd /tmp/badvpn && mkdir -p build && cd build && cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null 2>&1 && make -j$(nproc) >/dev/null 2>&1 && cp udpgw/badvpn-udpgw /usr/local/bin/ && chmod +x /usr/local/bin/badvpn-udpgw")
     for port in ["7100","7200","7300"]:
         Path(f"/etc/systemd/system/badvpn-{port}.service").write_text(f"""[Unit]
 Description=BadVPN UDPGW {port}
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:{port} --max-clients 999
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:{port} --max-clients 999
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -841,8 +873,8 @@ WantedBy=multi-user.target
 """)
     sh("systemctl daemon-reload 2>/dev/null || true")
     for port in ["7100","7200","7300"]: sh(f"systemctl enable --now badvpn-{port}.service 2>/dev/null || true")
-    _deploy_nft("badvpn", 'table inet badvpn { chain input { type filter hook input priority 0; policy accept; tcp dport {7100,7200,7300} accept; }; }')
-    print(f" {C['GREEN']}✔ BadVPN installé (ports 7100,7200,7300).{C['RST']}")
+    _deploy_nft("badvpn", 'table inet badvpn { chain input { type filter hook input priority 0; policy accept; udp dport {7100,7200,7300} accept; }; }')
+    print(f" {C['GREEN']}✔ BadVPN installé (UDP 7100,7200,7300).{C['RST']}")
 
 def uninstall_badvpn():
     for port in ["7100","7200","7300"]: sh(f"systemctl disable --now badvpn-{port}.service 2>/dev/null || true")
@@ -851,18 +883,21 @@ def uninstall_badvpn():
     print(f" {C['GREEN']}✔ BadVPN désinstallé.{C['RST']}")
 
 def install_udp_custom():
-    if sh("command -v udp-custom 2>/dev/null") != "":
+    if sh("command -v udp-custom 2>/dev/null") != "" and Path("/etc/systemd/system/udp-custom.service").exists():
         print(f" {C['GREEN']}✔ UDP-Custom déjà installé.{C['RST']}");return
     sh("apt-get install -y -qq curl 2>/dev/null")
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement udp-custom.{C['RST']}");return
     Path("/etc/udp-custom").mkdir(parents=True, exist_ok=True)
-    Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","exclude_port":[53,5300,5667,5354,5353,20000,4466],"timeout":600,"auth":{"mode":"passwords","config":[]}}')
+    Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","exclude_port":[53,5300,5353,5354,5667,20000,4466,7100,7200,7300],"timeout":600,"auth":{"mode":"passwords","config":[]}}')
     Path("/etc/udp-custom/users.list").touch()
     Path("/etc/udp-custom/users.list").chmod(0o600)
     svc = """[Unit]
 Description=UDP Custom
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/udp-custom server -c /etc/udp-custom/config.json
@@ -875,7 +910,7 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/udp-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
     iface = get_main_iface()
-    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 53 return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
+    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport {{ 53,5300,5353,5354,5667,20000,7100,7200,7300 }} return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
     if sh("systemctl is-active udp-custom.service 2>/dev/null")=="active":
         IP = sh("hostname -I | awk '{print $1}'")
         print(f" {C['GREEN']}✔ UDP-Custom installé et actif sur {IP}:36712{C['RST']}")
@@ -892,7 +927,7 @@ def uninstall_udp_custom():
     print(f" {C['GREEN']}✔ UDP-Custom désinstallé.{C['RST']}")
 
 def install_slowdns():
-    if sh("command -v dnstt-server 2>/dev/null") != "" and sh("systemctl list-unit-files 2>/dev/null | grep -q '^dnsdist' && echo OK") == "OK": return
+    if sh("command -v dnstt-server 2>/dev/null") != "" and Path("/etc/systemd/system/dnsdist.service").exists() and Path("/etc/systemd/system/slowdns-ns4.service").exists(): return
     sh("systemctl disable --now slowdns-router 2>/dev/null || true")
     sh("rm -f /usr/local/bin/slowdns-router /etc/systemd/system/slowdns-router.service 2>/dev/null || true")
     sh("apt-get install -y -qq curl jq wget dnsdist nftables 2>/dev/null")
@@ -947,12 +982,12 @@ Description=SlowDNS DNSTT {svc_name}
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 ExecStartPre=/bin/sleep 5
 ExecStart=/usr/local/bin/{svc_name}-start.sh
 Restart=always
 RestartSec=5
-StartLimitBurst=0
 LimitNOFILE=1048576
 KillMode=process
 KillSignal=SIGTERM
@@ -968,11 +1003,12 @@ WantedBy=multi-user.target
 
     sh("systemctl stop dnsdist 2>/dev/null || true")
     Path("/etc/systemd/system/dnsdist.service.d").mkdir(parents=True, exist_ok=True)
-    Path("/etc/systemd/system/dnsdist.service.d/restart.conf").write_text("""[Service]
+    Path("/etc/systemd/system/dnsdist.service.d/restart.conf").write_text("""[Unit]
+StartLimitIntervalSec=0
+StartLimitBurst=0
+[Service]
 Restart=always
 RestartSec=5
-StartLimitBurst=0
-StartLimitIntervalSec=0
 """)
     dnsdist_conf = f"""setSecurityPollSuffix("")
 setACL({{"0.0.0.0/0", "::/0"}})
@@ -1305,8 +1341,10 @@ def xray_build_config():
         tmp.write_text(json.dumps(config, indent=2))
         ok = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
         if ok:
+            before = XRAY_CONFIG.read_bytes() if XRAY_CONFIG.exists() else b""
             tmp.replace(XRAY_CONFIG)
-            sh("systemctl restart xray 2>/dev/null || true")
+            if XRAY_CONFIG.read_bytes() != before:
+                sh("systemctl restart xray 2>/dev/null || true")
         else:
             print(f" {C['RED']}✗ xray: config invalide après build, annulé{C['RST']}")
             tmp.unlink(missing_ok=True)
@@ -1328,7 +1366,7 @@ def xray_reload():
     xray_build_config()
 
 def install_xray():
-    if sh("command -v xray 2>/dev/null") != "":
+    if sh("command -v xray 2>/dev/null") != "" and Path("/etc/systemd/system/xray.service").exists() and Path("/etc/xray/config.json").exists():
         print(f" {C['GREEN']}✔ Xray déjà installé.{C['RST']}");return
     DOMAIN = _force_domain()
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
@@ -1347,7 +1385,7 @@ def install_xray():
     if not ok:
         print(f" {C['YELLOW']}⚠ ACME failed for {DOMAIN}, generating self-signed cert...{C['RST']}")
         sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/privkey.pem -out /etc/xray/fullchain.pem -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
-    if not Path("/etc/xray/xray.pem").exists():
+    if not Path("/etc/xray/xray.pem").exists() or Path("/etc/xray/xray.pem").stat().st_mtime < Path("/etc/xray/fullchain.pem").stat().st_mtime:
         crt=Path("/etc/xray/fullchain.pem")
         key=Path("/etc/xray/privkey.pem")
         sh(f"cat {crt} {key} > /etc/xray/xray.pem 2>/dev/null || true")
@@ -1360,6 +1398,7 @@ Description=Xray Service
 After=network-online.target nss-lookup.target
 Wants=network-online.target
 StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
@@ -1368,8 +1407,6 @@ NoNewPrivileges=true
 ExecStart=/usr/local/bin/xray -config /etc/xray/config.json
 Restart=always
 RestartSec=5s
-StartLimitIntervalSec=0
-StartLimitBurst=0
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
@@ -1377,7 +1414,7 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/xray.service").write_text(svc)
     sh("rm -rf /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d 2>/dev/null || true")
     Path("/etc/systemd/system/haproxy.service.d").mkdir(parents=True, exist_ok=True)
-    Path("/etc/systemd/system/haproxy.service.d/override.conf").write_text("[Service]\nRestart=always\nStartLimitIntervalSec=0\nStartLimitBurst=0\n")
+    Path("/etc/systemd/system/haproxy.service.d/override.conf").write_text("[Unit]\nStartLimitIntervalSec=0\nStartLimitBurst=0\n[Service]\nRestart=always\nRestartSec=5s\n")
     _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880} accept; }; }')
     xray_build_config()
     sh("systemctl daemon-reload 2>/dev/null || true")
@@ -1385,6 +1422,12 @@ WantedBy=multi-user.target
     crontab_cmds = [
         "*/15 * * * * systemctl is-active --quiet xray || systemctl restart xray >> /var/log/xray-watchdog.log 2>&1",
         "*/5 * * * * systemctl is-active --quiet haproxy || systemctl restart haproxy >> /var/log/haproxy-watchdog.log 2>&1",
+        "*/3 * * * * systemctl is-active --quiet hysteria || systemctl restart hysteria >> /var/log/hysteria-watchdog.log 2>&1",
+        "*/3 * * * * systemctl is-active --quiet zivpn || systemctl restart zivpn >> /var/log/zivpn-watchdog.log 2>&1",
+        "*/3 * * * * systemctl is-active --quiet udp-custom || systemctl restart udp-custom >> /var/log/udp-custom-watchdog.log 2>&1",
+        "*/3 * * * * systemctl is-active --quiet sshws || systemctl restart sshws >> /var/log/sshws-watchdog.log 2>&1",
+        "*/3 * * * * systemctl is-active --quiet ssl_tls || systemctl restart ssl_tls >> /var/log/ssl_tls-watchdog.log 2>&1",
+        "*/3 * * * * systemctl is-active --quiet dropbear-custom || systemctl restart dropbear-custom >> /var/log/dropbear-watchdog.log 2>&1",
         "0 0 1 * * vnstat --reset 2>/dev/null || true",
         "0 6 * * * /usr/local/bin/kighmu-bot --reseller-cleanup 2>/dev/null || true"
     ]
@@ -1407,8 +1450,21 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$WATCHDOG_LOG"; }
 systemctl is-active --quiet xray 2>/dev/null && exit 0
 log "[WATCHDOG] Xray INACTIF --- reparation..."
 [[ ! -x "$XRAY_BIN" ]] && { log "Binaire manquant"; exit 1; }
-[[ -f "$XRAY_CONFIG" ]] && ! jq empty "$XRAY_CONFIG" 2>/dev/null && { cp "$XRAY_CONFIG" "${XRAY_CONFIG}.corrupted.$(date +%s)"; log "Config corrompue"; }
-for port in 10001 10002 10003 10004 10005 10006 10007 10008 10009 10010 10011 10012 10013 10014 10015 10016 10017 10085; do
+if [[ -f "$XRAY_CONFIG" ]] && ! jq empty "$XRAY_CONFIG" 2>/dev/null; then
+    cp "$XRAY_CONFIG" "${XRAY_CONFIG}.corrupted.$(date +%s)"; log "Config corrompue"
+    python3 - <<'PYEOF'
+import json
+from pathlib import Path
+try:
+    u = json.loads(Path("/etc/xray/users.json").read_text()) if Path("/etc/xray/users.json").exists() else {"vmess":[],"vless":[],"trojan":[],"shadow":[]}
+except Exception:
+    u = {"vmess":[],"vless":[],"trojan":[],"shadow":[]}
+cfg = {"log":{"loglevel":"warning","access":"/var/log/xray/access.log","error":"/var/log/xray/error.log"},"inbounds":[{"tag":"VMess-TCP","port":10001,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"none"}}],"outbounds":[{"protocol":"freedom","settings":{}}]}
+Path("/etc/xray/config.json").write_text(json.dumps(cfg, indent=2))
+PYEOF
+    log "Config regeneree (minimum)"
+fi
+for port in $(jq -r '.inbounds[].port' "$XRAY_CONFIG" 2>/dev/null); do
     pid=$(ss -tlnp | grep ":$port " | grep -v xray | grep -oP 'pid=\K[0-9]+' | head -1)
     [[ -n "$pid" ]] && { kill "$pid" 2>/dev/null || true; log "Port $port libere (PID $pid)"; }
 done
@@ -1442,7 +1498,9 @@ WantedBy=timers.target
     sh("systemctl daemon-reload 2>/dev/null; systemctl enable --now xray-watchdog.timer 2>/dev/null || true")
 
 def uninstall_xray():
-    sh("systemctl disable --now xray haproxy 2>/dev/null || true")
+    sh("systemctl disable --now xray 2>/dev/null || true")
+    if sh("command -v v2ray 2>/dev/null") == "":
+        sh("systemctl disable --now haproxy 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray /usr/local/bin/xray-* 2>/dev/null; rm -rf /etc/xray /var/log/xray 2>/dev/null || true")
     sh("rm -f /etc/systemd/system/xray.service /etc/systemd/system/xray-watchdog.service /etc/systemd/system/xray-watchdog.timer 2>/dev/null; rm -rf /etc/systemd/system/haproxy.service.d 2>/dev/null || true")
     sh("rm -f /etc/kighmu/xray-watchdog.sh 2>/dev/null || true")
@@ -1450,7 +1508,7 @@ def uninstall_xray():
     _remove_nft("xray"); sh("systemctl daemon-reload 2>/dev/null || true")
 
 def install_v2ray():
-    if sh("command -v v2ray 2>/dev/null") != "":
+    if sh("command -v v2ray 2>/dev/null") != "" and Path("/etc/systemd/system/v2ray.service").exists():
         print(f" {C['GREEN']}✔ V2ray déjà installé.{C['RST']}");return
     _ensure_domain()
     sh("sysctl -w net.core.rmem_default=26214400 net.core.wmem_default=26214400 net.core.rmem_max=67108864 net.core.wmem_max=67108864 net.core.optmem_max=25165824 net.core.netdev_max_backlog=250000 net.ipv4.tcp_rmem='4096 87380 33554432' net.ipv4.tcp_wmem='4096 65536 33554432' net.ipv4.tcp_congestion_control=bbr net.core.default_qdisc=fq net.ipv4.ip_forward=1 net.ipv4.udp_mem='102400 873800 16777216' net.ipv4.tcp_fastopen=3 net.ipv4.tcp_mtu_probing=1 2>/dev/null || true")
@@ -1493,17 +1551,16 @@ Description=V2Ray Service
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 User=root
-    ExecStart=/usr/local/bin/v2ray run -config /etc/v2ray/config.json
-    Restart=always
-    RestartSec=5
-    StartLimitIntervalSec=0
-    StartLimitBurst=0
-    LimitNOFILE=65536
-    KillMode=process
-    KillSignal=SIGTERM
+ExecStart=/usr/local/bin/v2ray run -config /etc/v2ray/config.json
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+KillMode=process
+KillSignal=SIGTERM
 TimeoutStopSec=10
 [Install]
 WantedBy=multi-user.target
@@ -1526,7 +1583,7 @@ def uninstall_v2ray():
     print(f" {C['GREEN']}✔ V2ray désinstallé.{C['RST']}")
 
 def install_hysteria():
-    if sh("command -v hysteria-linux-amd64 2>/dev/null") != "":
+    if sh("command -v hysteria-linux-amd64 2>/dev/null") != "" and Path("/etc/systemd/system/hysteria.service").exists():
         print(f" {C['GREEN']}✔ Hysteria déjà installé.{C['RST']}");return
     r=sh("curl -fsSL 'https://github.com/apernet/hysteria/releases/download/v1.3.4/hysteria-linux-amd64' -o /usr/local/bin/hysteria-linux-amd64 2>/dev/null && chmod +x /usr/local/bin/hysteria-linux-amd64 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement Hysteria.{C['RST']}");return
@@ -1542,13 +1599,13 @@ Description=Hysteria Tunnel (v1.3.4)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/hysteria-linux-amd64 server -c /etc/hysteria/config.json
 WorkingDirectory=/etc/hysteria
 Restart=always
 RestartSec=10
-StartLimitBurst=0
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 LimitNOFILE=1048576
 LimitNPROC=infinity
@@ -1575,7 +1632,7 @@ def uninstall_hysteria():
     print(f" {C['GREEN']}✔ Hysteria désinstallé.{C['RST']}")
 
 def install_zivpn():
-    if sh("command -v zivpn 2>/dev/null") != "":
+    if sh("command -v zivpn 2>/dev/null") != "" and Path("/etc/systemd/system/zivpn.service").exists():
         print(f" {C['GREEN']}✔ ZIVPN déjà installé.{C['RST']}");return
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-zivpn-linux-amd64' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ZIVPN.{C['RST']}");return
@@ -1590,13 +1647,13 @@ Description=ZIVPN UDP Server (High-Speed)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
 WorkingDirectory=/etc/zivpn
 Restart=always
 RestartSec=10
-StartLimitBurst=0
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 LimitNOFILE=1048576
 LimitNPROC=infinity
@@ -1641,9 +1698,29 @@ def setup_config():
     nsc.write_text(ns4+"\n");nv4c.write_text(nv4+"\n")
     print(f" {C['GREEN']}✔ Domain: {dom}, NS4: {ns4}, NV4: {nv4}{C['RST']}\n")
 
+def _install_global_watchdog():
+    script = """#!/bin/bash
+# Kighmu global tunnel watchdog — relance les services au boot et apres crash
+LOG=/var/log/kighmu-watchdog.log
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
+for svc in haproxy xray v2ray hysteria zivpn udp-custom sshws ssl_tls dropbear-custom slowdns-ns4 slowdns-nv4 dnsdist badvpn-7100 badvpn-7200 badvpn-7300 kighmu-bot; do
+    systemctl is-enabled --quiet "$svc" 2>/dev/null || continue
+    if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+        systemctl reset-failed "$svc" 2>/dev/null || true
+        systemctl start "$svc" 2>/dev/null && log "$svc relance" || log "$svc ECHEC"
+    fi
+done
+"""
+    Path("/usr/local/bin/kighmu-watchdog.sh").write_text(script)
+    Path("/usr/local/bin/kighmu-watchdog.sh").chmod(0o755)
+    cr = sh("crontab -l 2>/dev/null")
+    if "kighmu-watchdog.sh" not in cr:
+        sh("(crontab -l 2>/dev/null; echo '@reboot /usr/local/bin/kighmu-watchdog.sh >/dev/null 2>&1') | crontab - 2>/dev/null || true")
+
 def install_all_missing():
     for fn in [install_ssh_stack, install_ssl_tls, install_sshws, install_xray, install_v2ray, install_badvpn, install_udp_custom, install_slowdns, install_hysteria, install_zivpn]:
         fn()
+    _install_global_watchdog()
     sh("systemctl daemon-reload 2>/dev/null || true")
 
 def uninstall_all_active():
@@ -1667,8 +1744,12 @@ def uninstall_all_active():
     for svc in ["nftables-tunnel@badvpn","nftables-tunnel@dropbear","nftables-tunnel@hysteria","nftables-tunnel@slowdns","nftables-tunnel@v2ray","nftables-tunnel@xray","nftables-tunnel@zivpn","nftables-tunnel@sshws","nftables-tunnel@ssl_tls","nftables-tunnel@udp-custom","badvpn-7100","badvpn-7200","badvpn-7300"]:
         sh(f"systemctl stop --now {svc} 2>/dev/null || true")
         sh(f"systemctl disable {svc} 2>/dev/null || true")
-    sh("nft flush ruleset 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
+    for tbl in ["badvpn","dropbear","hysteria","slowdns","v2ray","xray","zivpn","sshws","ssl_tls","udp-custom","kighmu"]:
+        sh(f"nft delete table inet {tbl} 2>/dev/null || true")
+    sh("nft delete table ip nat 2>/dev/null || true")
+    sh("nft delete table ip6 nat 2>/dev/null || true")
+    sh("systemctl disable --now nftables-nat.service nftables-tunnel.service 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Tous les tunnels ont été désinstallés.{C['RST']}")
     press_enter()
 
@@ -1691,6 +1772,8 @@ def install_telegram_bot():
     svc = f"""[Unit]
 Description=Kighmu Telegram Bot
 After=network.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /usr/local/bin/kighmu-bot --bot
@@ -2683,27 +2766,6 @@ def _stealth_wipe():
     with open("/dev/null","w") as dn:
         for svc in ["kighmu-bot","dnsdist","slowdns-ns4","slowdns-nv4","v2ray","xray","dropbear-custom","hysteria","zivpn","sshws","ssl_tls","udp-custom","badvpn-7100","badvpn-7200","badvpn-7300","kighmu-watchdog","kighmu-panel","haproxy"]:
             subprocess.run(["systemctl","stop","--now",svc],stdout=dn,stderr=dn);subprocess.run(["systemctl","disable",svc],stdout=dn,stderr=dn)
-        for f in ["/etc/systemd/system/kighmu-bot.service","/etc/systemd/system/slowdns-ns4.service","/etc/systemd/system/slowdns-nv4.service","/etc/systemd/system/nftables-tunnel@.service","/etc/systemd/system/badvpn@.service","/etc/systemd/system/badvpn-7100.service","/etc/systemd/system/badvpn-7200.service","/etc/systemd/system/badvpn-7300.service","/etc/systemd/system/dropbear-custom.service","/etc/systemd/system/hysteria.service","/etc/systemd/system/zivpn.service","/etc/systemd/system/v2ray.service","/etc/systemd/system/xray.service","/etc/systemd/system/sshws.service","/etc/systemd/system/ssl_tls.service","/etc/systemd/system/udp-custom.service","/etc/systemd/system/kighmu-watchdog.service","/etc/systemd/system/kighmu-panel.service"]:
-            Path(f).unlink(missing_ok=True)
-        if USERDIR.exists():
-            for uf in USERDIR.iterdir():
-                if uf.is_file() and _meta_get(uf.name,"proto")=="ssh":
-                    subprocess.run(["userdel","-f",uf.name],stdout=dn,stderr=dn)
-        subprocess.run(["nft","flush","ruleset"],stdout=dn,stderr=dn)
-        subprocess.run(["rm","-rf","/etc/kighmu","/etc/ventes","/etc/dnsdist","/etc/nftables/slowdns.nft","/etc/xray","/etc/v2ray","/etc/hysteria","/etc/zivpn","/etc/sshws","/etc/ssl_tls","/etc/udp-custom","/etc/dropbear","/usr/local/lib/kighmu-panel","/usr/local/bin/kighmu","/usr/local/bin/kighmu-panel","/usr/local/bin/menu","/usr/local/bin/install2","/usr/local/bin/ventes","/usr/local/bin/ssl_tls","/usr/local/bin/sshws","/usr/local/bin/udp-custom","/usr/local/bin/badvpn-udpgw","/usr/local/bin/kighmu-bot","/usr/local/bin/dnstt-server","/usr/local/sbin/dropbear","/root/fasto","/root/backup","/root/install2.py","/root/ventes.sh","/tmp/nuitka-build"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","kighmu"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","xray"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","v2ray"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","hysteria"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","zivpn"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","badvpn"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","udp-custom"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","dropbear"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","ssl_tls"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","sshws"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","dnstt-server"],stdout=dn,stderr=dn)
-        subprocess.run(["pkill","-f","dnsdist"],stdout=dn,stderr=dn)
-        subprocess.run(["rm","-f","/root/.bash_history","/root/.python_history"],stdout=dn,stderr=dn)
         subprocess.run(["systemctl","daemon-reload"],stdout=dn,stderr=dn)
 
 def _verify_license():
@@ -2789,10 +2851,9 @@ def _license_watchdog():
         _stealth_wipe();os._exit(0)
     try:
         conn,c=_ensure_license_db()
-        r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=?",(token_key,)).fetchone()
+        r=c.execute("SELECT client_name,expires_at,hw_binding FROM licenses WHERE license_key=?",(token_key,)).fetchone()
         if r:
-            name,binding=r
-            _,db_exp=r[0],r[2]
+            name,db_exp,binding=r
             if binding and not _verify_signature(token_key,binding):
                 _rebind_key(token_key)
             Path("/etc/kighmu/.client_name").write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit()
@@ -2947,9 +3008,11 @@ def reseller_create_service(rid, token):
     svc = f"""[Unit]
 Description=Kighmu Reseller Bot #{rid}
 After=network.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 [Service]
 Type=simple
-        ExecStart=/usr/bin/python3 /usr/local/bin/kighmu --reseller-bot {rid}
+ExecStart=/usr/bin/python3 /usr/local/bin/kighmu --reseller-bot {rid}
 WorkingDirectory=/etc/kighmu/bot/resellers/{rid}
 Restart=always
 RestartSec=10
