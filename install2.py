@@ -2437,8 +2437,8 @@ def ui_create_wizard(protos):
 def ui_list_users(title,protos):
     cleanup_panel_residues();clear_screen();L=[];today=date.today().isoformat()
     push_header(L,"simple",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}{title} ▸ LIST USERS{C['RST']}")
-    L+=[f" {'USERNAME':<16} {'EXPIRES':<10} {'STATUS':<10} {'TRAFFIC (USED/TOTAL)':<22}",
-        f" {C['GRAY']}{'────────':<16} {'──────':<10} {'──────':<10} {'──────────────────':<22}{C['RST']}"]
+    L+=[f" {'USERNAME':<14} {'EXPIRES':<10} {'STATUS':<8} {'TRAFFIC (USED/TOTAL)':<22}",
+        f" {C['GRAY']}{'────────':<14} {'──────':<10} {'──────':<8} {'──────────────────':<22}{C['RST']}"]
     n=0
     if USERDIR.exists():
         for f in sorted(USERDIR.iterdir()):
@@ -2456,8 +2456,8 @@ def ui_list_users(title,protos):
             tr=f"{fmt_bytes(used)} / {qv:.1f} GB" if qv>0 else f"{fmt_bytes(used)} / Unlimited"
             ex=e if e else "permanent"
             vis=re.sub(r'\x1b\[[0-9;]*m','',st)
-            st=f"{st}{' ' * max(1, 10 - len(vis))}"
-            L.append(f" {C['GREEN']}{f.name:<16}{C['RST']} {ex:<10} {st} {tr}")
+            st=f"{st}{' ' * max(1, 8 - len(vis))}"
+            L.append(f" {C['GREEN']}{f.name:<14}{C['RST']} {ex:<10} {st} {tr}")
             n+=1
     if n==0: L.append(f" {C['GRAY']}(no {title} user){C['RST']}")
     L.append("%SEP%");render_screen(L);press_enter()
