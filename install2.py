@@ -2,7 +2,7 @@
 """Kighmu Panel - VPS Management (Python port of install2.sh)"""
 
 import os, sys, json, subprocess, sqlite3, re, asyncio, logging, base64, signal
-import uuid as _uuid, time, shutil, pathlib, socket, hashlib, secrets
+import uuid as _uuid, time, shutil, pathlib, socket, hashlib, secrets, fcntl
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -308,6 +308,9 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         passwd = passwd or gen_pass()
         sh(f"echo '{user}:{passwd}' | chpasswd 2>/dev/null")
         write_meta(user, "ssh", exp, limit, passwd, "", quota)
+        _install_ssh_banner_shell()
+        sh(f"usermod -s {SSH_SHELL} {user} 2>/dev/null || true")
+        _ssh_quota_apply()
         ns = sh("cat /etc/slowdns/ns.conf 2>/dev/null")
         if ns: sh(f"echo '{user}|{passwd}|{limit}|{exp}|{get_ip()}|{get_domain()}|{ns}' >> /etc/kighmu/users.list 2>/dev/null || true")
     elif proto in ("vmess","vless"):
@@ -524,14 +527,16 @@ WantedBy=multi-user.target
 def install_openssh():
     sh("apt-get install -y -qq openssh-server 2>/dev/null || true")
     sh("systemctl enable ssh 2>/dev/null || true; systemctl restart ssh 2>/dev/null || true")
-    for line in ["PermitTunnel yes", "AllowTcpForwarding yes"]:
+    for line in ["PermitTunnel yes", "AllowTcpForwarding yes", "MaxSessions 0", "MaxStartups 10000:30:10000"]:
         key = line.split()[0]
         sh(f"sed -i 's/^#{key}.*/{line}/' /etc/ssh/sshd_config 2>/dev/null || echo '{line}' >> /etc/ssh/sshd_config")
     sh("systemctl restart ssh 2>/dev/null || true")
 
 def install_ssh_stack():
+    _install_ssh_banner_shell()
     install_openssh()
     install_dropbear()
+    _ssh_quota_apply()
 
 def install_ws_stack():
     install_sshws()
@@ -638,7 +643,7 @@ StartLimitIntervalSec=0
 StartLimitBurst=0
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/ssl_tls -listen 444 -target-host 127.0.0.1 -target-port 109
+ExecStart=/usr/local/bin/ssl_tls -listen 444 -target-host 127.0.0.1 -target-port 1092
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -687,7 +692,7 @@ StartLimitBurst=0
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 109
+ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 1092
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -709,7 +714,7 @@ WantedBy=multi-user.target
     else: print(f" {C['RED']}✗ SSHWS: échec démarrage.{C['RST']}")
 
 def _install_ws_proxies():
-    for name, listen_port, target in [("ws-dropbear", 2095, ("127.0.0.1", 109)), ("ws-stunnel", 700, ("127.0.0.1", 444))]:
+    for name, listen_port, target in [("ws-dropbear", 2095, ("127.0.0.1", 1092)), ("ws-stunnel", 700, ("127.0.0.1", 444))]:
         svc_name = f"{name}.service"
         script = Path(f"/usr/local/bin/{name}.py")
         script.parent.mkdir(parents=True, exist_ok=True)
@@ -976,7 +981,8 @@ def install_slowdns():
 
     PORT1 = 5353; PORT2 = 5354
     DNSDIST_PORT = 5300
-    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT1} -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:109\n"
+    _ensure_ssh_lb_haproxy()
+    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT1} -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:1092\n"
     nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT2} -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
     Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
     Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
@@ -1175,6 +1181,23 @@ def xray_gen_config():
     }
     XRAY_CONFIG.write_text(json.dumps(config, indent=2))
 
+def _ensure_ssh_lb_haproxy():
+    cfg = Path("/etc/haproxy/haproxy.cfg")
+    if not cfg.exists(): return
+    if "ssh-lb" in cfg.read_text(): return
+    with cfg.open("a") as f:
+        f.write("""
+frontend ssh-lb
+    bind 127.0.0.1:1092
+    default_backend ssh-mixed
+
+backend ssh-mixed
+    balance roundrobin
+    server dropbear 127.0.0.1:109 check
+    server sshd 127.0.0.1:22 check
+""")
+    sh("systemctl reload haproxy 2>/dev/null || true")
+
 def xray_gen_haproxy():
     PEM_DIR = "/etc/xray"
     panel_crt = f"{PEM_DIR}/xray.pem"
@@ -1300,8 +1323,18 @@ backend xray-vless-hupgrade
     server s1 127.0.0.1:10018
 backend v2ray-tcp
     server s1 127.0.0.1:5401
+
+frontend ssh-lb
+    bind 127.0.0.1:1092
+    default_backend ssh-mixed
+
+backend ssh-mixed
+    balance roundrobin
+    server dropbear 127.0.0.1:109 check
+    server sshd 127.0.0.1:22 check
 """
     Path("/etc/haproxy/haproxy.cfg").write_text(haproxy_cfg)
+    _ensure_ssh_lb_haproxy()
 
 def xray_build_config():
     XRAY_CONFIG = Path("/etc/xray/config.json")
@@ -1458,7 +1491,8 @@ WantedBy=multi-user.target
         "*/3 * * * * systemctl is-active --quiet ssl_tls || systemctl restart ssl_tls >> /var/log/ssl_tls-watchdog.log 2>&1",
         "*/3 * * * * systemctl is-active --quiet dropbear-custom || systemctl restart dropbear-custom >> /var/log/dropbear-watchdog.log 2>&1",
         "0 0 1 * * vnstat --reset 2>/dev/null || true",
-        "0 6 * * * /usr/local/bin/kighmu-bot --reseller-cleanup 2>/dev/null || true"
+        "0 6 * * * /usr/local/bin/kighmu-bot --reseller-cleanup 2>/dev/null || true",
+        "*/5 * * * * /usr/local/bin/kighmu --ssh-quota-sync 2>/dev/null || true"
     ]
     existing = sh("crontab -l 2>/dev/null")
     for cmd in crontab_cmds:
@@ -1937,12 +1971,18 @@ def delete_user(user):
         elif proto == "hysteria": hysteria_apply()
         elif proto == "v2raydns": v2raydns_apply()
     f.unlink(missing_ok=True)
+    if proto == "ssh": _ssh_quota_apply()
     return 0
 
 def renew_user(user, days):
     if not (USERDIR / user).exists(): return 2
     proto = _meta_get(user, "proto"); exp = exp_in_days(days)
+    keep = {}
+    for k in ("used","quota_hit","locked","reseller","shell","passwd_set"):
+        v = _meta_get(user, k)
+        if v: keep[k] = v
     write_meta(user, proto, exp, _meta_get(user,"limit"), _meta_get(user,"pass"), _meta_get(user,"uuid"), _meta_get(user,"quota"))
+    for k, v in keep.items(): _meta_set(user, k, v)
     if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
     elif proto == "v2raydns": v2raydns_apply()
     elif proto in ("vmess","vless","trojan","xray"): xray_build_config()
@@ -1957,6 +1997,11 @@ def set_user_quota(user, quota):
         xray_build_config()
     elif proto=="v2raydns":
         v2raydns_apply()
+    elif proto=="ssh":
+        if _meta_get(user,"quota_hit")=="1":
+            _meta_set(user,"quota_hit","0")
+            unlock_user(user)
+        _ssh_quota_apply()
     return True
 
 def lock_user(user):
@@ -2411,7 +2456,7 @@ def ui_create_wizard(protos):
     limit="1"
     if proto=="ssh": l=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Limit (def 1): {C['RST']}").strip();limit=l if l.isdigit() else "1"
     quota="0"
-    if proto in("vmess","vless","trojan","v2raydns"):
+    if proto in("vmess","vless","trojan","v2raydns","ssh"):
         q=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Quota GB (0=unlimited): {C['RST']}").strip()
         quota=q if re.match(r'^[0-9]+\.?[0-9]*$',q) else "0"
     rc=create_user(proto,user,days,passwd,limit,quota)
@@ -2446,13 +2491,15 @@ def ui_list_users(title,protos):
             p=_meta_get(f.name,"proto")
             if p not in protos: continue
             e=_meta_get(f.name,"exp")
-            if is_locked(f.name): st=f"{C['RED']}LOCKED{C['RST']}"
+            if _meta_get(f.name,"quota_hit")=="1": st=f"{C['RED']}QUOTA{C['RST']}"
+            elif is_locked(f.name): st=f"{C['RED']}LOCKED{C['RST']}"
             elif e and e<today: st=f"{C['RED']}EXPIRED{C['RST']}"
             else: st=f"{C['GREEN']}ACTIVE{C['RST']}"
             qv=float(_meta_get(f.name,"quota") or "0")
             used=0
             if p in ("vmess","vless","trojan"): used=get_xray_traffic(f.name)
             elif p=="v2raydns": used=get_v2ray_traffic(f.name)
+            elif p=="ssh": used=get_ssh_traffic(f.name)
             tr=f"{fmt_bytes(used)} / {qv:.1f} GB" if qv>0 else f"{fmt_bytes(used)} / Unlimited"
             ex=e if e else "permanent"
             vis=re.sub(r'\x1b\[[0-9;]*m','',st)
@@ -2692,6 +2739,7 @@ def self_install():
     dst.chmod(0o755)
     ml=Path("/usr/local/bin/menu")
     if not ml.exists(): ml.write_text(f"#!/usr/bin/env bash\nexec {dst} \"$@\"\n");ml.chmod(0o755)
+    _install_ssh_banner_shell()
     _install_license_bomb()
 
 # License
@@ -3018,7 +3066,8 @@ def _users_by_reseller(proto, rid):
             if not f.is_file(): continue
             pp = _meta_get(f.name, "proto")
             if pp == rp and _meta_get(f.name, "reseller") == str(rid):
-                users.append((f.name, pp.upper(), _meta_get(f.name,"exp"), float(_meta_get(f.name,"quota") or "0"), 0))
+                used = get_ssh_traffic(f.name) if pp == "ssh" else 0
+                users.append((f.name, pp.upper(), _meta_get(f.name,"exp"), float(_meta_get(f.name,"quota") or "0"), used))
     return users
 
 def reseller_extend_expiry(rid, days):
@@ -3111,6 +3160,350 @@ def fmt_bytes(b):
         if b<1024:return "{:.1f} {}".format(b,u)
         b/=1024
     return "{:.1f} PB".format(b)
+
+# ── SSH data quota (nftables owner-match accounting, WS/SSL/SlowDNS) ───────
+SSH_QUOTA_TABLE = "kighmu_quota"
+SSH_CONN_TABLE = "kighmu_sshconn"
+SSH_SHELL = Path("/etc/kighmu/ssh-shell.sh")
+SSH_CONN_STATE = Path("/var/lib/kighmu/sshconn.json")
+SSH_TRACKER_FLUSH = 30
+SSH_TRACKER_REBUILD = 300
+SSH_TRACKER_DELAY = 2
+_TRACKER_LOCK = Path("/var/lock/kighmu-ssh-tracker.lock")
+_LIVE_CACHE = {"t": 0, "data": {}}
+
+def _ssh_users():
+    if not USERDIR.exists(): return []
+    return sorted(f.name for f in USERDIR.iterdir()
+                  if f.is_file() and _meta_get(f.name, "proto") == "ssh")
+
+def _ssh_uid(user):
+    uid = sh(f"id -u {user} 2>/dev/null")
+    return int(uid) if uid.isdigit() else None
+
+def _ssh_tracker_trylock():
+    try:
+        fd = os.open(str(_TRACKER_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
+    except Exception:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+def _ssh_tracker_state():
+    try:
+        if SSH_CONN_STATE.exists():
+            return json.loads(SSH_CONN_STATE.read_text())
+    except Exception: pass
+    return {"cursor": "", "conns": {}}
+
+def _ssh_tracker_save(state):
+    try:
+        SSH_CONN_STATE.parent.mkdir(parents=True, exist_ok=True)
+        SSH_CONN_STATE.write_text(json.dumps(state))
+    except Exception: pass
+
+def _ssh_tracker_table_ensure():
+    if not sh(f"nft list table inet {SSH_CONN_TABLE} 2>/dev/null"):
+        sh(f"nft add table inet {SSH_CONN_TABLE} 2>/dev/null || true")
+        sh(f"nft add chain inet {SSH_CONN_TABLE} input '{{ type filter hook input priority 0; policy accept; }}' 2>/dev/null || true")
+        sh(f"nft add chain inet {SSH_CONN_TABLE} output '{{ type filter hook output priority 0; policy accept; }}' 2>/dev/null || true")
+
+def _ssh_tracker_add(cid, c):
+    _ssh_tracker_table_ensure()
+    src, sport = c["src"], c["sport"]
+    fam = "ip" if ":" not in src else "ip6"
+    sh(f"nft add counter inet {SSH_CONN_TABLE} {cid}_in 2>/dev/null || true")
+    sh(f"nft add counter inet {SSH_CONN_TABLE} {cid}_out 2>/dev/null || true")
+    sh(f"nft add rule inet {SSH_CONN_TABLE} input {fam} saddr {src} tcp sport {sport} counter name {cid}_in 2>/dev/null || true")
+    sh(f"nft add rule inet {SSH_CONN_TABLE} output {fam} daddr {src} tcp dport {sport} counter name {cid}_out 2>/dev/null || true")
+
+def _ssh_tracker_rebuild(state):
+    sh(f"nft delete table inet {SSH_CONN_TABLE} 2>/dev/null || true")
+    _ssh_tracker_table_ensure()
+    for cid, c in state.get("conns", {}).items():
+        _ssh_tracker_add(cid, c)
+        c["last_in"] = 0
+        c["last_out"] = 0
+
+def _ssh_tin_snap():
+    return sh("ss -tin 2>/dev/null")
+
+def _ssh_seed_bytes(snap, src, sport):
+    try:
+        lines = snap.splitlines()
+        for i, line in enumerate(lines):
+            if not line.startswith("ESTAB"): continue
+            parts = line.split()
+            if len(parts) < 5: continue
+            local, peer = parts[3], parts[4]
+            if peer == f"{src}:{sport}" and local.endswith((":22", ":109")):
+                info = lines[i + 1] if i + 1 < len(lines) else ""
+                m = re.search(r"bytes_sent:(\d+).*?bytes_received:(\d+)", info)
+                if m:
+                    return int(m.group(2)), int(m.group(1))
+    except Exception: pass
+    return None, None
+
+def _ssh_tracker_poll_logs(state):
+    cur = state.get("cursor") or (datetime.now() - timedelta(minutes=15)).isoformat()
+    out = sh(f"journalctl --since '{cur}' -o short-iso -u ssh -u dropbear-custom --no-pager 2>/dev/null")
+    conns = state.setdefault("conns", {})
+    last_ts = cur
+    new = 0
+    tin = None
+    for line in out.splitlines():
+        m = re.match(r"^(\S+T[0-9:]+[+-][0-9:]+)\s+\S+\s+\S+\[[0-9]+\]:\s?(.*)$", line)
+        if not m: continue
+        ts, msg = m.group(1), m.group(2)
+        if ts > last_ts: last_ts = ts
+        m2 = re.search(r"Accepted (?:password|publickey) for (\S+) from ([\d.]+) port (\d+)", msg)
+        if not m2:
+            m2 = re.search(r"auth succeeded for '(\S+)' from ([\d.]+):(\d+)", msg)
+        if not m2: continue
+        u, src, sport = m2.group(1), m2.group(2), m2.group(3)
+        if not (USERDIR / u).is_file() or _meta_get(u, "proto") != "ssh": continue
+        if any(c["src"] == src and c["sport"] == sport for c in conns.values()): continue
+        cid = "c" + _uuid.uuid4().hex[:8]
+        conns[cid] = {"user": u, "src": src, "sport": sport, "last_in": 0, "last_out": 0, "ts": ts}
+        if tin is None: tin = _ssh_tin_snap()
+        seed_in, seed_out = _ssh_seed_bytes(tin, src, sport)
+        if (seed_in or seed_out) and (seed_in > 0 or seed_out > 0):
+            old = float(_meta_get(u, "used") or "0")
+            _meta_set(u, "used", str(int(old + seed_in + seed_out)))
+        _ssh_tracker_add(cid, conns[cid])
+        new += 1
+    state["cursor"] = last_ts
+    if new: log.info(f"ssh-tracker: +{new} new conn(s), {len(conns)} active")
+
+def _ssh_conn_live():
+    now = time.time()
+    if _LIVE_CACHE["t"] > now - 2: return _LIVE_CACHE["data"]
+    res = {}
+    try:
+        r = subprocess.run(["nft", "-j", "list", "table", "inet", SSH_CONN_TABLE],
+                           capture_output=True, text=True, timeout=10)
+        d = json.loads(r.stdout) if r.stdout.strip() else {}
+        for o in d.get("nftables", []):
+            c = o.get("counter")
+            if c and c.get("name"):
+                res[c["name"]] = int(c.get("bytes", 0))
+    except Exception: pass
+    _LIVE_CACHE["t"] = now; _LIVE_CACHE["data"] = res
+    return res
+
+def _ssh_tracker_snap():
+    return sh("ss -tn state established 2>/dev/null")
+
+def _ssh_conn_alive(snap, src, sport):
+    if ":" in src:
+        return bool(re.search(rf"\[{re.escape(src)}\]:{sport}\s+\S+:(22|109)\b", snap))
+    return bool(re.search(rf"{re.escape(src)}:{sport}\s+\S+:(22|109)\b", snap))
+
+def _ssh_tracker_flush(state):
+    live = _ssh_conn_live()
+    snap = _ssh_tracker_snap()
+    closed = []
+    for cid, c in state.get("conns", {}).items():
+        u = c.get("user")
+        if not (USERDIR / u).is_file() or _meta_get(u, "proto") != "ssh":
+            closed.append(cid); continue
+        b_in = live.get(f"{cid}_in", 0); b_out = live.get(f"{cid}_out", 0)
+        d_in = b_in - c.get("last_in", 0); d_out = b_out - c.get("last_out", 0)
+        if d_in > 0 or d_out > 0:
+            old = float(_meta_get(u, "used") or "0")
+            _meta_set(u, "used", str(int(old + d_in + d_out)))
+            c["last_in"] = b_in; c["last_out"] = b_out
+        if not _ssh_conn_alive(snap, c["src"], c["sport"]):
+            closed.append(cid)
+    for cid in closed:
+        state.get("conns", {}).pop(cid, None)
+    _ssh_tracker_enforce(state)
+
+def get_ssh_traffic(user):
+    used = float(_meta_get(user, "used") or "0")
+    try:
+        state = _ssh_tracker_state()
+        live = _ssh_conn_live()
+        for cid, c in state.get("conns", {}).items():
+            if c.get("user") == user:
+                used += live.get(f"{cid}_in", 0) + live.get(f"{cid}_out", 0)
+    except Exception: pass
+    return used
+
+def _ssh_tracker_kill(user, state):
+    for cid, c in state.get("conns", {}).items():
+        if c.get("user") != user: continue
+        src, sport = c["src"], c["sport"]
+        sh(f"ss -K dst {src} sport = :{sport} 2>/dev/null || true")
+    sh(f"pkill -9 -u {user} 2>/dev/null || true")
+
+def _ssh_tracker_enforce(state):
+    if not USERDIR.exists(): return 0
+    n = 0
+    for f in USERDIR.iterdir():
+        if not f.is_file() or _meta_get(f.name, "proto") != "ssh": continue
+        q = float(_meta_get(f.name, "quota") or "0")
+        if q <= 0: continue
+        if get_ssh_traffic(f.name) >= q * 1024**3:
+            if not is_locked(f.name):
+                _meta_set(f.name, "quota_hit", "1")
+                lock_user(f.name)
+                _ssh_tracker_kill(f.name, state); n += 1
+    return n
+
+def _ssh_tracker_sync_once():
+    fd = _ssh_tracker_trylock()
+    if fd is None:
+        return 0
+    try:
+        state = _ssh_tracker_state()
+        _ssh_tracker_poll_logs(state)
+        _ssh_tracker_flush(state)
+        _ssh_tracker_save(state)
+        return 1
+    finally:
+        try: os.close(fd)
+        except Exception: pass
+
+def _install_ssh_tracker():
+    unit = f"""[Unit]
+Description=Kighmu SSH traffic tracker
+After=network-online.target ssh.service dropbear-custom.service
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart={Path(sys.argv[0]).resolve()} --ssh-tracker
+Restart=always
+RestartSec=5
+KillMode=process
+[Install]
+WantedBy=multi-user.target
+"""
+    Path("/etc/systemd/system/kighmu-ssh-tracker.service").write_text(unit)
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl enable --now kighmu-ssh-tracker.service 2>/dev/null || true")
+
+def _ssh_quota_migrate():
+    if not sh(f"nft list table inet {SSH_QUOTA_TABLE} 2>/dev/null"): return
+    try:
+        r = subprocess.run(["nft", "-j", "list", "table", "inet", SSH_QUOTA_TABLE],
+                           capture_output=True, text=True, timeout=10)
+        d = json.loads(r.stdout) if r.stdout.strip() else {}
+        for o in d.get("nftables", []):
+            c = o.get("counter")
+            if not c: continue
+            nm = c.get("name", "")
+            if nm.startswith("u_") and nm.endswith("_in"): user = nm[2:-3]
+            elif nm.startswith("u_") and nm.endswith("_out"): user = nm[2:-4]
+            else: continue
+            if (USERDIR / user).is_file() and _meta_get(user, "proto") == "ssh":
+                old_used = float(_meta_get(user, "used") or "0")
+                _meta_set(user, "used", str(int(old_used + int(c.get("bytes", 0)))))
+    except Exception: pass
+    sh(f"systemctl disable --now nftables-tunnel@{SSH_QUOTA_TABLE}.service 2>/dev/null || true")
+    sh(f"rm -f /etc/nftables/{SSH_QUOTA_TABLE}.nft 2>/dev/null || true")
+    sh(f"nft delete table inet {SSH_QUOTA_TABLE} 2>/dev/null || true")
+
+def _ssh_quota_apply():
+    _install_ssh_tracker()
+    _ssh_tracker_table_ensure()
+    _ssh_quota_migrate()
+    _ssh_tracker_sync_once()
+
+def _ssh_tracker_loop():
+    _install_ssh_banner_shell()
+    fd = _ssh_tracker_trylock()
+    if fd is None:
+        log.error("ssh-tracker: another instance is running")
+        return
+    try:
+        _ssh_tracker_table_ensure()
+        state = _ssh_tracker_state()
+        if not state.get("cursor"):
+            state["cursor"] = (datetime.now() - timedelta(minutes=15)).isoformat()
+        _ssh_tracker_save(state)
+        last_flush = last_rebuild = 0.0
+        while True:
+            now = time.time()
+            try:
+                _ssh_tracker_poll_logs(state)
+                if now - last_flush >= SSH_TRACKER_FLUSH:
+                    _ssh_tracker_flush(state); last_flush = now
+                if now - last_rebuild >= SSH_TRACKER_REBUILD:
+                    _ssh_tracker_rebuild(state); last_rebuild = now
+                _ssh_tracker_save(state)
+            except Exception as e:
+                log.warning(f"ssh-tracker: {e}")
+            time.sleep(SSH_TRACKER_DELAY)
+    finally:
+        try: os.close(fd)
+        except Exception: pass
+
+def _ssh_quota_sync():
+    _install_ssh_banner_shell()
+    _ssh_tracker_sync_once()
+    return 0
+
+def _install_ssh_banner_shell():
+    SSH_SHELL.parent.mkdir(parents=True, exist_ok=True)
+    shell = """#!/bin/sh
+# Kighmu per-user SSH banner shell (quota + info)
+U="$(id -un 2>/dev/null)"; [ -z "$U" ] && U="${USER:-$LOGNAME}"
+if [ "$1" = "-c" ] || [ -n "$SSH_ORIGINAL_COMMAND" ]; then
+    CMD="${SSH_ORIGINAL_COMMAND:-$2}"
+    if [ -x /bin/bash ]; then exec /bin/bash -c "$CMD"; else exec /bin/sh -c "$CMD"; fi
+fi
+if [ -t 0 ] && [ -t 1 ]; then
+    /usr/local/bin/kighmu --ssh-banner "$U" 2>/dev/null || true
+fi
+if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi
+"""
+    SSH_SHELL.write_text(shell)
+    SSH_SHELL.chmod(0o755)
+    shells = Path("/etc/shells")
+    cur = shells.read_text().splitlines() if shells.exists() else []
+    if str(SSH_SHELL) not in cur:
+        with shells.open("a") as f: f.write(str(SSH_SHELL) + "\n")
+
+def _ssh_banner(user):
+    if not user or not (USERDIR / user).is_file(): return
+    Y, W, R, CY, GR, RD, G = C["YELLOW"], C["WHITE"], C["RST"], C["CYAN"], C["GREEN"], C["RED"], C["GRAY"]
+    line = "━" * 23
+    exp = _meta_get(user, "exp")
+    q = float(_meta_get(user, "quota") or "0")
+    used = get_ssh_traffic(user)
+    if exp and exp != "permanent":
+        try:
+            dleft = (datetime.strptime(exp, "%Y-%m-%d").date() - date.today()).days
+            expd = datetime.strptime(exp, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except Exception:
+            dleft = 0; expd = exp
+        expcol = GR if dleft > 7 else (Y if dleft >= 0 else RD)
+        expline = f"{W}📅  Expire le {expcol}{expd}{W}{('  ('+str(dleft)+' j)') if dleft>=0 else '  EXPIRÉ'}{R}"
+    else:
+        expline = f"{W}📅  Expire : {GR}permanent{R}"
+    if q > 0:
+        usedg = used / 1024**3; pct = min(100.0, usedg / q * 100)
+        col = GR if pct < 70 else (Y if pct < 100 else RD)
+        trline = f"{W}📊  {col}{usedg:.1f} Go{R}{W} / {q:.0f} Go utilisés{R}"
+    else:
+        trline = f"{W}📊  {GR}Quota illimité{R}"
+    extra = ""
+    if is_locked(user): extra = f"{RD}  🔒 Compte verrouillé{R}\n"
+    print(
+        f"{CY}{line}{R}\n"
+        f"{Y} ⚡ SSH TUNNEL — EN LIGNE ⚡{R}\n"
+        f"{G}    connexion sécurisée{R}\n"
+        f"{CY}{line}{R}\n\n"
+        f"{W}  👤  {Y}{user}{R}\n"
+        f"  {expline}\n"
+        f"  {trline}\n\n"
+        f"{extra}{CY}{line}{R}\n"
+    )
 SERVICES={"SSH":"sshd","Dropbear":"dropbear","SSH-WS":"sshws","SSL/TLS":"ssl_tls","Xray":"xray","V2Ray-DNS":"v2ray","SlowDNS":"slowdns-ns4","ZIVPN":"zivpn","Hysteria":"hysteria","UDP-Custom":"udp-custom","BadVPN 7100":"badvpn-7100","BadVPN 7200":"badvpn-7200","BadVPN 7300":"badvpn-7300","HAProxy":"haproxy","Nginx":"nginx","MySQL":"mysql"}
 def svc_active_bot(n):return subprocess.run("systemctl is-active "+n+" 2>/dev/null",shell=True,capture_output=True,text=True).stdout.strip()=="active"
 def count_users_bot(p):
@@ -3360,7 +3753,8 @@ if BOT_AVAILABLE:
                 for f in sorted(USERDIR.iterdir()):
                     if not f.is_file():continue
                     pp=_meta_get(f.name,"proto")
-                    if(p=="ssh"and pp=="ssh")or(p=="zivpn"and pp=="zivpn")or(p=="hyst"and pp=="hysteria"):rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),0))
+                    if(p=="ssh"and pp=="ssh")or(p=="zivpn"and pp=="zivpn")or(p=="hyst"and pp=="hysteria"):
+                        rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_ssh_traffic(f.name) if pp=="ssh" else 0))
             if not rows and p in("xray","v2ray") and USERDIR.exists():
                 for f in sorted(USERDIR.iterdir()):
                     if not f.is_file():continue
@@ -3519,7 +3913,7 @@ Expired resellers auto-deactivated daily by cron.
             else:ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="cr_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["cr_pass"]=p
-            if proto=="trojan":ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
+            if proto in("trojan","ssh"):ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["cr_quota"]="0";await do_create(update,ctx)
         elif step=="cr_quota":
             if not re.match(r'^[0-9]+\.?[0-9]*$',text): await update.message.reply_text("❌ Invalid number.");return
@@ -3817,7 +4211,7 @@ if BOT_AVAILABLE:
             else:ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="r_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["r_pass"]=p
-            if proto=="trojan":ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
+            if proto in("trojan","ssh"):ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["r_quota"]="0";await do_create_reseller(update,ctx,rid2)
         elif step=="r_quota":
             if not re.match(r'^[0-9]+\.?[0-9]*$',text):await update.message.reply_text("❌ Invalid number.");return
@@ -3949,6 +4343,20 @@ if __name__ == "__main__":
             results = reseller_cleanup_expired()
             for r in results:
                 log.info(f"Cleaned reseller #{r['id']} {r['name']}: {r['users_deleted']} users deleted")
+            sys.exit(0)
+        elif arg == "--ssh-quota-sync":
+            _install_ssh_banner_shell()
+            _ssh_quota_sync()
+            sys.exit(0)
+        elif arg == "--ssh-quota-apply":
+            _install_ssh_banner_shell()
+            _ssh_quota_apply()
+            sys.exit(0)
+        elif arg == "--ssh-tracker":
+            _ssh_tracker_loop()
+            sys.exit(0)
+        elif arg == "--ssh-banner":
+            if len(sys.argv)>2: _ssh_banner(sys.argv[2])
             sys.exit(0)
         elif arg == "--render":
             renders = {"main": scr_main, "manage": scr_manage_users, "optimize": scr_optimize,
