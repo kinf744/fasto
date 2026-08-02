@@ -527,7 +527,7 @@ WantedBy=multi-user.target
 def install_openssh():
     sh("apt-get install -y -qq openssh-server 2>/dev/null || true")
     sh("systemctl enable ssh 2>/dev/null || true; systemctl restart ssh 2>/dev/null || true")
-    for line in ["PermitTunnel yes", "AllowTcpForwarding yes", "MaxSessions 0", "MaxStartups 10000:30:10000"]:
+    for line in ["PermitTunnel yes", "AllowTcpForwarding yes", "MaxSessions 1000", "MaxStartups 10000:30:10000"]:
         key = line.split()[0]
         sh(f"sed -i 's/^#{key}.*/{line}/' /etc/ssh/sshd_config 2>/dev/null || echo '{line}' >> /etc/ssh/sshd_config")
     sh("systemctl restart ssh 2>/dev/null || true")
