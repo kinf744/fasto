@@ -3003,7 +3003,7 @@ def _users_by_reseller(proto, rid):
                 for u in d.get(p, []):
                     e = u.get("email","?").split("@")[0]
                     if _meta_get(e, "reseller") == str(rid):
-                        users.append((e, p.upper(), _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), 0))
+                        users.append((e, p.upper(), _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), get_xray_traffic(u.get("email",""))))
             except: pass
     elif proto == "v2ray":
         try:
@@ -3011,7 +3011,7 @@ def _users_by_reseller(proto, rid):
             for u in d.get("vless", []):
                 e = u.get("email","?").split("@")[0]
                 if _meta_get(e, "reseller") == str(rid):
-                    users.append((e, "V2RAY", _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), 0))
+                    users.append((e, "V2RAY", _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), get_v2ray_traffic(u.get("email",""))))
         except: pass
     elif USERDIR.exists():
         for f in sorted(USERDIR.iterdir()):
@@ -3778,7 +3778,14 @@ if BOT_AVAILABLE:
             await q.edit_message_text(f"✏️ Username:",parse_mode="Markdown")
         elif d.startswith("r_ls_"):
             p=d[5:];names={"ssh":"SSH","xray":"Xray","v2ray":"V2Ray DNS","zivpn":"ZIVPN","hyst":"Hysteria"}
-            users=_users_by_reseller(p,rid);t="\n".join([f"📋 *{names.get(p,p)}* ({len(users)})\n"]+[f"`{i}.` {n} – exp: {e}"for i,(n,e,_,_,_)in enumerate(users,1)])if users else f"📋 No {names.get(p,p)} users."
+            users=_users_by_reseller(p,rid)
+            if users:
+                l=[f"📋 *{names.get(p,p)}* ({len(users)})\n",f"`  #  User         Exp         Traffic`",f"`{'─'*44}`"]
+                for i,(n,_,e,q,used)in enumerate(users,1):
+                    u2=fmt_bytes(used);t2=f"{u2} / {q} GB"if q>0 else f"{u2} / Unlimited"
+                    l.append(f"`{i:>3}. {n:<14}{e:<11}{t2}`")
+                t="\n".join(l)
+            else:t=f"📋 No {names.get(p,p)} users."
             try:await q.edit_message_text(t,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
             except:await q.edit_message_text(t.replace('*','').replace('`',''),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
         elif d=="r_help":
