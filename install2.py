@@ -2437,8 +2437,8 @@ def ui_create_wizard(protos):
 def ui_list_users(title,protos):
     cleanup_panel_residues();clear_screen();L=[];today=date.today().isoformat()
     push_header(L,"simple",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}{title} ▸ LIST USERS{C['RST']}")
-    L+=[f" {'USERNAME':<16} {'EXPIRES':<13} {'STATUS':<8} {'TRAFFIC (USED/TOTAL)':<22}",
-        f" {C['GRAY']}{'────────':<16} {'───────':<13} {'──────':<8} {'──────────────────':<22}{C['RST']}"]
+    L+=[f" {'USERNAME':<16} {'EXPIRES':<10} {'STATUS':<10} {'TRAFFIC (USED/TOTAL)':<22}",
+        f" {C['GRAY']}{'────────':<16} {'──────':<10} {'──────':<10} {'──────────────────':<22}{C['RST']}"]
     n=0
     if USERDIR.exists():
         for f in sorted(USERDIR.iterdir()):
@@ -2446,13 +2446,20 @@ def ui_list_users(title,protos):
             p=_meta_get(f.name,"proto")
             if p not in protos: continue
             e=_meta_get(f.name,"exp")
-            st=f"{C['RED']}LOCKED{C['RST']}" if is_locked(f.name) else (f"{C['RED']}EXPIRED{C['RST']}" if e and e<today else f"{C['GREEN']}ACTIVE{C['RST']}")
+            if is_locked(f.name): st=f"{C['RED']}LOCKED{C['RST']}"
+            elif e and e<today: st=f"{C['RED']}EXPIRED{C['RST']}"
+            else:
+                days=(date.fromisoformat(e)-date.today()).days if e else 999
+                st=f"{C['GREEN']}ACTIVE{C['RST']}" if days>7 else f"{C['YELLOW']}{days}d left{C['RST']}"
             qv=float(_meta_get(f.name,"quota") or "0")
             used=0
             if p in ("vmess","vless","trojan"): used=get_xray_traffic(f.name)
             elif p=="v2raydns": used=get_v2ray_traffic(f.name)
             tr=f"{fmt_bytes(used)} / {qv:.1f} GB" if qv>0 else f"{fmt_bytes(used)} / Unlimited"
-            L.append(f" {C['GREEN']}{f.name:<16}{C['RST']} {exp_color(e):<13} {st} {tr}")
+            ex=e if e else "permanent"
+            vis=re.sub(r'\x1b\[[0-9;]*m','',st)
+            st=f"{st}{' ' * max(1, 10 - len(vis))}"
+            L.append(f" {C['GREEN']}{f.name:<16}{C['RST']} {ex:<10} {st} {tr}")
             n+=1
     if n==0: L.append(f" {C['GRAY']}(no {title} user){C['RST']}")
     L.append("%SEP%");render_screen(L);press_enter()
