@@ -2448,9 +2448,7 @@ def ui_list_users(title,protos):
             e=_meta_get(f.name,"exp")
             if is_locked(f.name): st=f"{C['RED']}LOCKED{C['RST']}"
             elif e and e<today: st=f"{C['RED']}EXPIRED{C['RST']}"
-            else:
-                days=(date.fromisoformat(e)-date.today()).days if e else 999
-                st=f"{C['GREEN']}ACTIVE{C['RST']}" if days>7 else f"{C['YELLOW']}{days}d left{C['RST']}"
+            else: st=f"{C['GREEN']}ACTIVE{C['RST']}"
             qv=float(_meta_get(f.name,"quota") or "0")
             used=0
             if p in ("vmess","vless","trojan"): used=get_xray_traffic(f.name)
