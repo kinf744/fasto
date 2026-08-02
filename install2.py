@@ -429,7 +429,7 @@ def _ensure_nft_base():
     # Create nftables-tunnel service template for reboot persistence
     svc = """[Unit]
 Description=nftables tunnel %i
-Before=nftables.service
+After=nftables.service
 PartOf=nftables.service
 ReloadPropagatedFrom=nftables.service
 [Service]
@@ -512,7 +512,7 @@ def _ensure_nat_catchall():
     svc_path = Path("/etc/systemd/system/nftables-nat.service")
     svc = f"""[Unit]
 Description=nftables NAT catch-all
-Before=nftables.service
+After=nftables.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
