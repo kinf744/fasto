@@ -2437,8 +2437,8 @@ def ui_create_wizard(protos):
 def ui_list_users(title,protos):
     cleanup_panel_residues();clear_screen();L=[];today=date.today().isoformat()
     push_header(L,"simple",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}MENU :{C['RST']} {C['WHITE']}{title} ▸ LIST USERS{C['RST']}")
-    L+=[f" {'USERNAME':<18} {'PROTO':<12} {'EXPIRES':<14} {'STATUS':<8}",
-        f" {C['GRAY']}{'────────':<18} {'─────':<12} {'───────':<14} {'──────':<8}{C['RST']}"]
+    L+=[f" {'USERNAME':<16} {'PROTO':<10} {'EXPIRES':<13} {'STATUS':<8} {'TRAFFIC (USED/TOTAL)':<22}",
+        f" {C['GRAY']}{'────────':<16} {'─────':<10} {'───────':<13} {'──────':<8} {'──────────────────':<22}{C['RST']}"]
     n=0
     if USERDIR.exists():
         for f in sorted(USERDIR.iterdir()):
@@ -2447,7 +2447,12 @@ def ui_list_users(title,protos):
             if p not in protos: continue
             e=_meta_get(f.name,"exp")
             st=f"{C['RED']}LOCKED{C['RST']}" if is_locked(f.name) else (f"{C['RED']}EXPIRED{C['RST']}" if e and e<today else f"{C['GREEN']}ACTIVE{C['RST']}")
-            L.append(f" {C['GREEN']}{f.name:<18}{C['RST']} {C['WHITE']}{p:<12}{C['RST']} {exp_color(e):<14} {st}")
+            qv=float(_meta_get(f.name,"quota") or "0")
+            used=0
+            if p in ("vmess","vless","trojan"): used=get_xray_traffic(f.name)
+            elif p=="v2raydns": used=get_v2ray_traffic(f.name)
+            tr=f"{fmt_bytes(used)} / {qv:.1f} GB" if qv>0 else f"{fmt_bytes(used)} / Unlimited"
+            L.append(f" {C['GREEN']}{f.name:<16}{C['RST']} {C['WHITE']}{p:<10}{C['RST']} {exp_color(e):<13} {st} {tr}")
             n+=1
     if n==0: L.append(f" {C['GRAY']}(no {title} user){C['RST']}")
     L.append("%SEP%");render_screen(L);press_enter()
