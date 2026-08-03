@@ -3531,13 +3531,69 @@ def _banner_text(user, plain=False):
 def _ssh_banner(user):
     sys.stdout.write(_banner_text(user))
 
+def _fmt_fr(b):
+    for u in ["o", "Ko", "Mo", "Go", "To"]:
+        if b < 1024:
+            return "{:.0f} {}".format(b, u) if u == "o" else "{:.1f} {}".format(b, u)
+        b /= 1024
+    return "{:.1f} Po".format(b)
+
+def _banner_html(user):
+    if not user or not (USERDIR / user).is_file(): return ""
+    grad = ("<font color='#FF0059'>▬</font><font color='#F1006F'>▬</font>"
+            "<font color='#E30085'>▬</font><font color='#D6009B'>▬</font>"
+            "<font color='#C800B1'>▬</font><font color='#BB00C7'>ஜ</font>"
+            "<font color='#AD00DD'>۩</font><font color='#9F00F3'>۞</font>"
+            "<font color='#9F00F3'>۩</font><font color='#AD00DD'>ஜ</font>"
+            "<font color='#BB00C7'>▬</font><font color='#C800B1'>▬</font>"
+            "<font color='#D6009B'>▬</font><font color='#E30085'>▬</font>"
+            "<font color='#F1006F'>▬</font>")
+    exp = _meta_get(user, "exp")
+    q = float(_meta_get(user, "quota") or "0")
+    used = get_ssh_traffic(user)
+    limit = _meta_get(user, "limit")
+    if exp and exp != "permanent":
+        try:
+            dleft = (datetime.strptime(exp, "%Y-%m-%d").date() - date.today()).days
+            expd = datetime.strptime(exp, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except Exception:
+            dleft, expd = 0, exp
+    else:
+        dleft, expd = None, "∞"
+    if dleft is None:
+        daysv = "∞"
+    elif dleft < 0:
+        daysv = "EXPIRÉ"
+    else:
+        daysv = str(dleft)
+    if q > 0:
+        maxs = "{:g}".format(q) if q == int(q) else "{:.1f}".format(q)
+        maxv = f"<font color='#A78BFA'>(Max: {maxs} Go)</font>"
+        trv = _fmt_fr(used)
+    else:
+        trv, maxv = "Illimité", ""
+    out = ['<p style="text-align:center">']
+    out.append("<font color='#00FFCC'><b><big><big><big>VPS-PRO</big></big></big></b></font><br>")
+    out.append(grad + "<br>")
+    out.append(f"<font color='#4FA8FF'>👤 <b>Utilisateur</b></font> : <font color='white'>{user}</font><br>")
+    out.append(f"<font color='#4FE24F'>📅 <b>Expire</b></font> : <font color='white'>{expd}</font><br>")
+    out.append(f"<font color='#FF8C00'>⏳ <b>Jours restants</b></font> : <font color='white'>{daysv}</font><br>")
+    out.append(f"<font color='#FF6FCF'>📊 <b>Consommé</b></font> : <font color='white'>{trv}</font> {maxv}<br>")
+    if limit:
+        out.append(f"<font color='#FF8C00'>🌐 <b>Limite IP</b></font> : <font color='white'>{limit}</font><br>")
+    if is_locked(user):
+        out.append("<font color='#FF5555'>🔒 <b>Compte verrouillé</b></font><br>")
+    out.append(grad + "<br>")
+    out.append("</p>")
+    return "\n".join(out) + "\n"
+
 def _gen_user_banners():
     BANNER_DIR = Path("/etc/kighmu/banners")
     BANNER_DIR.mkdir(parents=True, exist_ok=True)
     users = sorted(f.name for f in USERDIR.iterdir() if f.is_file()) if USERDIR.exists() else []
     blocks = []
     for u in users:
-        text = _banner_text(u, plain=True)
+        text = _banner_html(u)
         if not text: continue
         (BANNER_DIR / u).write_text(text)
         blocks.append(f"Match User {u}\n    Banner {BANNER_DIR / u}")

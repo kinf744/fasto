@@ -15,15 +15,17 @@ shell** : aucun banner post-login ne peut s'afficher. C'est pourquoi un banner
 - Généré par `_gen_user_banners()` → `/etc/kighmu/banners/<user>`
 - Relié au cron `--ssh-quota-sync` (toutes les 5 min)
 - Config sshd : `/etc/ssh/sshd_config.d/99-kighmu-banners.conf`
-- **Sans cadre ni codes ANSI** : les transports tunnel (HTTP Injector, NetMod,
-  VPN Injector) suppriment l'octet ESC (`\x1b`) et dégradent les bordures
-  (`┃`→`|`, emoji perdus) — les couleurs ne peuvent donc pas fonctionner sur le
-  chemin pré-auth. Le fichier banner est donc en texte brut, titre centré,
-  lignes alignées, aucun caractère de contrôle.
-- Affichage : `Utilisateur`, `Expiration` (jours restants colorés), `Data`
-  (`fmt_bytes` → « 36.4 MB / 78.0 GB »), verrouillage éventuel.
+- **Banner HTML** (`_banner_html`) : aucun octet ESC — les transports tunnel
+  (HTTP Injector, NetMod, VPN Injector) suppriment `\x1b`, donc les codes ANSI
+  classiques ne fonctionnent pas sur le chemin pré-auth. Le HTML est livré tel
+  quel et rendu en couleur par les apps. Marquage VPS-PRO, dégradé `▬ஜ۩۞`,
+  champs colorés (👤 Utilisateur, 📅 Expire, ⏳ Jours restants, 📊 Consommé
+  avec `(Max: X Go)`, 🌐 Limite IP si présente), centrage via
+  `<p style="text-align:center">`.
+- Affichage : `Utilisateur`, `Expiration` (jours restants), `Data`
+  (`_fmt_fr` → « 85.2 Mo / 78 Go »), `Limite IP`, verrouillage éventuel.
 - Le banner **post-login** (vraie session shell) garde sa version encadrée et
-  colorée via `_banner_text(user, plain=False)`.
+  colorée via `_banner_text(user)`.
 
 ### 2. Banner post-login dynamique (`/usr/local/bin/ssh-banner.sh`)
 
@@ -52,12 +54,14 @@ absent.
 
 - **Marque** : changer `gradient "VPS-PRO SSH TUNNEL"` dans `ssh-banner.sh`
   (dégradé vert→orange). Modifier le titre du banner pré-auth dans
-  `_banner_text()` de `install2.py`.
+  `_banner_html()` de `install2.py` (`<font color='#00FFCC'>VPS-PRO</font>`).
 - **Couleurs** : variables ANSI 256 en tête de `ssh-banner.sh`
   (`MINT`, `BLUE`, `REDO`, `PINK`, `PURPLE`, `ORANGE`, `WHITE`, `GRAY`, `CYAN`).
-  Attention : les couleurs ne s'affichent que sur le chemin post-login (vraie
-  session shell). Le banner pré-auth envoyé aux apps tunnel doit rester sans
-  codes ANSI (le transport les supprime).
+  Pour le banner pré-auth (HTML), les couleurs sont les codes hex des balises
+  `<font color='#...'>` dans `_banner_html()`.
+  Attention : les couleurs ANSI ne s'affichent que sur le chemin post-login
+  (vraie session shell). Le banner pré-auth envoyé aux apps tunnel doit rester
+  en HTML (le transport supprime les octets ESC).
 - **Champs** : ajouter une ligne dans le tableau `rows` — le centrage se
   recalcule automatiquement sur la largeur visible (sans les codes ANSI).
 
