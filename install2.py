@@ -3467,10 +3467,11 @@ if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi
     if str(SSH_SHELL) not in cur:
         with shells.open("a") as f: f.write(str(SSH_SHELL) + "\n")
 
-def _banner_text(user):
+def _banner_text(user, plain=False):
     if not user or not (USERDIR / user).is_file(): return ""
     CY, Y, W, GR, RD, G, R = C["CYAN"], C["YELLOW"], C["WHITE"], C["GREEN"], C["RED"], C["GRAY"], C["RST"]
-    def plain(s): return re.sub(r"\x1b\[[0-9;]*m", "", s)
+    if plain: CY = Y = W = GR = RD = G = R = ""
+    def plainlen(s): return len(re.sub(r"\x1b\[[0-9;]*m", "", s))
     exp = _meta_get(user, "exp")
     q = float(_meta_get(user, "quota") or "0")
     used = get_ssh_traffic(user)
@@ -3497,18 +3498,30 @@ def _banner_text(user):
     ]
     if is_locked(user):
         rows.append(f"{RD}Compte verrouillé{R}")
-    title = f"{Y}  ⚡ SSH TUNNEL — EN LIGNE ⚡{R}"
-    sub = f"{G}  connexion sécurisée{R}"
-    inner = max([len(plain(r)) for r in rows] + [len(plain(title)), len(plain(sub))])
-    def b(s):
-        return f"{CY}┃{R}  {s}{' ' * (inner - len(plain(s)))}  {CY}┃{R}"
-    def c(s):
-        p = len(plain(s)); left = (inner - p) // 2
-        return f"{CY}┃{R}  {' ' * left}{s}{' ' * (inner - p - left)}  {CY}┃{R}"
-    top = f"{CY}┏{'━' * (inner + 4)}┓{R}"
-    bot = f"{CY}┗{'━' * (inner + 4)}┛{R}"
-    blank = f"{CY}┃{R}{' ' * (inner + 4)}{CY}┃{R}"
+    title = f"{Y}  SSH TUNNEL - EN LIGNE{R}" if plain else f"{Y}  ⚡ SSH TUNNEL — EN LIGNE ⚡{R}"
+    sub = f"{G}  connexion securisee{R}" if plain else f"{G}  connexion sécurisée{R}"
+    inner = max([plainlen(r) for r in rows] + [plainlen(title), plainlen(sub)])
     ind = "   "
+    if plain:
+        def b(s):
+            return f"{s}"
+        def c(s):
+            p = plainlen(s); left = (inner - p) // 2
+            return f"{' ' * left}{s}"
+        out = [c(title), c(sub), ""]
+        for r in rows:
+            out.append(b(r))
+        return "\n\n" + "\n".join((ind + x if x.strip() else "") for x in out) + "\n\n"
+    CY, Y, W, GR, RD, G, R = C["CYAN"], C["YELLOW"], C["WHITE"], C["GREEN"], C["RED"], C["GRAY"], C["RST"]
+    VL, HL, TL, TR, BL, BR = "┃", "━", "┏", "┓", "┗", "┛"
+    def b(s):
+        return f"{CY}{VL}{R}  {s}{' ' * (inner - plainlen(s))}  {CY}{VL}{R}"
+    def c(s):
+        p = plainlen(s); left = (inner - p) // 2
+        return f"{CY}{VL}{R}  {' ' * left}{s}{' ' * (inner - p - left)}  {CY}{VL}{R}"
+    top = f"{CY}{TL}{HL * (inner + 4)}{TR}{R}"
+    bot = f"{CY}{BL}{HL * (inner + 4)}{BR}{R}"
+    blank = f"{CY}{VL}{R}{' ' * (inner + 4)}{CY}{VL}{R}"
     out = [top, b(""), c(title), blank, c(sub), blank]
     for r in rows:
         out.append(b(r))
@@ -3524,7 +3537,7 @@ def _gen_user_banners():
     users = sorted(f.name for f in USERDIR.iterdir() if f.is_file()) if USERDIR.exists() else []
     blocks = []
     for u in users:
-        text = _banner_text(u)
+        text = _banner_text(u, plain=True)
         if not text: continue
         (BANNER_DIR / u).write_text(text)
         blocks.append(f"Match User {u}\n    Banner {BANNER_DIR / u}")
