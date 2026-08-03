@@ -3485,9 +3485,9 @@ def _banner_text(user):
     else:
         expline = f"{W}📅  Expire : {GR}permanent{R}"
     if q > 0:
-        usedg = used / 1024**3; pct = min(100.0, usedg / q * 100)
+        pct = min(100.0, used / q / 1024**3 * 100)
         col = GR if pct < 70 else (Y if pct < 100 else RD)
-        trline = f"{W}📊  {col}{usedg:.1f} Go{R}{W} / {q:.0f} Go utilisés{R}"
+        trline = f"{W}📊  {col}{fmt_bytes(used)}{R}{W} / {q:.1f} GB utilisés{R}"
     else:
         trline = f"{W}📊  {GR}Quota illimité{R}"
     extra = ""
