@@ -491,38 +491,33 @@ def _configure_resolv():
 
 def _ensure_nat_catchall():
     iface = get_main_iface()
-    has4 = has_ipv4()
-    has6 = has_ipv6()
-    families = []
-    if has4: families.append("ip")
-    if has6: families.append("ip6")
-    nft_src_parts = []
-    for family in families:
-        nft_src_parts.append(f"""table {family} nat {{
-    chain PREROUTING {{
-        type nat hook prerouting priority dstnat; policy accept;
-        iifname "{iface}" udp dport {{ 53,5300,5353,5354,5667,20000,7100,7200,7300 }} return
-        iifname "{iface}" udp dport {{ 2900-5600 }} counter dnat to :36712
+    nft_src = f"""table inet udp-custom-catchall {{
+    chain prerouting {{
+        type nat hook prerouting priority -50; policy accept;
+        iifname "{iface}" meta nfproto ipv4 udp dport {{ 53, 5300, 5353, 5354, 5667, 7100, 7200, 7300, 20000, 36712 }} return
+        iifname "{iface}" meta nfproto ipv4 udp dport 6000-19999 return
+        iifname "{iface}" meta nfproto ipv4 udp dport 20000-50000 return
+        iifname "{iface}" meta nfproto ipv4 udp dport 1-65535 dnat to :36712
     }}
-}}""")
-    nft_src = "\n".join(nft_src_parts)
+}}"""
     Path("/etc/nftables").mkdir(parents=True, exist_ok=True)
-    Path("/etc/nftables/00-nat-catchall.nft").write_text(nft_src)
-    stop_cmds = "; ".join(f"/usr/sbin/nft delete table {f} nat 2>/dev/null" for f in families)
-    svc_path = Path("/etc/systemd/system/nftables-nat.service")
-    svc = f"""[Unit]
-Description=nftables NAT catch-all
+    Path("/etc/nftables/udp-custom-catchall.nft").write_text(nft_src)
+    svc_path = Path("/etc/systemd/system/nftables-tunnel@.service")
+    if not svc_path.exists():
+        svc_path.write_text(f"""[Unit]
+Description=nftables tunnel %i
 After=nftables.service
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f /etc/nftables/00-nat-catchall.nft
-ExecStop={stop_cmds}
+ExecStart=/usr/sbin/nft -f /etc/nftables/%i.nft
+ExecStop=/usr/sbin/nft delete table inet %i
 [Install]
 WantedBy=multi-user.target
-"""
-    svc_path.write_text(svc)
-    sh("systemctl daemon-reload 2>/dev/null; systemctl enable --now nftables-nat.service 2>/dev/null || true")
+""")
+    sh("systemctl daemon-reload 2>/dev/null; systemctl enable --now nftables-tunnel@udp-custom-catchall.service 2>/dev/null || true")
 
 def install_openssh():
     sh("apt-get install -y -qq openssh-server 2>/dev/null || true")
