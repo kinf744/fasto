@@ -3239,7 +3239,7 @@ def _ssh_seed_bytes(snap, src, sport):
             parts = line.split()
             if len(parts) < 5: continue
             local, peer = parts[3], parts[4]
-            if peer == f"{src}:{sport}" and local.endswith((":22", ":109")):
+            if peer in (f"{src}:{sport}", f"[{src}]:{sport}") and local.endswith((":22", ":109")):
                 info = lines[i + 1] if i + 1 < len(lines) else ""
                 m = re.search(r"bytes_sent:(\d+).*?bytes_received:(\d+)", info)
                 if m:
@@ -3259,11 +3259,12 @@ def _ssh_tracker_poll_logs(state):
         if not m: continue
         ts, msg = m.group(1), m.group(2)
         if ts > last_ts: last_ts = ts
-        m2 = re.search(r"Accepted (?:password|publickey) for (\S+) from ([\d.]+) port (\d+)", msg)
+        m2 = re.search(r"Accepted (?:password|publickey) for (\S+) from ([0-9a-fA-F:.]+) port (\d+)", msg)
         if not m2:
-            m2 = re.search(r"auth succeeded for '(\S+)' from ([\d.]+):(\d+)", msg)
+            m2 = re.search(r"auth succeeded for '(\S+)' from \[?([0-9a-fA-F:.]+)\]?:(\d+)", msg)
         if not m2: continue
         u, src, sport = m2.group(1), m2.group(2), m2.group(3)
+        src = src.strip("[]")
         if not (USERDIR / u).is_file() or _meta_get(u, "proto") != "ssh": continue
         if any(c["src"] == src and c["sport"] == sport for c in conns.values()): continue
         cid = "c" + _uuid.uuid4().hex[:8]
@@ -3299,8 +3300,13 @@ def _ssh_tracker_snap():
 
 def _ssh_conn_alive(snap, src, sport):
     if ":" in src:
-        return bool(re.search(rf"\[{re.escape(src)}\]:{sport}\s+\S+:(22|109)\b", snap))
-    return bool(re.search(rf"{re.escape(src)}:{sport}\s+\S+:(22|109)\b", snap))
+        tok = rf"\[{re.escape(src)}\]:{sport}(?:\s|$)"
+    else:
+        tok = rf"{re.escape(src)}:{sport}(?:\s|$)"
+    for line in snap.splitlines():
+        if not re.search(tok, line): continue
+        if re.search(r":(?:22|109)(?:\s|$)", line): return True
+    return False
 
 def _ssh_tracker_flush(state):
     live = _ssh_conn_live()
