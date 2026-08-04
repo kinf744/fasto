@@ -3926,9 +3926,29 @@ if BOT_AVAILABLE:
         m=await update.message.reply_text(text,**kw)
         ctx.user_data["last_msg_id"]=m.message_id;return m
 
+    # ── Textes configurables du bot ─────────────────────────────────────────────
+    WELCOME_TEXT = "👋 *Bienvenue !*\n\nLe bot est prêt à être utilisé.\n\nUtilisez /help pour connaître les commandes disponibles."
+    HELP_TEXT = (
+        "📖 *Aide*\n"
+        "Voici les commandes disponibles :\n"
+        "• /start — Démarrer le bot\n"
+        "• /help — Afficher l'aide\n\n"
+        "Ce bot pilote le *panneau KIGHMU* de votre VPS : il crée et gère vos "
+        "utilisateurs (SSH, Xray VMESS/VLESS/Trojan, V2Ray-DNS, ZIVPN, Hysteria), "
+        "vérifie leur expiration, quota et trafic, surveille l'état des services "
+        "internes et administre vos revendeurs. Utilisez le menu ☰ ci-dessous."
+    )
+
     async def start(update,ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Unauthorized.");return
+        try: await update.message.reply_text(WELCOME_TEXT,parse_mode="Markdown")
+        except Exception: await update.message.reply_text(WELCOME_TEXT)
         await show_main(update,ctx)
+
+    async def cmd_help(update,ctx):
+        if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Unauthorized.");return
+        try: await update.message.reply_text(HELP_TEXT,reply_markup=back_kb("main"),parse_mode="Markdown")
+        except Exception: await update.message.reply_text(HELP_TEXT)
 
     async def show_main(update,ctx,edit=False):
         u=xray_user_count_bot()+count_users_bot("ssh")+count_users_bot("zivpn")+count_users_bot("hysteria")+count_users_bot("v2raydns")
@@ -4331,11 +4351,17 @@ Expired resellers auto-deactivated daily by cron.
     async def error_handler(update,ctx):
         log.error(f"Update {update} caused error {ctx.error}")
 
+async def _admin_post_init(app):
+        try:
+            await app.bot.set_my_commands([("start","Démarrer le bot"),("help","Comment utiliser le bot")])
+        except Exception as e: log.error(f"set_my_commands(admin) failed: {e}")
+
 def run_bot():
     if not BOT_AVAILABLE: log.error("python-telegram-bot not installed");return
     if not TOKEN: log.error("No bot token");return
-    app=Application.builder().token(TOKEN).build()
+    app=Application.builder().token(TOKEN).post_init(_admin_post_init).build()
     app.add_handler(CommandHandler("start",start))
+    app.add_handler(CommandHandler("help",cmd_help))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
     app.add_error_handler(error_handler)
@@ -4349,10 +4375,30 @@ if BOT_AVAILABLE:
         if r["telegram_id"] != 0 and update.effective_user.id != r["telegram_id"]: return False, "⛔ Unauthorized."
         return True, ""
 
+    RESELLER_WELCOME = "👋 *Bienvenue !*\n\nVotre espace revendeur est prêt à être utilisé.\n\nUtilisez /help ou le bouton ❓ pour connaître les commandes disponibles."
+    RESELLER_HELP = (
+        "📖 *Aide Revendeur*\n"
+        "Voici les commandes disponibles :\n"
+        "• /start — Démarrer le bot\n"
+        "• /help — Afficher l'aide\n\n"
+        "Ce bot vous permet de gérer *vos* utilisateurs (création, liste, "
+        "renouvellement, quota, suppression) sur les tunnels autorisés par votre "
+        "abonnement. Utilisez le menu ☰ ci-dessous pour naviguer."
+    )
+
+    async def cmd_help_reseller(update,ctx):
+        rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
+        ok,msg=_r_auth(update,r)
+        if not ok:await update.message.reply_text(msg);return
+        try: await update.message.reply_text(RESELLER_HELP,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
+        except Exception: await update.message.reply_text(RESELLER_HELP)
+
     async def start_reseller(update,ctx):
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
         ok,msg=_r_auth(update,r)
         if not ok:await update.message.reply_text(msg);return
+        try: await update.message.reply_text(RESELLER_WELCOME,parse_mode="Markdown")
+        except Exception: await update.message.reply_text(RESELLER_WELCOME)
         await show_main_reseller(update,ctx)
 
     async def show_main_reseller(update,ctx,edit=False):
@@ -4566,15 +4612,21 @@ if BOT_AVAILABLE:
         await update.message.reply_text(txt,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
         ctx.user_data.clear()
 
+async def _reseller_post_init(app):
+        try:
+            await app.bot.set_my_commands([("start","Démarrer le bot"),("help","Comment utiliser le bot")])
+        except Exception as e: log.error(f"set_my_commands(reseller) failed: {e}")
+
 def run_reseller_bot(rid):
     r=reseller_get(rid)
     if not r:log.error(f"Reseller #{rid} not found");return
     if not BOT_AVAILABLE:log.error("python-telegram-bot not installed");return
     if not r["bot_token"]:log.error(f"Reseller #{rid} has no token");return
-    app=Application.builder().token(r["bot_token"]).build()
+    app=Application.builder().token(r["bot_token"]).post_init(_reseller_post_init).build()
     app.bot_data["reseller_id"]=rid
     app.bot_data["reseller"]=r
     app.add_handler(CommandHandler("start",start_reseller))
+    app.add_handler(CommandHandler("help",cmd_help_reseller))
     app.add_handler(CallbackQueryHandler(callback_handler_reseller))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler_reseller))
     log.info(f"Reseller Bot #{rid} started");app.run_polling(allowed_updates=Update.ALL_TYPES)
