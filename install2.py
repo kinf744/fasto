@@ -521,6 +521,103 @@ ExecStop=/usr/sbin/nft delete table inet %i
 WantedBy=multi-user.target
 """)
     sh("systemctl daemon-reload 2>/dev/null; systemctl enable --now nftables-tunnel@udp-custom-catchall.service 2>/dev/null || true")
+    _deploy_nft_dedup_watchdog()
+
+def _deploy_nft_dedup_watchdog():
+    # Preventif : evite/constit le conflit de duplication de tables nftables entre
+    # le catchall UDP-Custom (installe, le source) et kighmu/iptables qui injectent
+    # leur propre "dnat to :36712" sans exclure le port 53 (ce qui bloque slowdns).
+    # Automatic : ce script est lance a chaque reboot + toutes les minutes par cron.
+    WATCHDOG = "/usr/local/bin/kighmu-nft-dedup.py"
+    src = '''#!/usr/bin/env python3
+"""Automatiquement deploye par install2.py. Role: dedup de la table nft
+'ip nat' lorsque kighmu/iptables/Docker y ajoutent une règle dnat 1-65535 -> :36712
+sans exclure le port 53, ce qui entre en conflit avec le tunnel slowdns (port 53).
+
+La source de verite du DNAT udp-custom est la table inet udp-custom-catchall
+(exclut 53/5300). Ce script supprime les regles dnat vers :36712 dupliquees
+dans les tables ip nat / ip6 nat, conserve les tables inet udp-custom*, et ne
+casse pas Docker (regle jump DOCKER conservee).
+"""
+import re, subprocess, os
+from datetime import datetime
+
+LOG = "/var/log/kighmu-nft-dedup.log"
+KEEP_TABLES = {("inet", "udp-custom"), ("inet", "udp-custom-catchall")}
+CATCHALL_NFT = "/etc/nftables/udp-custom-catchall.nft"
+
+def log(m):
+    try:
+        with open(LOG, "a") as f:
+            f.write("[%s] %s\\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), m))
+    except Exception:
+        pass
+
+def sh(c):
+    r = subprocess.run(c, shell=True, capture_output=True, text=True)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+def nft(a):
+    r = subprocess.run(["nft"] + a, capture_output=True, text=True)
+    return r.returncode, r.stdout, r.stderr
+
+def installed():
+    rc, _, _ = sh("command -v udp-custom 2>/dev/null")
+    return rc == 0 or os.path.isdir("/etc/udp-custom")
+
+def ensure_catchall():
+    if not os.path.exists(CATCHALL_NFT):
+        return
+    rc, _, _ = nft(["list", "table", "inet", "udp-custom-catchall"])
+    if rc != 0:
+        nft(["-f", CATCHALL_NFT]); log("recharge catchall"); return
+    if "53" not in nft(["list", "table", "inet", "udp-custom-catchall"])[1]:
+        nft(["delete", "table", "inet", "udp-custom-catchall"]); nft(["-f", CATCHALL_NFT]); log("recharge catchall (exclusions)")
+    sh("systemctl enable nftables-tunnel@udp-custom-catchall.service >/dev/null 2>&1")
+
+def collect():
+    rc, out, _ = nft(["-a", "list", "ruleset"])
+    res, cur_t, cur_c = [], None, None
+    for line in (out or "").splitlines():
+        tm = re.match(r"\\s*table\\s+(\\S+)\\s+(\\S+)\\s*\\{", line)
+        if tm:
+            cur_t, cur_c = (tm.group(1), tm.group(2)), None; continue
+        cm = re.match(r"\\s*chain\\s+(\\S+)\\s+.*\\{", line)
+        if cm:
+            cur_c = cm.group(1); continue
+        if cur_t is None or cur_t[0] not in ("ip", "ip6") or cur_t in KEEP_TABLES:
+            continue
+        if ":36712" in line and "dnat" in line:
+            hm = re.search(r"#\\s*handle\\s+(\\d+)", line)
+            res.append((cur_t, cur_c, hm.group(1) if hm else None))
+    return res
+
+def main():
+    if not installed(): return
+    ensure_catchall()
+    sh("systemctl disable --now nftables-nat.service >/dev/null 2>&1 || true")
+    n = 0
+    for (t, c, h) in collect():
+        if h and t[0] in ("ip", "ip6") and t not in KEEP_TABLES:
+            r = nft(["-a", "delete", "rule", t[0], t[1], c, "handle", h])
+            if r[0] == 0:
+                n += 1; log("supprime dnat 36712 dupl. %s/%s" % (t[1], c))
+    if n: log("dedup: %d regles supprimees" % n)
+    else: log("dedup: ok (aucun doublon)")
+
+if __name__ == "__main__":
+    main()
+'''
+    try:
+        Path(WATCHDOG).write_text(src)
+        sh(f"chmod +x {WATCHDOG}")
+        # cron toutes les minutes + au reboot
+        sh("systemctl disable --now nftables-nat.service 2>/dev/null || true")
+        crontab = sh("crontab -l 2>/dev/null")
+        if "kighmu-nft-dedup" not in crontab:
+            sh(f"(crontab -l 2>/dev/null | grep -v kighmu-nft-dedup; echo '* * * * * {WATCHDOG} >/dev/null 2>&1'; echo '@reboot {WATCHDOG} >/dev/null 2>&1') | crontab - 2>/dev/null || true")
+    except Exception as e:
+        print(f" {C['RED']}✗ echec deploiement watchdog dedup : {e}{C['RST']}")
 
 def install_openssh():
     sh("apt-get install -y -qq openssh-server 2>/dev/null || true")
@@ -931,7 +1028,14 @@ def uninstall_udp_custom():
     sh("systemctl disable --now udp-custom.service 2>/dev/null || true")
     Path("/etc/systemd/system/udp-custom.service").unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/udp-custom 2>/dev/null; rm -rf /etc/udp-custom 2>/dev/null || true")
-    _remove_nft("udp-custom"); sh("systemctl daemon-reload 2>/dev/null || true")
+    _remove_nft("udp-custom")
+    # nettoyage watchdog dedup + catchall (aucun tunnel UDP-Custom restant)
+    _remove_nft("udp-custom-catchall")
+    sh("rm -f /usr/local/bin/kighmu-nft-dedup.py /var/log/kighmu-nft-dedup.log 2>/dev/null || true")
+    sh("(crontab -l 2>/dev/null | grep -v kighmu-nft-dedup) | crontab - 2>/dev/null || true")
+    # restaure le service kighmu (nftables-nat) desactive par le watchdog
+    sh("systemctl enable nftables-nat.service >/dev/null 2>&1 || true")
+    sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ UDP-Custom désinstallé.{C['RST']}")
 
 def install_slowdns():
