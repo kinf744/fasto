@@ -2766,8 +2766,7 @@ def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
        f"   {C['YELLOW']}[1] SSH WS ..............{C['RST']}",f"%FREE%   {dom}:80@{user}:{passwd}","",
        f"   {C['YELLOW']}[2] SSL/TLS .............{C['RST']}",f"%FREE%   {dom}:444@{user}:{passwd}","",
-       f"   {C['YELLOW']}[3] PROXY WS ............{C['RST']}",f"%FREE%   {dom}:9090@{user}:{passwd}","",
-       f"   {C['YELLOW']}[4] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
+       f"   {C['YELLOW']}[3] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}WS PAYLOAD{C['RST']}",
        f"%FREE%   {C['GRAY']}GET / HTTP/1.1[crlf]Host: {dom}[crlf]Connection: Upgrade[crlf]User-Agent: {ua}[crlf]Upgrade: websocket[crlf][crlf]{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}SLOWDNS (PORT 53){C['RST']}",
@@ -3793,8 +3792,7 @@ def build_ssh_details(user, pwd, exp, quota):
         + chr(0x2022) + " User: `"+user+"`\n" + chr(0x2022) + " Domain: `"+dom+"`\n" + chr(0x2022) + " IP: `"+ip+"`\n" + chr(0x2022) + " Expires: `"+exp+"`\n" + chr(0x2022) + " Quota: `"+quota+" GB`\n" + chr(0x2022) + " Password: `"+pwd+"`\n\n"
         "*CONNECTION LINKS*\n\n1" + chr(0xFE0F) + chr(0x20E3) + " SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
         "2" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
-        "3" + chr(0xFE0F) + chr(0x20E3) + " PROXY WS\n`"+dom+":9090@"+user+":"+pwd+"`\n\n"
-        "4" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
+        "3" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
         "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
         "*SLOWDNS (FASTDNS)*\nConfigure your SlowDNS app with:\n" + chr(0x2022) + " DNS IP: `"+ip+"` (port 53)\n" + chr(0x2022) + " NameServer: `"+ns+"`\n" + chr(0x2022) + " Public Key: `"+pub+"`\n\n"
         "*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN")
