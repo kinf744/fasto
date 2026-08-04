@@ -3790,10 +3790,45 @@ def get_users_by_proto(proto):
             if f.is_file()and _meta_get(f.name,"proto")==r:users.append((f.name,_meta_get(f.name,"exp")))
     return users
 
+def _detail_quota(proto, user, quota):
+    used = 0
+    try:
+        if proto == "ssh":
+            used = get_ssh_traffic(user)
+        elif proto in ("vless", "vmess", "trojan"):
+            try:
+                with open(XRAY_USERS) as f: d = json.load(f)
+                for p in d.get(proto, []):
+                    if p.get("email", "").split("@")[0] == user:
+                        used = get_xray_traffic(p.get("email", "")); break
+                else:
+                    used = get_xray_traffic(user)
+            except Exception:
+                used = get_xray_traffic(user)
+        elif proto == "v2raydns":
+            try:
+                with open(V2RAY_USERS) as f: d = json.load(f)
+                for p in d.get("vless", []):
+                    if p.get("email", "").split("@")[0] == user:
+                        used = get_v2ray_traffic(p.get("email", "")); break
+                else:
+                    used = get_v2ray_traffic(user)
+            except Exception:
+                used = get_v2ray_traffic(user)
+    except Exception:
+        used = 0
+    try: q = float(quota or 0)
+    except Exception: q = 0
+    ut = fmt_bytes(used)
+    if q > 0:
+        return f"{ut} / {q:.1f} GB"
+    return f"{ut} / Unlimited"
+
 def build_ssh_details(user, pwd, exp, quota):
     dom = get_domain(); ip = get_ip(); pub, ns, nv4 = get_slowdns_info()
+    qs = _detail_quota("ssh", user, quota)
     return ("🔑 *SSH USER DETAILS*\n" + chr(0x2501)*20 + "\n"
-        + chr(0x2022) + " User: `"+user+"`\n" + chr(0x2022) + " Domain: `"+dom+"`\n" + chr(0x2022) + " IP: `"+ip+"`\n" + chr(0x2022) + " Expires: `"+exp+"`\n" + chr(0x2022) + " Quota: `"+quota+" GB`\n" + chr(0x2022) + " Password: `"+pwd+"`\n\n"
+        + chr(0x2022) + " User: `"+user+"`\n" + chr(0x2022) + " Domain: `"+dom+"`\n" + chr(0x2022) + " IP: `"+ip+"`\n" + chr(0x2022) + " Expires: `"+exp+"`\n" + chr(0x2022) + " Quota: `"+qs+"`\n" + chr(0x2022) + " Password: `"+pwd+"`\n\n"
         "*CONNECTION LINKS*\n\n1" + chr(0xFE0F) + chr(0x20E3) + " SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
         "2" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
         "3" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
@@ -3803,8 +3838,9 @@ def build_ssh_details(user, pwd, exp, quota):
 
 def build_vless_details(user, uuid, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
+    qs = _detail_quota("vless", user, quota)
     return (chr(0x1F517) + " *VLESS USER DETAILS*\n" + B*20 + "\n"
-        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `VLESS`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `VLESS`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID: `"+uuid+"`\n\n"
         "*PATHS:*\n" + D + " WS: `/vless`\n" + D + " XHTTP: `/vless-xhttp`\n" + D + " HTTPUpgrade: `/vless-hupgrade`\n" + D + " gRPC: `/vless-grpc`\n\n"
         "*CONNECTION LINKS*\n\n1" + KE + " TLS/WS :443\n`vless://"+uuid+"@"+dom+":443?security=tls&type=ws&path=/vless&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
         "2" + KE + " NTLS/WS :8880\n`vless://"+uuid+"@"+dom+":8880?security=none&type=ws&path=/vless&host="+dom+"#"+user+"`\n\n"
@@ -3816,8 +3852,9 @@ def build_vless_details(user, uuid, exp, quota):
 
 def build_trojan_details(user, pwd, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
+    qs = _detail_quota("trojan", user, quota)
     return (chr(0x1F517) + " *TROJAN USER DETAILS*\n" + B*20 + "\n"
-        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `TROJAN`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " Password: `"+pwd+"`\n\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `TROJAN`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " Password: `"+pwd+"`\n\n"
         "*PATHS:*\n" + D + " WS: `/trojan`\n" + D + " XHTTP: `/trojan-xhttp`\n" + D + " HTTPUpgrade: `/trojan-hupgrade`\n" + D + " gRPC: `/trojan-grpc`\n\n"
         "*CONNECTION LINKS*\n\n1" + KE + " TLS/WS :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=ws&path=/trojan&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
         "2" + KE + " NTLS/WS :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=ws&path=/trojan&host="+dom+"#"+user+"`\n\n"
@@ -3832,8 +3869,9 @@ def build_vmess_details(user, uuid, exp, quota):
     l1 = vmess_link_b64(uuid, dom, 8880, "ws", "none", "/vmess", user, "")
     l2 = vmess_link_b64(uuid, dom, 443, "ws", "tls", "/vmess", user, dom)
     l3 = vmess_link_b64(uuid, dom, 443, "grpc", "tls", "vmess-grpc", user, dom)
+    qs = _detail_quota("vmess", user, quota)
     return (chr(0x1F517) + " *VMESS USER DETAILS*\n" + B*20 + "\n"
-        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `VMESS`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `VMESS`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID: `"+uuid+"`\n\n"
         "*PATHS:*\n" + D + " WS: `/vmess`\n" + D + " gRPC: `/vmess-grpc`\n\n"
         "*CONNECTION LINKS*\n\n1" + KE + " NTLS/WS :8880\n`"+l1+"`\n\n"
         "2" + KE + " TLS/WS :443\n`"+l2+"`\n\n"
@@ -3841,23 +3879,26 @@ def build_vmess_details(user, uuid, exp, quota):
 
 def build_hysteria_details(user, pwd, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022)
+    qs = _detail_quota("hysteria", user, quota)
     return (chr(0x26A1) + " *HYSTERIA USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Obfs: `hysteria`\n" + D + " Expires: `"+exp+"`\n"
-        + D + " Quota: `"+quota+" GB`\n" + D + " Password: `"+pwd+"`\n" + D + " Port Range: `20000-50000`\n\n"
+        + D + " Quota: `"+qs+"`\n" + D + " Password: `"+pwd+"`\n" + D + " Port Range: `20000-50000`\n\n"
         "Use a Hysteria client with the above details.")
 
 def build_zivpn_details(user, pwd, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022)
+    qs = _detail_quota("zivpn", user, quota)
     return (chr(0x1F50C) + " *ZIVPN USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Obfs: `zivpn`\n" + D + " Expires: `"+exp+"`\n"
-        + D + " Quota: `"+quota+" GB`\n" + D + " Password: `"+pwd+"`\n" + D + " Port: `5667`\n\n"
+        + D + " Quota: `"+qs+"`\n" + D + " Password: `"+pwd+"`\n" + D + " Port: `5667`\n\n"
         "Use a ZIVPN client with the above details.")
 
 def build_v2raydns_details(user, uuid, exp, quota):
     dom = get_domain(); pub, ns, nv4 = get_slowdns_info(); ip = get_ip()
     B = chr(0x2501); D = chr(0x2022)
+    qs = _detail_quota("v2raydns", user, quota)
     return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
-        + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+quota+" GB`\n" + D + " UUID: `"+uuid+"`\n\n"
+        + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID: `"+uuid+"`\n\n"
         "*SLOWDNS TUNNEL*\nConfigure your SlowDNS app with:\n" + D + " DNS IP: `"+ip+"` (port 53)\n" + D + " NameServer: `"+nv4+"`\n" + D + " Public Key: `"+pub+"`\n\n"
         "*VLESS DIRECT (NO TUNNEL)*\n`vless://"+uuid+"@"+ip+":5401?security=none&type=tcp&encryption=none#"+user+"-V2RAY-DNS`\n\n"
         "Apps: v2rayNG, Nekoray, Shadowrocket")
