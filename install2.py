@@ -4580,8 +4580,8 @@ if BOT_AVAILABLE:
             users=_users_by_reseller(p,rid)
             if users:
                 l=[f"📋 *{names.get(p,p)}* ({len(users)})\n",f"`  #  User         Exp         Traffic`",f"`{'─'*44}`"]
-                for i,(n,_,e,q,used)in enumerate(users,1):
-                    u2=fmt_bytes(used);t2=f"{u2} / {q} GB"if q>0 else f"{u2} / Unlimited"
+                for i,(n,_,e,qu,used)in enumerate(users,1):
+                    u2=fmt_bytes(used);t2=f"{u2} / {qu} GB"if qu>0 else f"{u2} / Unlimited"
                     l.append(f"`{i:>3}. {n:<14}{e:<11}{t2}`")
                 t="\n".join(l)
             else:t=f"📋 No {names.get(p,p)} users."
