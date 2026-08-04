@@ -2103,7 +2103,12 @@ def delete_user(user):
     f = USERDIR / user
     if not f.exists() and user not in panel_system_accounts(): return 2
     proto = _meta_get(user, "proto")
-    if proto == "ssh" or (not f.exists() and user in panel_system_accounts()):
+    had_file = f.exists()
+    # Retirer le meta AVANT de régénérer les configs (v2raydns/zivpn/hysteria
+    # reconstruisent depuis USERDIR : si le fichier existe encore, le user reste
+    # dans la config => suppression incomplète lors du nettoyage).
+    f.unlink(missing_ok=True)
+    if proto == "ssh" or (not had_file and user in panel_system_accounts()):
         sh(f"userdel -f {user} 2>/dev/null || true")
         sh(f"rm -rf /home/{user} 2>/dev/null || true")
         sh(f"sed -i '/^{user}|/d' /etc/kighmu/users.list 2>/dev/null || true")
@@ -2115,7 +2120,6 @@ def delete_user(user):
         if proto == "zivpn": zivpn_apply()
         elif proto == "hysteria": hysteria_apply()
         elif proto == "v2raydns": v2raydns_apply()
-    f.unlink(missing_ok=True)
     if proto == "ssh": _ssh_quota_apply()
     return 0
 
