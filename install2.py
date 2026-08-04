@@ -442,13 +442,15 @@ WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/nftables-tunnel@.service").write_text(svc)
     sh("systemctl daemon-reload 2>/dev/null || true")
-    if sh("nft list table inet kighmu 2>/dev/null") != "": return
-    for c in [
-        "add table inet kighmu",
-        "'add chain inet kighmu input { type filter hook input priority 0; policy accept; }'",
-        "'add chain inet kighmu output { type filter hook output priority 0; policy accept; }'",
-        "'add chain inet kighmu forward { type filter hook forward priority 0; policy accept; }'",
-    ]: sh(f"nft {c} 2>/dev/null || true")
+    # (bug corrigé) la table kighmu existante ne doit PAS court-circuiter
+    # la création du catchall udp-custom (sinon jamais déployé en réinstall)
+    if sh("nft list table inet kighmu 2>/dev/null") == "":
+        for c in [
+            "add table inet kighmu",
+            "'add chain inet kighmu input { type filter hook input priority 0; policy accept; }'",
+            "'add chain inet kighmu output { type filter hook output priority 0; policy accept; }'",
+            "'add chain inet kighmu forward { type filter hook forward priority 0; policy accept; }'",
+        ]: sh(f"nft {c} 2>/dev/null || true")
     _configure_resolv()
     _ensure_nat_catchall()
 
@@ -458,15 +460,24 @@ def _deploy_nft(name, nft_src):
     Path(f"/etc/nftables/{name}.nft").write_text(nft_src)
     ok = sh(f"nft -c -f /etc/nftables/{name}.nft 2>/dev/null && echo OK")
     if ok:
-        sh(f"systemctl enable --now nftables-tunnel@{name}.service 2>/dev/null || true")
+        # Idempotence : supprime la table existante avant rechargement
+        # pour eviter le MERGE nft (sinon regles dupliquees en reinstall).
+        sh(f"nft delete table inet {name} 2>/dev/null || true")
+        sh(f"systemctl enable nftables-tunnel@{name}.service 2>/dev/null || true")
         sh(f"systemctl restart nftables-tunnel@{name}.service 2>/dev/null || true")
+        if sh(f"nft list table inet {name} 2>/dev/null") == "":
+            sh(f"nft -f /etc/nftables/{name}.nft 2>/dev/null || true")
     else:
         print(f" {C['RED']}✗ nftables {name}: règle invalide, ignorée.{C['RST']}")
 
 def _remove_nft(name):
     sh(f"systemctl disable --now nftables-tunnel@{name}.service 2>/dev/null || true")
     Path(f"/etc/nftables/{name}.nft").unlink(missing_ok=True)
-    sh(f"nft delete table inet {name} 2>/dev/null || true")
+    # Suppression verifiee : si la table persiste (merges/residus), force le delete
+    for _ in range(3):
+        sh(f"nft delete table inet {name} 2>/dev/null || true")
+        if sh(f"nft list table inet {name} 2>/dev/null") == "":
+            break
 
 def _configure_resolv():
     resolv = Path("/etc/resolv.conf")
@@ -496,10 +507,19 @@ def _ensure_nat_catchall():
 
 def _deploy_nat_catchall():
     iface = get_main_iface()
+    # Le catchall (priority -50) capture AVANT les dnat des autres tunnels dont la
+    # priority est superieure (hysteria=100). On exclut donc leurs ports pour que
+    # chaque tunnel garde le trafic qui lui revient (et on ne casse pas hysteria).
+    exclude = [53, 5300]
+    if sh("command -v hysteria-linux-amd64 2>/dev/null") != "" or Path("/etc/hysteria").exists():
+        exclude.append("20000-50000")
+    if sh("command -v zivpn 2>/dev/null") != "" or Path("/etc/zivpn").exists():
+        exclude.append("6000-19999")
+    excl_str = ", ".join(str(p) for p in exclude)
     nft_src = f"""table inet udp-custom-catchall {{
     chain prerouting {{
         type nat hook prerouting priority -50; policy accept;
-        iifname "{iface}" meta nfproto ipv4 udp dport {{ 53, 5300 }} return
+        iifname "{iface}" meta nfproto ipv4 udp dport {{ {excl_str} }} return
         iifname "{iface}" meta nfproto ipv4 udp dport 1-65535 dnat to :36712
     }}
 }}"""
@@ -1793,6 +1813,8 @@ def uninstall_hysteria():
     for f in ["/etc/systemd/system/hysteria.service"]: Path(f).unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/hysteria-linux-amd64 2>/dev/null; rm -rf /etc/hysteria 2>/dev/null || true")
     _remove_nft("hysteria")
+    # Regenere le catchall udp-custom sans l'exclusion hysteria (devenue obsolete)
+    _ensure_nat_catchall()
     sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ Hysteria désinstallé.{C['RST']}")
 
@@ -1842,6 +1864,8 @@ def uninstall_zivpn():
     for f in ["/etc/systemd/system/zivpn.service"]: Path(f).unlink(missing_ok=True)
     sh("rm -f /usr/local/bin/zivpn 2>/dev/null; rm -rf /etc/zivpn 2>/dev/null || true")
     _remove_nft("zivpn")
+    # Regenere le catchall udp-custom sans l'exclusion zivpn (devenue obsolete)
+    _ensure_nat_catchall()
     sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ ZIVPN désinstallé.{C['RST']}")
 
@@ -1912,10 +1936,13 @@ def uninstall_all_active(silent=False):
         sh(f"systemctl stop --now {svc} 2>/dev/null || true")
         sh(f"systemctl disable {svc} 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
-    for tbl in ["badvpn","dropbear","hysteria","slowdns","v2ray","xray","zivpn","sshws","ssl_tls","udp-custom","kighmu"]:
+    for tbl in ["badvpn","dropbear","hysteria","slowdns","v2ray","xray","zivpn","sshws","ssl_tls","udp-custom","udp-custom-catchall"]:
         sh(f"nft delete table inet {tbl} 2>/dev/null || true")
-    sh("nft delete table ip nat 2>/dev/null || true")
-    sh("nft delete table ip6 nat 2>/dev/null || true")
+    # Ne PAS supprimer ip nat / ip6 nat en bloc (tables partagees avec Docker/kighmu).
+    # On retire seulement les regles dnat/redirect pilotees par le panel.
+    for fam in ["ip", "ip6"]:
+        for r in ["dnat to :36712", "dnat to :20000", "dnat to :5667", "redirect to :5300", "redirect to :53"]:
+            sh(f"nft list chain {fam} nat prerouting 2>/dev/null | grep -q '{r}' && nft --handle list chain {fam} nat prerouting 2>/dev/null | grep '{r}' | sed -n 's/.*# handle \\([0-9]*\\).*/\\1/p' | while read h; do nft delete rule {fam} nat prerouting handle $h 2>/dev/null; done || true")
     sh("systemctl disable --now nftables-nat.service nftables-tunnel.service 2>/dev/null || true")
     print(f"\n {C['RED']}✔ Tous les tunnels ont été désinstallés.{C['RST']}")
     if not silent:
