@@ -3916,7 +3916,7 @@ def build_v2raydns_details(user, uuid, exp, quota):
     qs = _detail_quota("v2raydns", user, quota)
     return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID: `"+uuid+"`\n\n"
-        "*SLOWDNS TUNNEL*\nConfigure your SlowDNS app with:\n" + D + " DNS IP: `"+ip+"` (port 53)\n" + D + " NameServer: `"+nv4+"`\n" + D + " Public Key: `"+pub+"`\n\n"
+        "*SLOWDNS TUNNEL*\nConfigure your SlowDNS app with:\n" + D + " NameServer: `"+nv4+"`\n" + D + " Public Key: `"+pub+"`\n\n"
         "*VLESS DIRECT (NO TUNNEL)*\n`vless://"+uuid+"@"+ip+":5401?security=none&type=tcp&encryption=none#"+user+"-V2RAY-DNS`\n\n"
         "Apps: Dark tunnel, http custom, zivpn")
 
