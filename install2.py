@@ -612,9 +612,26 @@ def collect():
             res.append((cur_t, cur_c, hm.group(1) if hm else None))
     return res
 
+def ensure_slowdns_prio():
+    """Garantit la priorite -150 du redirect slowdns (INBATTABLE).
+    La table slowdns doit rester exécutée AVANT toute table ip nat (prio -100)
+    pour que le port 53 aille toujours à dnsdist, meme si kighmu/iptables
+    re-injecte un doublon. Si slowdns est absent, ou a encore l'ancienne prio
+    fragile -100, on la recharge depuis le fichier disque (-150)."""
+    nf = "/etc/nftables/slowdns.nft"
+    if not os.path.exists(nf):
+        return
+    rc, out, _ = nft(["list", "chain", "inet", "slowdns", "prerouting"])
+    good = rc == 0 and "-150" in out and "-100" not in out
+    if not good:
+        nft(["delete", "table", "inet", "slowdns"])
+        r2, _, e2 = nft(["-f", nf])
+        log("recharge slowdns prio -150 rc=%d %s" % (r2, e2.strip()[:80]))
+
 def main():
     if not installed(): return
     ensure_catchall()
+    ensure_slowdns_prio()
     sh("systemctl disable --now nftables-nat.service >/dev/null 2>&1 || true")
     n = 0
     for (t, c, h) in collect():
@@ -1157,12 +1174,12 @@ addAction(AllRule(), RCodeAction(5))
 
     _deploy_nft("slowdns", f"""table inet slowdns {{
     chain prerouting {{
-        type nat hook prerouting priority -100;
+        type nat hook prerouting priority -150;
         udp dport 53 redirect to :{DNSDIST_PORT}
         tcp dport 53 redirect to :{DNSDIST_PORT}
     }}
     chain output {{
-        type nat hook output priority -100;
+        type nat hook output priority -150;
         udp dport 53 fib daddr type local redirect to :{DNSDIST_PORT}
         tcp dport 53 fib daddr type local redirect to :{DNSDIST_PORT}
     }}
