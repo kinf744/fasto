@@ -4433,7 +4433,33 @@ if BOT_AVAILABLE:
             try:await q.edit_message_text(t,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
             except:await q.edit_message_text(t.replace('*','').replace('`',''),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
         elif d=="r_help":
-            await q.edit_message_text("🤖 *Reseller Bot Help*\n━━━━━━━━━━━━━━\n👥 My Users – Manage your users\n• Create users for allowed tunnels\n• List users per tunnel\n• Renew user expiry\n• Delete users\n\nLimits are enforced:\n• Max users: your reseller cap\n• Expiry: your reseller account\n\nContact your admin for support.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
+            await q.edit_message_text(
+                "🤖 *Reseller Bot Help*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "👥 *My Users*\n"
+                "Liste vos users par tunnel avec leur état, expiration et trafic.\n\n"
+                "➕ *Create*\n"
+                "1) Choisissez le tunnel (ex: SSH, Xray, V2Ray DNS)\n"
+                "2) Envoyez le *username*\n"
+                "3) Envoyez l'*expiration en jours*\n"
+                "4) Mot de passe (ou `auto`)\n"
+                "5) Quota GB (0 = illimité)\n"
+                "Les détails de connexion vous sont envoyés automatiquement.\n\n"
+                "📋 *List*\n"
+                "Affiche vos users du tunnel choisi : n°, user, expiration, trafic utilisée / quota.\n\n"
+                "🔄 *Renew*\n"
+                "Renouvelle un user : envoyez le username puis le nombre de jours à ajouter.\n\n"
+                "💾 *Set Quota*\n"
+                "Modifie le quota data d'un user : username puis quota en GB (0 = illimité).\n\n"
+                "🗑 *Delete*\n"
+                "Choisissez le tunnel, puis envoyez les numéros à supprimer (ex: `1,3-5`).\n\n"
+                "ℹ️ *Règles*\n"
+                "• Limite: `users / max_users` de votre abonnement\n"
+                "• Tunnels autorisés: ceux de votre abonnement\n"
+                "• Vous ne pouvez gérer que VOS users\n"
+                "• Expiration: celle de votre compte revendeur\n\n"
+                "Contactez votre administrateur pour toute question.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
         elif d.startswith("r_confirm_del_"):
             user=d[14:];delete_user(user);await q.edit_message_text(f"✅ `{user}` deleted.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
 
