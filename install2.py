@@ -3927,22 +3927,51 @@ if BOT_AVAILABLE:
         ctx.user_data["last_msg_id"]=m.message_id;return m
 
     # ── Textes configurables du bot ─────────────────────────────────────────────
-    WELCOME_TEXT = "👋 *Bienvenue !*\n\nLe bot est prêt à être utilisé.\n\nUtilisez /help pour connaître les commandes disponibles."
     HELP_TEXT = (
-        "📖 *Aide*\n"
-        "Voici les commandes disponibles :\n"
-        "• /start — Démarrer le bot\n"
-        "• /help — Afficher l'aide\n\n"
-        "Ce bot pilote le *panneau KIGHMU* de votre VPS : il crée et gère vos "
-        "utilisateurs (SSH, Xray VMESS/VLESS/Trojan, V2Ray-DNS, ZIVPN, Hysteria), "
-        "vérifie leur expiration, quota et trafic, surveille l'état des services "
-        "internes et administre vos revendeurs. Utilisez le menu ☰ ci-dessous."
+        "🤖 *KIGHMU PANEL BOT* — Aide complète\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Ce bot est le panneau de contrôle de votre VPS : il gère tous les comptes "
+        "utilisateurs de vos tunnels, surveille le serveur et administre vos revendeurs.\n\n"
+        "Commands :\n"
+        "• /start — Affiche le menu principal\n"
+        "• /help — Affiche cette aide\n\n"
+        "┌─ 📊 DASHBOARD\n"
+        "└ Utilisateurs par tunnel (SSH, Xray, ZIVPN, Hysteria, V2Ray-DNS) et "
+        "ressources serveur : RAM utilisée/totale en %, CPU, trafic en temps réel.\n\n"
+        "┌─ 👥 USERS — Création & Gestion\n"
+        "▶ Créer un utilisateur\n"
+        "Tunnels : SSH, Xray (VMESS / VLESS / Trojan), V2Ray DNS, ZIVPN, Hysteria.\n"
+        "Étapes demandées :\n"
+        "1. Username (chiffres, lettres, . _ -)\n"
+        "2. Expiration en jours\n"
+        "3. Mot de passe (ou `auto` pour génération aléatoire)\n"
+        "4. Quota en GB (0 = illimité)\n"
+        "→ Le bot envoie ensuite les détails de connexion (liens, infos tunnel).\n\n"
+        "▶ 📋 Lister : choisit le tunnel → n°, utilisateur, protocole, expiration, "
+        "trafic utilisée / quota.\n\n"
+        "▶ 🔍 Info User : taper un username → détails complets du compte.\n\n"
+        "▶ 🔄 Renew : username puis jours à ajouter à l'expiration.\n"
+        "▶ 🔄 Renew Bulk : format `nombres jours` — ex. `1,3-5 30`.\n\n"
+        "▶ 💾 Set Quota : format `nombres quota_GB` — ex. `1,3-5 50`.\n\n"
+        "▶ 🔒 Lock/Unlock : bloque/débloque un compte sans le supprimer.\n\n"
+        "▶ 🗑 Delete : un username, ou plusieurs par numéros/plages (ex. `1,3-5,7`).\n\n"
+        "┌─ 🔧 SERVICES\n"
+        "└ État de tous les services/protocoles (🟢 actif / 🔴 arrêté).\n\n"
+        "┌─ 📈 SERVER\n"
+        "└ OS, architecture, cœurs, uptime, IP publique.\n\n"
+        "┌─ 🤝 RESELLERS (réservé à l'admin)\n"
+        "Vous créez des sous-revendeurs disposant chacun de leur propre bot et quota.\n\n"
+        "▶ ➕ New Reseller : nom → ID Telegram (0 = public) → token du bot revendeur\n"
+        "→ expiration en jours → max d'utilisateurs → quota data GB → tunnels autorisés\n"
+        "→ code d'accès (pour bot public).\n\n"
+        "▶ ⚙️ Manage : activer/désactiver, supprimer (+son bot), prolonger l'expiration,\n"
+        "modifier max users, modifier le quota GB.\n\n"
+        "Les comptes des revendeurs sont comptés automatiquement. Les revendeurs "
+        "expirés sont désactivés automatiquement chaque jour."
     )
 
     async def start(update,ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Unauthorized.");return
-        try: await update.message.reply_text(WELCOME_TEXT,parse_mode="Markdown")
-        except Exception: await update.message.reply_text(WELCOME_TEXT)
         await show_main(update,ctx)
 
     async def cmd_help(update,ctx):
@@ -4375,15 +4404,38 @@ if BOT_AVAILABLE:
         if r["telegram_id"] != 0 and update.effective_user.id != r["telegram_id"]: return False, "⛔ Unauthorized."
         return True, ""
 
-    RESELLER_WELCOME = "👋 *Bienvenue !*\n\nVotre espace revendeur est prêt à être utilisé.\n\nUtilisez /help ou le bouton ❓ pour connaître les commandes disponibles."
     RESELLER_HELP = (
-        "📖 *Aide Revendeur*\n"
-        "Voici les commandes disponibles :\n"
-        "• /start — Démarrer le bot\n"
-        "• /help — Afficher l'aide\n\n"
-        "Ce bot vous permet de gérer *vos* utilisateurs (création, liste, "
-        "renouvellement, quota, suppression) sur les tunnels autorisés par votre "
-        "abonnement. Utilisez le menu ☰ ci-dessous pour naviguer."
+        "🤝 *Reseller Bot* — Aide complète\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Ce bot vous permet de gérer *vos* utilisateurs, dans la limite des tunnels "
+        "autorisés par votre abonnement revendeur.\n\n"
+        "Commands :\n"
+        "• /start — Affiche mon espace\n"
+        "• /help — Affiche cette aide\n\n"
+        "┌─ 👥 MES USERS\n"
+        "└ Résumé : vos utilisateurs par tunnel (SSH, Xray, V2Ray DNS, ZIVPN, "
+        "Hysteria) et votre total (utilisés / maximum autorisé).\n\n"
+        "┌─ ➕ CRÉER UN UTILISATEUR\n"
+        "1. Choisissez le tunnel autorisé (bouton Create)\n"
+        "2. Username (chiffres, lettres, . _ -)\n"
+        "3. Expiration en jours\n"
+        "4. Mot de passe (ou `auto`)\n"
+        "5. Quota en GB (0 = illimité)\n"
+        "→ Le bot vous envoie les détails de connexion.\n\n"
+        "┌─ 📋 LISTER\n"
+        "└ Tunnel choisi → vos utilisateurs avec n°, expiration et trafic utilisée / quota.\n\n"
+        "┌─ 🔄 RENOUVELER\n"
+        "└ Username puis jours à ajouter.\n\n"
+        "┌─ 💾 DÉFINIR LE QUOTA\n"
+        "└ Username puis quota en GB (0 = illimité).\n\n"
+        "┌─ 🗑 SUPPRIMER\n"
+        "└ Tunnel puis numéros (ex. `1,3-5`), uniquement vos utilisateurs.\n\n"
+        "┌─ ℹ️ VOS LIMITES\n"
+        "• Vous ne gérez QUE vos comptes.\n"
+        "• Max utilisateurs : votre plafond (utilisés / max).\n"
+        "• Tunnels : uniquement ceux autorisés par l'administrateur.\n"
+        "• Expiration : celle de votre compte revendeur.\n\n"
+        "En cas de blocage ou de limite atteinte, contactez votre administrateur."
     )
 
     async def cmd_help_reseller(update,ctx):
@@ -4397,8 +4449,6 @@ if BOT_AVAILABLE:
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
         ok,msg=_r_auth(update,r)
         if not ok:await update.message.reply_text(msg);return
-        try: await update.message.reply_text(RESELLER_WELCOME,parse_mode="Markdown")
-        except Exception: await update.message.reply_text(RESELLER_WELCOME)
         await show_main_reseller(update,ctx)
 
     async def show_main_reseller(update,ctx,edit=False):
