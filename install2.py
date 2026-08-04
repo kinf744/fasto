@@ -3218,6 +3218,23 @@ def _users_by_reseller(proto, rid):
                 users.append((f.name, pp.upper(), _meta_get(f.name,"exp"), float(_meta_get(f.name,"quota") or "0"), used))
     return users
 
+def reseller_data_used(rid):
+    total = 0.0
+    try:
+        for proto in ("xray", "v2ray"):
+            for n, _, _, _, used in _users_by_reseller(proto, rid):
+                total += used
+        if USERDIR.exists():
+            for f in USERDIR.iterdir():
+                if not f.is_file(): continue
+                if _meta_get(f.name, "reseller") != str(rid): continue
+                pp = _meta_get(f.name, "proto")
+                if pp == "ssh":
+                    total += get_ssh_traffic(f.name)
+    except Exception:
+        pass
+    return total
+
 def reseller_extend_expiry(rid, days):
     init_reseller_db()
     conn = sqlite3.connect(str(RESELLER_DB))
@@ -4206,7 +4223,7 @@ Expired resellers auto-deactivated daily by cron.
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
             s="🟢 Active"if r["active"]else"🔴 Inactive";u=reseller_user_count(rid)
             tl=", ".join(json.loads(r["tunnels"]))
-            t=f"🤝 *Reseller #{rid}*\n━━━━━━━━━━━━━━━━\n• Name: `{r['client_name']}`\n• TG ID: `{r['telegram_id']}`\n• Status: {s}\n• Expires: `{r['expires_at']}`\n• Users: `{u}/{r['max_users']}`\n• Data Quota: `{r['data_quota_gb']} GB`\n• Tunnels: `{tl}`"
+            t=f"🤝 *Reseller #{rid}*\n━━━━━━━━━━━━━━━━\n• Name: `{r['client_name']}`\n• TG ID: `{r['telegram_id']}`\n• Status: {s}\n• Expires: `{r['expires_at']}`\n• Users: `{u}/{r['max_users']}`\n• Data Quota: `{fmt_bytes(reseller_data_used(rid))} / {r['data_quota_gb']} GB`\n• Tunnels: `{tl}`"
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Toggle Active",callback_data=f"toggle_reseller_{rid}"),InlineKeyboardButton("🗑 Delete",callback_data=f"del_cfm_reseller_{rid}")],[InlineKeyboardButton("📅 Extend Expiry",callback_data=f"extend_reseller_{rid}"),InlineKeyboardButton("👥 Max Users",callback_data=f"maxu_reseller_{rid}")],[InlineKeyboardButton("💾 Data Quota",callback_data=f"quota_reseller_{rid}"),InlineKeyboardButton("⬅️ Back",callback_data="resellers")]])
             await q.edit_message_text(t,reply_markup=kb,parse_mode="Markdown")
         elif d.startswith("toggle_reseller_"):
