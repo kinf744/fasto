@@ -4127,7 +4127,7 @@ if BOT_AVAILABLE:
         elif d.startswith("setquota_"):
             p=d[9:];ctx.user_data["sq_proto"]=p;users=get_users_by_proto(p)
             if not users: await q.edit_message_text(f"📋 No {p.upper()} users.",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear();return
-            l=[f"💾 *{p.upper()} USERS*\nEnter: `numbers quota_GB`\nExample: `1,3-5 50`\n"]+[f"`{i}.` {n} – exp: {e} – quota: {_meta_get(n,'quota') or '0'} GB"for i,(n,e)in enumerate(users,1)]
+            l=[f"💾 *{p.upper()} USERS*\nEnter: `numbers quota_GB`\nExample: `1,3-5 50`\n"]+[f"`{i}.` {n} – exp: {e} – quota: {_detail_quota(_meta_get(n,'proto') or p, n, _meta_get(n,'quota') or '0')}"for i,(n,e)in enumerate(users,1)]
             await q.edit_message_text("\n".join(l),reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data["sq_users"]=users;ctx.user_data["step"]="set_quota_val"
         elif d=="renew_user": ctx.user_data["step"]="renew_user";await q.edit_message_text("🔄 Username:",reply_markup=back_kb("users"))
         elif d=="lock_user": ctx.user_data["step"]="lock_user";await q.edit_message_text("🔒 Username:",reply_markup=back_kb("users"))
