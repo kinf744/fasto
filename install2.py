@@ -4038,7 +4038,8 @@ if BOT_AVAILABLE:
             ru=sh_bot("free -m | awk '/^Mem:/{printf \"%.1f\", $3/1024}'")
             rp=sh_bot("free -m | awk '/^Mem:/{printf \"%d\", $3*100/$2}'")
             cp=sh_bot("top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d. -f1")
-            t=f"📊 *DASHBOARD*\n━━━━━━━━━━━━━━━━━━━━━\n*USERS*\n• SSH: `{us}`\n• Xray: `{ux}`\n• ZIVPN: `{uz}`\n• Hysteria: `{uh}`\n• V2Ray-DNS: `{uv}`\n\n*RESOURCES*\n• RAM: `{ru}G / {rt}G` ({rp}%)\n• CPU: `{cp}%`"
+            dd, _dw, dm = _vnstat_data()
+            t=f"📊 *DASHBOARD*\n━━━━━━━━━━━━━━━━━━━━━\n*USERS*\n• SSH: `{us}`\n• Xray: `{ux}`\n• ZIVPN: `{uz}`\n• Hysteria: `{uh}`\n• V2Ray-DNS: `{uv}`\n\n*DATA (VNSTAT)*\n• Aujourd'hui: `{dd}`\n• Ce mois: `{dm}`\n\n*RESOURCES*\n• RAM: `{ru}G / {rt}G` ({rp}%)\n• CPU: `{cp}%`"
             await q.edit_message_text(t,reply_markup=back_kb("main"),parse_mode="Markdown")
         elif d=="users": await q.edit_message_text("👥 *User Management*\nSelect an option:",reply_markup=users_kb(),parse_mode="Markdown")
         elif d=="services":
