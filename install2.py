@@ -490,13 +490,16 @@ def _configure_resolv():
         sh("chattr +i /etc/resolv.conf 2>/dev/null || true")
 
 def _ensure_nat_catchall():
+    # Seulement nécessaire si le tunnel UDP-Custom est installé (port 36712)
+    if Path("/etc/udp-custom").exists() or sh("command -v udp-custom 2>/dev/null") != "":
+        _deploy_nat_catchall()
+
+def _deploy_nat_catchall():
     iface = get_main_iface()
     nft_src = f"""table inet udp-custom-catchall {{
     chain prerouting {{
         type nat hook prerouting priority -50; policy accept;
-        iifname "{iface}" meta nfproto ipv4 udp dport {{ 53, 5300, 5353, 5354, 5667, 7100, 7200, 7300, 20000, 36712 }} return
-        iifname "{iface}" meta nfproto ipv4 udp dport 6000-19999 return
-        iifname "{iface}" meta nfproto ipv4 udp dport 20000-50000 return
+        iifname "{iface}" meta nfproto ipv4 udp dport {{ 53, 5300 }} return
         iifname "{iface}" meta nfproto ipv4 udp dport 1-65535 dnat to :36712
     }}
 }}"""
@@ -894,7 +897,7 @@ def install_udp_custom():
     r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement udp-custom.{C['RST']}");return
     Path("/etc/udp-custom").mkdir(parents=True, exist_ok=True)
-    Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","exclude_port":[53,5300,5353,5354,5667,20000,4466,7100,7200,7300],"timeout":600,"auth":{"mode":"passwords","config":[]}}')
+    Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","exclude_port":[53,5300],"timeout":600,"auth":{"mode":"passwords","config":[]}}')
     Path("/etc/udp-custom/users.list").touch()
     Path("/etc/udp-custom/users.list").chmod(0o600)
     svc = """[Unit]
@@ -915,7 +918,7 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/udp-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
     iface = get_main_iface()
-    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport {{ 53,5300,5353,5354,5667,20000,7100,7200,7300 }} return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
+    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 53 return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
     if sh("systemctl is-active udp-custom.service 2>/dev/null")=="active":
         IP = sh("hostname -I | awk '{print $1}'")
         print(f" {C['GREEN']}✔ UDP-Custom installé et actif sur {IP}:36712{C['RST']}")
