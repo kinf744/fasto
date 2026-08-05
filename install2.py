@@ -4224,7 +4224,7 @@ Expired resellers auto-deactivated daily by cron.
             s="🟢 Active"if r["active"]else"🔴 Inactive";u=reseller_user_count(rid)
             tl=", ".join(json.loads(r["tunnels"]))
             t=f"🤝 *Reseller #{rid}*\n━━━━━━━━━━━━━━━━\n• Name: `{r['client_name']}`\n• TG ID: `{r['telegram_id']}`\n• Status: {s}\n• Expires: `{r['expires_at']}`\n• Users: `{u}/{r['max_users']}`\n• Data Quota: `{fmt_bytes(reseller_data_used(rid))} / {r['data_quota_gb']} GB`\n• Tunnels: `{tl}`"
-            kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Toggle Active",callback_data=f"toggle_reseller_{rid}"),InlineKeyboardButton("🗑 Delete",callback_data=f"del_cfm_reseller_{rid}")],[InlineKeyboardButton("📅 Extend Expiry",callback_data=f"extend_reseller_{rid}"),InlineKeyboardButton("👥 Max Users",callback_data=f"maxu_reseller_{rid}")],[InlineKeyboardButton("💾 Data Quota",callback_data=f"quota_reseller_{rid}"),InlineKeyboardButton("⬅️ Back",callback_data="resellers")]])
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Toggle Active",callback_data=f"toggle_reseller_{rid}"),InlineKeyboardButton("🗑 Delete",callback_data=f"del_cfm_reseller_{rid}")],[InlineKeyboardButton("📅 Extend Expiry",callback_data=f"extend_reseller_{rid}"),InlineKeyboardButton("👥 Max Users",callback_data=f"maxu_reseller_{rid}")],[InlineKeyboardButton("💾 Data Quota",callback_data=f"quota_reseller_{rid}"),InlineKeyboardButton("🔑 Access Code",callback_data=f"code_reseller_{rid}")],[InlineKeyboardButton("⬅️ Back",callback_data="resellers")]])
             await q.edit_message_text(t,reply_markup=kb,parse_mode="Markdown")
         elif d.startswith("toggle_reseller_"):
             rid=int(d[16:]);reseller_toggle(rid);r=reseller_get(rid)
@@ -4252,6 +4252,15 @@ Expired resellers auto-deactivated daily by cron.
             if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
             ctx.user_data["edit_rid"]=rid;ctx.user_data["step"]="edit_quota"
             await q.edit_message_text(f"💾 New *data quota (GB)* for `{r['client_name']}` (current: {r['data_quota_gb']}):",reply_markup=back_kb("resellers"),parse_mode="Markdown")
+        elif d.startswith("code_reseller_"):
+            rid=int(d[14:]);r=reseller_get(rid)
+            if not r:await q.edit_message_text("❌ Reseller not found.",reply_markup=back_kb("resellers"));return
+            cur=r["access_code"] or "—"
+            t=f"🔑 *Access Code — Reseller #{rid}*\n━━━━━━━━━━━━━━━━\n• Name: `{r['client_name']}`\n• Current code: `{cur}`\n\n" \
+              "Send the new access code (or `clear` to remove it):"
+            ctx.user_data["code_rid"]=rid;ctx.user_data["step"]="edit_code"
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data=f"view_reseller_{rid}")]])
+            await q.edit_message_text(t,reply_markup=kb,parse_mode="Markdown")
     async def text_handler(update,ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Unauthorized.");return
         text=update.message.text.strip();step=ctx.user_data.get("step","");proto=ctx.user_data.get("cr_proto","")
@@ -4383,6 +4392,17 @@ Expired resellers auto-deactivated daily by cron.
             if reseller_extend_expiry(rid,int(text)):
                 r=reseller_get(rid);await reply_cls(update,ctx,f"✅ `{r['client_name']}` extended → `{r['expires_at']}`",reply_markup=back_kb("resellers"),parse_mode="Markdown")
             else:await reply_cls(update,ctx,"❌ Reseller not found.",reply_markup=back_kb("resellers"))
+            ctx.user_data.clear()
+        elif step=="edit_code":
+            rid=ctx.user_data.get("code_rid",0);r=reseller_get(rid)
+            if not r:await reply_cls(update,ctx,"❌ Reseller not found.",reply_markup=back_kb("resellers"));ctx.user_data.clear();return
+            code="" if text.strip().lower()=="clear"else text.strip()
+            init_reseller_db()
+            conn=sqlite3.connect(str(RESELLER_DB))
+            conn.execute("UPDATE resellers SET access_code=? WHERE id=?",(code,rid))
+            conn.commit();conn.close()
+            msg=f"🔑 Access code for `{r['client_name']}`: `{code}`"if code else f"🔑 Access code removed for `{r['client_name']}`."
+            await reply_cls(update,ctx,msg,reply_markup=back_kb("resellers"),parse_mode="Markdown")
             ctx.user_data.clear()
         elif ctx.user_data.get("cr_step")=="name":
             crd=ctx.user_data.get("cr_reseller",{});crd["name"]=text;ctx.user_data["cr_reseller"]=crd
