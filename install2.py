@@ -1364,12 +1364,13 @@ frontend xray-ntls
     tcp-request inspect-delay 5s
     tcp-request content accept if {{ req.len ge 21 }}
     acl is_h2         req.payload(0,3) -m bin 505249
-    acl is_http       req.payload(0,4) -m bin 474554202f
+    acl is_http       req.payload(0,5) -m bin 474554202f
     acl is_post       req.payload(0,4) -m bin 504f5354
     acl is_vless      req.payload(0,1) -m bin 00
+    acl is_vmess      req.payload(0,1) -m bin 01
     acl is_vless_ws   req.payload(0,11) -m bin 474554202f766c65737320
-    acl is_vmess_ws   req.payload(0,12) -m bin 474554202f766d65737320
-    acl is_trojan_ws  req.payload(0,13) -m bin 474554202f74726f6a616e20
+    acl is_vmess_ws   req.payload(0,11) -m bin 474554202f766d65737320
+    acl is_trojan_ws  req.payload(0,12) -m bin 474554202f74726f6a616e20
     acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
     acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
     use_backend grpc_router        if is_h2
@@ -1377,7 +1378,8 @@ frontend xray-ntls
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
-    use_backend xray-vmess-tcp     if !is_vless
+    use_backend xray-vmess-tcp     if is_vmess
+    use_backend xray-trojan-tcp    if !is_vless
     use_backend v2ray-tcp          if is_v2ray_ukj or is_v2ray_opl
     default_backend xray-vless-tcp
 
@@ -1386,12 +1388,13 @@ frontend xray-tls
     tcp-request inspect-delay 5s
     tcp-request content accept if {{ req.len ge 21 }}
     acl is_h2         req.payload(0,3) -m bin 505249
-    acl is_http       req.payload(0,4) -m bin 474554202f
+    acl is_http       req.payload(0,5) -m bin 474554202f
     acl is_post       req.payload(0,4) -m bin 504f5354
     acl is_vless      req.payload(0,1) -m bin 00
+    acl is_vmess      req.payload(0,1) -m bin 01
     acl is_vless_ws   req.payload(0,11) -m bin 474554202f766c65737320
-    acl is_vmess_ws   req.payload(0,12) -m bin 474554202f766d65737320
-    acl is_trojan_ws  req.payload(0,13) -m bin 474554202f74726f6a616e20
+    acl is_vmess_ws   req.payload(0,11) -m bin 474554202f766d65737320
+    acl is_trojan_ws  req.payload(0,12) -m bin 474554202f74726f6a616e20
     acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
     acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
     use_backend grpc_router        if is_h2
@@ -1399,7 +1402,7 @@ frontend xray-tls
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
     use_backend grpc_router        if is_http or is_post
-    use_backend xray-vmess-tcp     if !is_vless
+    use_backend xray-vmess-tcp     if is_vmess
     use_backend xray-trojan-tcp    if !is_vless
     use_backend v2ray-tcp          if is_v2ray_ukj or is_v2ray_opl
     default_backend xray-vless-tcp
@@ -3872,14 +3875,13 @@ def build_trojan_details(user, pwd, exp, quota):
     qs = _detail_quota("trojan", user, quota)
     return (chr(0x1F517) + " *TROJAN USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `TROJAN`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " Password: `"+pwd+"`\n\n"
-        "*PATHS:*\n" + D + " WS: `/trojan`\n" + D + " XHTTP: `/trojan-xhttp`\n" + D + " HTTPUpgrade: `/trojan-hupgrade`\n" + D + " gRPC: `/trojan-grpc`\n\n"
+        "*PATHS:*\n" + D + " WS: `/trojan`\n" + D + " XHTTP: `/trojan-xhttp`\n" + D + " gRPC: `/trojan-grpc`\n\n"
         "*CONNECTION LINKS*\n\n1" + KE + " TLS/WS :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=ws&path=/trojan&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
         "2" + KE + " NTLS/WS :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=ws&path=/trojan&host="+dom+"#"+user+"`\n\n"
         "3" + KE + " TLS/XHTTP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=xhttp&path=/trojan-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "4" + KE + " TLS/HTTPUpgrade :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "5" + KE + " TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
-        "6" + KE + " NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
-        "7" + KE + " TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+        "4" + KE + " TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
+        "5" + KE + " NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
+        "6" + KE + " TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
 
 def build_vmess_details(user, uuid, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
