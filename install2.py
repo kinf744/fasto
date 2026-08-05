@@ -4457,11 +4457,33 @@ def run_bot():
 
 # ── Reseller Bot ─────────────────────────────────────────────────────────────────
 if BOT_AVAILABLE:
+    def _r_access_path(rid):
+        return STATEDIR / f"reseller_access_{rid}.json"
+
+    def _r_access_authorized(rid, tgid):
+        try:
+            p = _r_access_path(rid)
+            if not p.exists(): return False
+            return str(tgid) in json.loads(p.read_text()).get("authorized", [])
+        except: return False
+
+    def _r_access_grant(rid, tgid):
+        try:
+            STATEDIR.mkdir(parents=True, exist_ok=True)
+            p = _r_access_path(rid)
+            d = json.loads(p.read_text()) if p.exists() else {"authorized": []}
+            if str(tgid) not in d["authorized"]: d["authorized"].append(str(tgid))
+            p.write_text(json.dumps(d, indent=2))
+        except Exception as e:
+            log.error(f"access grant failed: {e}")
+
     def _r_auth(update, r):
-        if not r or not r["active"]: return False, "⛔ Reseller account disabled."
-        if r["expires_at"] < date.today().isoformat(): return False, "⛔ Account expired, contact admin."
-        if r["telegram_id"] != 0 and update.effective_user.id != r["telegram_id"]: return False, "⛔ Unauthorized."
-        return True, ""
+        if not r or not r["active"]: return "deny", "⛔ Reseller account disabled."
+        if r["expires_at"] < date.today().isoformat(): return "deny", "⛔ Account expired, contact admin."
+        if r["telegram_id"] != 0 and update.effective_user.id != r["telegram_id"]: return "deny", "⛔ Unauthorized."
+        if r["access_code"] and r["telegram_id"] == 0 and not _r_access_authorized(r["id"], update.effective_user.id):
+            return "code", ""
+        return "ok", ""
 
     RESELLER_HELP = (
         "🤝 *Reseller Bot* — Aide complète\n"
@@ -4500,14 +4522,20 @@ if BOT_AVAILABLE:
     async def cmd_help_reseller(update,ctx):
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
         ok,msg=_r_auth(update,r)
-        if not ok:await update.message.reply_text(msg);return
+        if ok=="code":
+            ctx.user_data["r_step"]="r_access";await update.message.reply_text("🔑 Enter access code:",parse_mode="Markdown")
+            return
+        if ok!="ok":await update.message.reply_text(msg);return
         try: await update.message.reply_text(RESELLER_HELP,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_main")]]),parse_mode="Markdown")
         except Exception: await update.message.reply_text(RESELLER_HELP)
 
     async def start_reseller(update,ctx):
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
         ok,msg=_r_auth(update,r)
-        if not ok:await update.message.reply_text(msg);return
+        if ok=="code":
+            ctx.user_data["r_step"]="r_access";await update.message.reply_text("🔑 Enter access code:",parse_mode="Markdown")
+            return
+        if ok!="ok":await update.message.reply_text(msg);return
         await show_main_reseller(update,ctx)
 
     async def show_main_reseller(update,ctx,edit=False):
@@ -4545,7 +4573,10 @@ if BOT_AVAILABLE:
         q=update.callback_query;await q.answer()
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
         ok,msg=_r_auth(update,r)
-        if not ok:await q.edit_message_text(msg);return
+        if ok=="code":
+            ctx.user_data["r_step"]="r_access";await q.edit_message_text("🔑 Enter access code:",parse_mode="Markdown")
+            return
+        if ok!="ok":await q.edit_message_text(msg);return
         d=q.data
         if d=="r_main":await show_main_reseller(update,ctx,edit=True)
         elif d=="r_users":
@@ -4620,10 +4651,21 @@ if BOT_AVAILABLE:
 
     async def text_handler_reseller(update,ctx):
         rid=ctx.bot_data.get("reseller_id",0);r=reseller_get(rid)
+        text=update.message.text.strip()
+        if ctx.user_data.get("r_step")=="r_access":
+            if r and r["access_code"] and text==r["access_code"]:
+                _r_access_grant(rid, update.effective_user.id)
+                ctx.user_data.pop("r_step",None)
+                await show_main_reseller(update,ctx)
+            else:
+                await update.message.reply_text("❌ Wrong access code, try again:",parse_mode="Markdown")
+            return
         ok,msg=_r_auth(update,r)
-        if not ok:await update.message.reply_text(msg);return
-        text=update.message.text.strip();step=ctx.user_data.get("r_step","");proto=ctx.user_data.get("r_proto","")
-        text=update.message.text.strip();step=ctx.user_data.get("r_step","");proto=ctx.user_data.get("r_proto","")
+        if ok=="code":
+            ctx.user_data["r_step"]="r_access";await update.message.reply_text("🔑 Enter access code:",parse_mode="Markdown")
+            return
+        if ok!="ok":await update.message.reply_text(msg);return
+        step=ctx.user_data.get("r_step","");proto=ctx.user_data.get("r_proto","")
         rid2=ctx.user_data.get("r_rid",rid)
         mid=ctx.user_data.get("r_last_msg_id")
         if mid:
