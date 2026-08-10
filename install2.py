@@ -624,7 +624,10 @@ def ensure_slowdns_prio():
     if not os.path.exists(nf):
         return
     rc, out, _ = nft(["list", "chain", "inet", "slowdns", "prerouting"])
-    good = rc == 0 and "-150" in out and "-100" not in out
+    # nft affiche la priorite -150 sous le nom "mangle" et -100 sous "dstnat".
+    # On accepte donc les deux rendus (-150 explicite ou "mangle") et on rejette
+    # explicitement "dstnat" pour ne pas recharger la table a chaque minute.
+    good = rc == 0 and ("-150" in out or "mangle" in out) and "dstnat" not in out
     if not good:
         nft(["delete", "table", "inet", "slowdns"])
         r2, _, e2 = nft(["-f", nf])
