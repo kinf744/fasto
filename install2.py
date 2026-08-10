@@ -2210,7 +2210,7 @@ def renew_user(user, days):
     if not (USERDIR / user).exists(): return 2
     proto = _meta_get(user, "proto"); exp = exp_in_days(days)
     keep = {}
-    for k in ("used","quota_hit","locked","reseller","shell","passwd_set"):
+    for k in ("used","quota_hit","locked","exp_lock","reseller","shell","passwd_set"):
         v = _meta_get(user, k)
         if v: keep[k] = v
     write_meta(user, proto, exp, _meta_get(user,"limit"), _meta_get(user,"pass"), _meta_get(user,"uuid"), _meta_get(user,"quota"))
@@ -2218,6 +2218,7 @@ def renew_user(user, days):
     if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
     elif proto == "v2raydns": v2raydns_apply()
     elif proto in ("vmess","vless","trojan","xray"): xray_build_config()
+    if proto == "ssh": _ssh_expiry_unlock(user)
     return 0
 
 def set_user_quota(user, quota):
@@ -2273,6 +2274,32 @@ def delete_expired_users():
         e = _meta_get(f.name, "exp")
         if e and e < today and delete_user(f.name) == 0: n += 1
     return n
+
+def _ssh_expiry_enforce():
+    """Lock SSH accounts whose expiry has passed. Dropbear ignores shadow expiry
+    (no PAM), so the only reliable block is `passwd -l`. Called from the 5-min cron."""
+    today = date.today().isoformat()
+    n = 0
+    if not USERDIR.exists(): return 0
+    for f in list(USERDIR.iterdir()):
+        if not f.is_file(): continue
+        user = f.name
+        if _meta_get(user, "proto") != "ssh": continue
+        e = _meta_get(user, "exp")
+        if not e or e == "permanent" or e >= today: continue
+        if _meta_get(user, "locked") == "1": continue
+        sh(f"passwd -l {user} 2>/dev/null || true")
+        _meta_set(user, "locked", "1")
+        _meta_set(user, "exp_lock", "1")
+        n += 1
+    return n
+
+def _ssh_expiry_unlock(user):
+    if not user or not (USERDIR / user).is_file(): return
+    if _meta_get(user, "exp_lock") != "1": return
+    sh(f"passwd -u {user} 2>/dev/null || true")
+    _meta_set(user, "locked", "0")
+    _meta_set(user, "exp_lock", "0")
 
 def vmess_link_b64(uuid, host, port, net, tls, path_or_svc, ps, sni):
     obj = {"v":"2","ps":ps,"add":host,"port":str(port),"id":uuid,"aid":"0","scy":"auto",
@@ -3700,6 +3727,7 @@ def _ssh_tracker_loop():
 def _ssh_quota_sync():
     _install_ssh_banner_shell()
     _ssh_tracker_sync_once()
+    _ssh_expiry_enforce()
     return 0
 
 def _install_ssh_banner_shell():
