@@ -515,6 +515,8 @@ def _deploy_nat_catchall():
         exclude.append("20000-50000")
     if sh("command -v zivpn 2>/dev/null") != "" or Path("/etc/zivpn").exists():
         exclude.append("6000-19999")
+    if sh("command -v falconserver 2>/dev/null") != "" or Path("/etc/falcon").exists():
+        exclude.append("1194")
     excl_str = ", ".join(str(p) for p in exclude)
     nft_src = f"""table inet udp-custom-catchall {{
     chain prerouting {{
@@ -1052,7 +1054,7 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/udp-custom.service").write_text(svc)
     sh("systemctl daemon-reload && systemctl enable --now udp-custom.service 2>/dev/null || true")
     iface = get_main_iface()
-    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 53 return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
+    _deploy_nft("udp-custom", f'table inet udp-custom {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 36712 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport {{ 53, 5300 }} return; iifname "{iface}" udp dport 2900-5600 dnat to :36712; }}; }}')
     if sh("systemctl is-active udp-custom.service 2>/dev/null")=="active":
         IP = sh("hostname -I | awk '{print $1}'")
         print(f" {C['GREEN']}✔ UDP-Custom installé et actif sur {IP}:36712{C['RST']}")
@@ -1074,6 +1076,15 @@ def uninstall_udp_custom():
     sh("systemctl enable nftables-nat.service >/dev/null 2>&1 || true")
     sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ UDP-Custom désinstallé.{C['RST']}")
+
+def _ask_slowdns_mtu():
+    mtu_file = Path("/etc/slowdns/mtu")
+    cur = mtu_file.read_text().strip() if mtu_file.exists() else "512"
+    print(f"\n {C['YELLOW']}⚠ MTU du tunnel SlowDNS (recommandé: 512, 1200, 1400).{C['RST']}")
+    m = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}MTU (def {cur}): {C['RST']}").strip()
+    if not m.isdigit() or int(m) < 100:
+        m = cur if cur.isdigit() else "512"
+    return m
 
 def install_slowdns():
     if sh("command -v dnstt-server 2>/dev/null") != "" and Path("/etc/systemd/system/dnsdist.service").exists() and Path("/etc/systemd/system/slowdns-ns4.service").exists(): return
@@ -1115,13 +1126,15 @@ def install_slowdns():
     (DIR / "ns.conf").write_text(ns4 + "\n")
     (DIR / "nv4/ns.conf").write_text(nv4 + "\n")
     print(f" {C['GREEN']}✔ SlowDNS config: NS4={ns4}, NV4={nv4}{C['RST']}")
-    Path(DIR / "install.env").write_text("MODE=man\nNS4=%s\nNV4=%s\n" % (ns4, nv4))
+    mtu = _ask_slowdns_mtu()
+    Path(DIR / "install.env").write_text("MODE=man\nNS4=%s\nNV4=%s\nMTU=%s\n" % (ns4, nv4, mtu))
+    (DIR / "mtu").write_text(str(mtu) + "\n")
 
     PORT1 = 5353; PORT2 = 5354
     DNSDIST_PORT = 5300
     _ensure_ssh_lb_haproxy()
-    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT1} -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:1092\n"
-    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT2} -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
+    n4s = f"#!/bin/bash\nNS=$(cat /etc/slowdns/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT1} -mtu {mtu} -privkey-file /etc/slowdns/server.key $NS 127.0.0.1:1092\n"
+    nv4s = f"#!/bin/bash\nNV4=$(cat /etc/slowdns/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp 0.0.0.0:{PORT2} -mtu {mtu} -privkey-file /etc/slowdns/server.key $NV4 127.0.0.1:5401\n"
     Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
     Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
     for f in ["/usr/local/bin/slowdns-ns4-start.sh","/usr/local/bin/slowdns-nv4-start.sh"]: Path(f).chmod(0o755)
@@ -1233,24 +1246,40 @@ def configure_slowdns():
     if not DIR.exists(): return
     ns4_cur = (DIR / "ns.conf").read_text().strip() if (DIR / "ns.conf").exists() else "non défini"
     nv4_cur = (DIR / "nv4/ns.conf").read_text().strip() if (DIR / "nv4/ns.conf").exists() else "non défini"
+    mtu_cur = (DIR / "mtu").read_text().strip() if (DIR / "mtu").exists() else "512"
     print(f"NS4 actuel: {ns4_cur}")
     print(f"NV4 actuel: {nv4_cur}")
+    print(f"MTU actuel: {mtu_cur}")
     new_ns4 = input("Nouveau NS4 (vide = inchangé): ").strip()
     new_nv4 = input("Nouveau NV4 (vide = inchangé): ").strip()
+    new_mtu = input(f"Nouveau MTU (vide = inchangé, recommandé 512/1200/1400): ").strip()
+    mtu_changed = bool(new_mtu and new_mtu.isdigit() and int(new_mtu) >= 100 and new_mtu != mtu_cur)
+    if mtu_changed:
+        mtu_cur = new_mtu
+        (DIR / "mtu").write_text(mtu_cur + "\n")
     if new_ns4 and new_ns4 != ns4_cur:
         (DIR / "ns.conf").write_text(new_ns4 + "\n")
-        n4s = f"#!/bin/bash\nNS=$(cat {DIR}/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5353 -privkey-file {DIR}/server.key $NS 127.0.0.1:109\n"
+        n4s = f"#!/bin/bash\nNS=$(cat {DIR}/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5353 -mtu {mtu_cur} -privkey-file {DIR}/server.key $NS 127.0.0.1:109\n"
         Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
         Path("/usr/local/bin/slowdns-ns4-start.sh").chmod(0o755)
         sh("systemctl restart slowdns-ns4 2>/dev/null || true")
         print(f"NS4 mis à jour: {new_ns4}")
     if new_nv4 and new_nv4 != nv4_cur:
         (DIR / "nv4/ns.conf").write_text(new_nv4 + "\n")
-        nv4s = f"#!/bin/bash\nNV4=$(cat {DIR}/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5354 -privkey-file {DIR}/server.key $NV4 127.0.0.1:5401\n"
+        nv4s = f"#!/bin/bash\nNV4=$(cat {DIR}/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5354 -mtu {mtu_cur} -privkey-file {DIR}/server.key $NV4 127.0.0.1:5401\n"
         Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
         Path("/usr/local/bin/slowdns-nv4-start.sh").chmod(0o755)
         sh("systemctl restart slowdns-nv4 2>/dev/null || true")
         print(f"NV4 mis à jour: {new_nv4}")
+    if mtu_changed:
+        n4s = f"#!/bin/bash\nNS=$(cat {DIR}/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5353 -mtu {mtu_cur} -privkey-file {DIR}/server.key $NS 127.0.0.1:109\n"
+        nv4s = f"#!/bin/bash\nNV4=$(cat {DIR}/nv4/ns.conf)\nexec /usr/local/bin/dnstt-server -udp :5354 -mtu {mtu_cur} -privkey-file {DIR}/server.key $NV4 127.0.0.1:5401\n"
+        Path("/usr/local/bin/slowdns-ns4-start.sh").write_text(n4s)
+        Path("/usr/local/bin/slowdns-nv4-start.sh").write_text(nv4s)
+        for f in ["/usr/local/bin/slowdns-ns4-start.sh","/usr/local/bin/slowdns-nv4-start.sh"]: Path(f).chmod(0o755)
+        sh("systemctl restart slowdns-ns4 2>/dev/null || true")
+        sh("systemctl restart slowdns-nv4 2>/dev/null || true")
+        print(f"MTU mis à jour: {mtu_cur}")
     if new_ns4 or new_nv4:
         ns4 = (DIR / "ns.conf").read_text().strip() if (DIR / "ns.conf").exists() else ns4_cur
         nv4 = (DIR / "nv4/ns.conf").read_text().strip() if (DIR / "nv4/ns.conf").exists() else nv4_cur
@@ -1319,12 +1348,19 @@ def xray_gen_config():
     }
     XRAY_CONFIG.write_text(json.dumps(config, indent=2))
 
-def _ensure_ssh_lb_haproxy():
-    cfg = Path("/etc/haproxy/haproxy.cfg")
-    if not cfg.exists(): return
-    if "ssh-lb" in cfg.read_text(): return
-    with cfg.open("a") as f:
-        f.write("""
+SSH_HAPROXY_CFG = """global
+    daemon
+    maxconn 65535
+
+defaults
+    mode tcp
+    option dontlognull
+    timeout connect 5s
+    timeout client 86400s
+    timeout server 86400s
+    timeout tunnel 86400s
+    retries 3
+
 frontend ssh-lb
     bind 127.0.0.1:1092
     default_backend ssh-mixed
@@ -1333,8 +1369,61 @@ backend ssh-mixed
     balance roundrobin
     server dropbear 127.0.0.1:109 check
     server sshd 127.0.0.1:22 check
-""")
-    sh("systemctl reload haproxy 2>/dev/null || true")
+"""
+
+SSH_HAPROXY_SVC = """[Unit]
+Description=HAProxy SSH LB (SlowDNS/SSH tunnels - independent of Xray)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Service]
+Type=forking
+PIDFile=/run/haproxy-ssh.pid
+ExecStart=/usr/sbin/haproxy -f /etc/haproxy/ssh-haproxy.cfg -p /run/haproxy-ssh.pid
+ExecReload=/usr/sbin/haproxy -f /etc/haproxy/ssh-haproxy.cfg -c -q
+ExecReload=/bin/kill -USR2 $MAINPID
+KillMode=mixed
+Restart=always
+RestartSec=3
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+def _ensure_ssh_lb_haproxy():
+    ssh_cfg = Path("/etc/haproxy/ssh-haproxy.cfg")
+    if not ssh_cfg.exists() or "ssh-lb" not in ssh_cfg.read_text():
+        Path("/etc/haproxy").mkdir(parents=True, exist_ok=True)
+        ssh_cfg.write_text(SSH_HAPROXY_CFG)
+    Path("/etc/systemd/system/haproxy-ssh.service").write_text(SSH_HAPROXY_SVC)
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl enable --now haproxy-ssh 2>/dev/null || true")
+    main_cfg = Path("/etc/haproxy/haproxy.cfg")
+    if main_cfg.exists() and "ssh-lb" in main_cfg.read_text():
+        _strip_ssh_lb(main_cfg)
+        sh("systemctl reload haproxy 2>/dev/null || true")
+
+def _strip_ssh_lb(cfg_path):
+    try:
+        lines = Path(cfg_path).read_text().splitlines()
+    except: return
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if line.strip().startswith(("frontend ssh-lb", "backend ssh-mixed")):
+            i += 1
+            while i < n and (not lines[i].strip() or lines[i].startswith(("    ", "\t"))):
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    txt = "\n".join(out)
+    txt = re.sub(r"\n{3,}", "\n\n", txt)
+    Path(cfg_path).write_text(txt.strip() + "\n")
 
 def xray_gen_haproxy():
     PEM_DIR = "/etc/xray"
@@ -1464,15 +1553,6 @@ backend xray-vless-hupgrade
     server s1 127.0.0.1:10018
 backend v2ray-tcp
     server s1 127.0.0.1:5401
-
-frontend ssh-lb
-    bind 127.0.0.1:1092
-    default_backend ssh-mixed
-
-backend ssh-mixed
-    balance roundrobin
-    server dropbear 127.0.0.1:109 check
-    server sshd 127.0.0.1:22 check
 """
     Path("/etc/haproxy/haproxy.cfg").write_text(haproxy_cfg)
     _ensure_ssh_lb_haproxy()
