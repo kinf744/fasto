@@ -1564,14 +1564,29 @@ def xray_build_config():
     XRAY_CONFIG = Path("/etc/xray/config.json")
     if not XRAY_CONFIG.exists(): return
     try:
+        XRAY_USERS.parent.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        fresh = {"vmess": [], "vless": [], "trojan": [], "shadow": []}
+        if USERDIR.exists():
+            for f in USERDIR.iterdir():
+                if not f.is_file(): continue
+                p = _meta_get(f.name, "proto")
+                if p not in ("vmess", "vless", "trojan"): continue
+                exp = _meta_get(f.name, "exp")
+                if exp and exp < today: continue
+                if is_locked(f.name): continue
+                q = float(_meta_get(f.name, "quota") or "0")
+                if p in ("vmess","vless"):
+                    uuid = _meta_get(f.name, "uuid")
+                    if not uuid: continue
+                    fresh[p].append({"id": uuid, "email": f.name, "level": 0, "expire": exp, "quota": q})
+                elif p == "trojan":
+                    pw = _meta_get(f.name, "pass")
+                    if not pw: continue
+                    fresh["trojan"].append({"password": pw, "email": f.name, "level": 0, "expire": exp, "quota": q})
+        XRAY_USERS.write_text(json.dumps(fresh, indent=2))
+        users = fresh
         config = json.loads(XRAY_CONFIG.read_text())
-        users = json.loads(XRAY_USERS.read_text()) if XRAY_USERS.exists() else {}
-        for p in ["vmess","vless","trojan","shadow"]:
-            for u in users.get(p, []):
-                if "uuid" in u and "id" not in u:
-                    u["id"] = u.pop("uuid")
-                elif "uuid" in u and p == "trojan":
-                    u["password"] = u.pop("uuid")
         tag_map = {
             "VMess-TCP":"vmess","VMess-WS":"vmess","VMess-TLS":"vmess","VMess-WSS":"vmess","VMess-XHTTP":"vmess","VMess-gRPC":"vmess",
             "VLESS-TCP":"vless","VLESS-WS":"vless","VLESS-TLS":"vless","VLESS-WSS":"vless","VLESS-XHTTP":"vless","VLESS-gRPC":"vless","VLESS-HUpgrade":"vless",
@@ -1716,7 +1731,8 @@ WantedBy=multi-user.target
         "*/3 * * * * systemctl is-active --quiet dropbear-custom || systemctl restart dropbear-custom >> /var/log/dropbear-watchdog.log 2>&1",
         "0 0 1 * * vnstat --reset 2>/dev/null || true",
         "0 6 * * * /usr/local/bin/kighmu-bot --reseller-cleanup 2>/dev/null || true",
-        "*/5 * * * * /usr/local/bin/kighmu --ssh-quota-sync 2>/dev/null || true"
+        "*/5 * * * * /usr/local/bin/kighmu-bot --ssh-quota-sync 2>/dev/null || true",
+        "*/5 * * * * /usr/local/bin/kighmu-bot --quota-enforce 2>/dev/null || true"
     ]
     existing = sh("crontab -l 2>/dev/null")
     for cmd in crontab_cmds:
@@ -2219,8 +2235,22 @@ def renew_user(user, days):
     write_meta(user, proto, exp, _meta_get(user,"limit"), _meta_get(user,"pass"), _meta_get(user,"uuid"), _meta_get(user,"quota"))
     for k, v in keep.items(): _meta_set(user, k, v)
     if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
-    elif proto == "v2raydns": v2raydns_apply()
-    elif proto in ("vmess","vless","trojan","xray"): xray_build_config()
+    elif proto == "v2raydns":
+        if _meta_get(user,"locked")=="1" and (_meta_get(user,"exp_lock")=="1" or _meta_get(user,"quota_hit")=="1"):
+            _meta_set(user,"exp_lock","0"); _meta_set(user,"quota_hit","0"); _meta_set(user,"locked","0")
+        v2raydns_apply()
+    elif proto in ("vmess","vless","trojan","xray"):
+        if _meta_get(user,"locked")=="1" and (_meta_get(user,"exp_lock")=="1" or _meta_get(user,"quota_hit")=="1"):
+            _meta_set(user,"exp_lock","0"); _meta_set(user,"quota_hit","0"); _meta_set(user,"locked","0")
+        xray_build_config()
+    elif proto == "zivpn":
+        if _meta_get(user,"locked")=="1" and _meta_get(user,"exp_lock")=="1":
+            _meta_set(user,"exp_lock","0"); _meta_set(user,"locked","0")
+        zivpn_apply()
+    elif proto == "hysteria":
+        if _meta_get(user,"locked")=="1" and _meta_get(user,"exp_lock")=="1":
+            _meta_set(user,"exp_lock","0"); _meta_set(user,"locked","0")
+        hysteria_apply()
     if proto == "ssh": _ssh_expiry_unlock(user)
     return 0
 
@@ -2229,9 +2259,12 @@ def set_user_quota(user, quota):
     _meta_set(user, "quota", str(quota))
     proto=_meta_get(user,"proto")
     if proto in ("vmess","vless","trojan","xray"):
-        sh(f"jq '(..|select(.email?==\"{user}\").quota) |= {float(quota)}' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
+        if _meta_get(user,"quota_hit")=="1":
+            _meta_set(user,"quota_hit","0"); _meta_set(user,"locked","0")
         xray_build_config()
     elif proto=="v2raydns":
+        if _meta_get(user,"quota_hit")=="1":
+            _meta_set(user,"quota_hit","0"); _meta_set(user,"locked","0")
         v2raydns_apply()
     elif proto=="ssh":
         if _meta_get(user,"quota_hit")=="1":
@@ -2242,15 +2275,21 @@ def set_user_quota(user, quota):
 
 def lock_user(user):
     if not (USERDIR / user).exists(): return 2
-    if _meta_get(user,"proto") == "ssh": sh(f"passwd -l {user} &>/dev/null")
+    proto = _meta_get(user, "proto")
+    if proto == "ssh": sh(f"passwd -l {user} &>/dev/null")
     _meta_set(user, "locked", "1")
-    if _meta_get(user,"proto") == "v2raydns": v2raydns_apply()
+    if proto == "v2raydns": v2raydns_apply()
+    elif proto == "zivpn": zivpn_apply()
+    elif proto == "hysteria": hysteria_apply()
     return 0
 def unlock_user(user):
     if not (USERDIR / user).exists(): return 2
-    if _meta_get(user,"proto") == "ssh": sh(f"passwd -u {user} &>/dev/null")
+    proto = _meta_get(user, "proto")
+    if proto == "ssh": sh(f"passwd -u {user} &>/dev/null")
     _meta_set(user, "locked", "0")
-    if _meta_get(user,"proto") == "v2raydns": v2raydns_apply()
+    if proto == "v2raydns": v2raydns_apply()
+    elif proto == "zivpn": zivpn_apply()
+    elif proto == "hysteria": hysteria_apply()
     return 0
 
 def change_password(user, newpass=""):
@@ -2258,9 +2297,7 @@ def change_password(user, newpass=""):
     proto = _meta_get(user, "proto"); newpass = newpass or gen_pass()
     if proto == "ssh": sh(f"echo '{user}:{newpass}' | chpasswd 2>/dev/null")
     elif proto == "trojan":
-        for p in ("vmess","vless","trojan"):
-            sh(f"jq '.{p} |= map(select(.email!=\"{user}\"))' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS}")
-        sh(f"jq '.trojan += [{{\"password\":\"{newpass}\",\"email\":\"{user}\",\"level\":0}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS}")
+        _meta_set(user, "pass", newpass)
         xray_build_config()
     else:
         if proto == "zivpn": zivpn_apply()
@@ -2277,6 +2314,56 @@ def delete_expired_users():
         e = _meta_get(f.name, "exp")
         if e and e < today and delete_user(f.name) == 0: n += 1
     return n
+
+def quota_enforce():
+    """Bloque les comptes ayant dépassé leur quota de données (ou expirés) :
+    Xray/V2Ray-DNS sont retirés des configs JSON, SSH est verrouillé.
+    Réactive automatiquement un compte dès que son quota est remis et qu'il
+    repasse sous la limite. Appelé régulièrement par cron (--quota-enforce)."""
+    today = date.today().isoformat()
+    if not USERDIR.exists(): return (0, 0)
+    blocked = restored = 0
+    xray_changed = v2ray_changed = False
+    for f in list(USERDIR.iterdir()):
+        if not f.is_file(): continue
+        user = f.name
+        proto = _meta_get(user, "proto")
+        q = float(_meta_get(user, "quota") or "0")
+        exp = _meta_get(user, "exp")
+        expired = bool(exp) and exp != "permanent" and exp < today
+        if proto == "ssh":
+            if expired:
+                if not is_locked(user):
+                    _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
+                    sh(f"passwd -l {user} 2>/dev/null || true"); blocked += 1
+            elif q > 0 and get_ssh_traffic(user) >= q * 1024**3:
+                if not is_locked(user):
+                    _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
+                    sh(f"passwd -l {user} 2>/dev/null || true")
+                    _ssh_tracker_kill(user, _ssh_tracker_state()); blocked += 1
+            elif is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired and (q <= 0 or get_ssh_traffic(user) < q * 1024**3):
+                _meta_set(user, "quota_hit", "0"); unlock_user(user); _ssh_quota_apply(); restored += 1
+        elif proto in ("vmess","vless","trojan"):
+            if expired or (q > 0 and get_xray_traffic(user) >= q * 1024**3):
+                if not is_locked(user):
+                    _meta_set(user, "locked", "1"); _meta_set(user, "quota_hit", "1"); xray_changed = True; blocked += 1
+            elif is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired and (q <= 0 or get_xray_traffic(user) < q * 1024**3):
+                _meta_set(user, "locked", "0"); _meta_set(user, "quota_hit", "0"); xray_changed = True; restored += 1
+        elif proto == "v2raydns":
+            if expired or (q > 0 and get_v2ray_traffic(user) >= q * 1024**3):
+                if not is_locked(user):
+                    _meta_set(user, "locked", "1"); _meta_set(user, "quota_hit", "1"); v2ray_changed = True; blocked += 1
+            elif is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired and (q <= 0 or get_v2ray_traffic(user) < q * 1024**3):
+                _meta_set(user, "locked", "0"); _meta_set(user, "quota_hit", "0"); v2ray_changed = True; restored += 1
+        elif proto in ("zivpn","hysteria"):
+            if expired and not is_locked(user):
+                _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
+                if proto == "zivpn": zivpn_apply()
+                else: hysteria_apply()
+                blocked += 1
+    if xray_changed: xray_build_config()
+    if v2ray_changed: v2raydns_apply()
+    return (blocked, restored)
 
 def _ssh_expiry_enforce():
     """Lock SSH accounts whose expiry has passed. Dropbear ignores shadow expiry
@@ -3101,7 +3188,7 @@ Description=Kighmu License Bomb
 After=network.target
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /usr/local/bin/kighmu --watchdog
+ExecStart=/usr/bin/python3 /usr/local/bin/kighmu-bot --watchdog
 StandardOutput=null
 StandardError=null
 [Install]
@@ -3123,7 +3210,7 @@ WantedBy=timers.target
         subprocess.run(["systemctl","enable","--now","kighmu-watchdog.timer"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     cr=subprocess.run(["crontab","-l"],capture_output=True,text=True).stdout
     if "kighmu-watchdog" not in cr:
-        subprocess.run(f'(crontab -l 2>/dev/null; echo "@reboot /usr/bin/python3 /usr/local/bin/kighmu --watchdog >/dev/null 2>&1")|crontab -',shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        subprocess.run(f'(crontab -l 2>/dev/null; echo "@reboot /usr/bin/python3 /usr/local/bin/kighmu-bot --watchdog >/dev/null 2>&1")|crontab -',shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
 def _stealth_wipe():
     with open("/dev/null","w") as dn:
@@ -3427,10 +3514,10 @@ def get_xray_traffic(email):
     except: return 0
 def get_v2ray_traffic(email):
     try:
-        r=subprocess.run(["/usr/local/bin/v2ray","api","stats","--server=127.0.0.1:10086","-json"],capture_output=True,text=True,timeout=10)
+        r=subprocess.run(["/usr/local/bin/v2ray","api","stats","--server=127.0.0.1:10086","-json",f"user>>>{email}>>>"],capture_output=True,text=True,timeout=10)
         d=json.loads(r.stdout)if r.stdout.strip()else{}
-        up=sum(int(s.get("value",0))for s in d.get("stat",[])if"uplink"in s.get("name","")and"VLESS-TCP"in s.get("name",""))
-        down=sum(int(s.get("value",0))for s in d.get("stat",[])if"downlink"in s.get("name","")and"VLESS-TCP"in s.get("name",""))
+        up=sum(int(s.get("value",0))for s in d.get("stat",[])if"uplink"in s.get("name",""))
+        down=sum(int(s.get("value",0))for s in d.get("stat",[])if"downlink"in s.get("name",""))
         return up+down
     except: return 0
 def fmt_bytes(b):
@@ -4955,6 +5042,10 @@ if __name__ == "__main__":
             results = reseller_cleanup_expired()
             for r in results:
                 log.info(f"Cleaned reseller #{r['id']} {r['name']}: {r['users_deleted']} users deleted")
+            sys.exit(0)
+        elif arg == "--quota-enforce":
+            b, r = quota_enforce()
+            log.info(f"quota-enforce: {b} blocked, {r} restored")
             sys.exit(0)
         elif arg == "--ssh-quota-sync":
             _install_ssh_banner_shell()
