@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package statsservice;
+
+option go_package = "github.com/apernet/hysteria/extras/statsservice";
+
+// Stat is a single traffic/quota counter entry.
+message Stat {
+  // name is the unique identifier of the entry, e.g. "user>>>George34".
+  string name = 1;
+  // value is the current value of the counter (bytes).
+  int64 value = 2;
+  // quota is the monthly quota limit in bytes (0 = unlimited).
+  int64 quota = 3;
+  // updated is the Unix timestamp (seconds) of the last usage update.
+  int64 updated = 4;
+}
+
+message GetStatsRequest {
+  // name is the user identifier to query, e.g. "user>>>George34".
+  string name = 1;
+  // reset, when true, resets the counter after reading it.
+  bool reset = 2;
+}
+
+message GetStatsResponse {
+  Stat stat = 1;
+}
+
+message QueryStatsRequest {
+  // reset, when true, resets all counters after reading them.
+  bool reset = 2;
+}
+
+message QueryStatsResponse {
+  repeated Stat stats = 1;
+}
+
+message ResetStatsRequest {
+  // name is the user identifier to reset. Empty resets all counters.
+  string name = 1;
+}
+
+message ResetStatsResponse {
+  bool ok = 1;
+}
+
+// StatsService exposes per-user traffic usage and quota accounting over gRPC,
+// modeled after the Xray-core StatsService API.
+service StatsService {
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+  rpc QueryStats(QueryStatsRequest) returns (QueryStatsResponse);
+  rpc ResetStats(ResetStatsRequest) returns (ResetStatsResponse);
+}
