@@ -378,8 +378,49 @@ def _reload_passwords(config_path, service, proto):
         print(f" {C['RED']}✗ {service}: {e}{C['RST']}")
         tmp.unlink(missing_ok=True)
 
+def _zivpn_sync_config():
+    """Régénère auth.config (passwords actifs) et la map quota (user -> "XGB")
+    dans /etc/zivpn/config.json, en préservant quotaStateFile et statsAPI."""
+    cfg = Path("/etc/zivpn/config.json")
+    if not cfg.exists(): return
+    pws = _active_passwords("zivpn")
+    if not pws: pws = ["zi"]
+    tmp = cfg.with_suffix(".json.tmp")
+    try:
+        data = json.loads(cfg.read_text())
+        data.setdefault("auth", {})["config"] = pws
+        quota = {}
+        if USERDIR.exists():
+            today = date.today().isoformat()
+            for f in USERDIR.iterdir():
+                if not f.is_file(): continue
+                if _meta_get(f.name, "proto") != "zivpn": continue
+                exp = _meta_get(f.name, "exp")
+                if exp and exp != "permanent" and exp < today: continue
+                if is_locked(f.name): continue
+                q = _meta_get(f.name, "quota")
+                if q and float(q) > 0:
+                    pw = _meta_get(f.name, "pass")
+                    quota[pw or f.name] = f"{int(float(q))}GB"
+        data["quota"] = quota
+        if not data.get("quotaStateFile"): data["quotaStateFile"] = "/etc/zivpn/quota-state.json"
+        if not data.get("statsAPI"): data["statsAPI"] = {"listen": "127.0.0.1:10088"}
+        tmp.write_text(json.dumps(data, indent=2))
+        ok = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
+        if ok:
+            before = cfg.read_bytes() if cfg.exists() else b""
+            tmp.replace(cfg)
+            if cfg.read_bytes() != before:
+                sh("systemctl restart zivpn 2>/dev/null || true")
+        else:
+            print(f" {C['RED']}✗ zivpn: JSON invalide, annulé{C['RST']}")
+            tmp.unlink(missing_ok=True)
+    except Exception as e:
+        print(f" {C['RED']}✗ zivpn: {e}{C['RST']}")
+        tmp.unlink(missing_ok=True)
+
 def zivpn_apply():
-    _reload_passwords("/etc/zivpn/config.json", "zivpn", "zivpn")
+    _zivpn_sync_config()
 
 def hysteria_apply():
     _reload_passwords("/etc/hysteria/config.json", "hysteria", "hysteria")
@@ -1946,7 +1987,7 @@ def install_zivpn():
     DOMAIN = _ensure_domain() or "zivpn.local"
     sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/zivpn/zivpn.key -out /etc/zivpn/zivpn.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
     sh("chmod 600 /etc/zivpn/zivpn.key 2>/dev/null; chmod 644 /etc/zivpn/zivpn.crt 2>/dev/null || true")
-    zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
+    zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"quotaStateFile\":\"/etc/zivpn/quota-state.json\",\"statsAPI\":{\"listen\":\"127.0.0.1:10088\"},\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
     Path("/etc/zivpn/config.json").write_text(zi_cfg)
     svc = """[Unit]
 Description=ZIVPN UDP Server (High-Speed)
@@ -2271,6 +2312,11 @@ def set_user_quota(user, quota):
             _meta_set(user,"quota_hit","0")
             unlock_user(user)
         _ssh_quota_apply()
+    elif proto in ("zivpn","hysteria"):
+        if _meta_get(user,"quota_hit")=="1":
+            _meta_set(user,"quota_hit","0"); _meta_set(user,"locked","0")
+        if proto=="zivpn": zivpn_apply()
+        else: hysteria_apply()
     return True
 
 def lock_user(user):
@@ -2805,7 +2851,7 @@ def ui_create_wizard(protos):
     limit="1"
     if proto=="ssh": l=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Limit (def 1): {C['RST']}").strip();limit=l if l.isdigit() else "1"
     quota="0"
-    if proto in("vmess","vless","trojan","v2raydns","ssh"):
+    if proto in("vmess","vless","trojan","v2raydns","ssh","zivpn","hysteria"):
         q=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Quota GB (0=unlimited): {C['RST']}").strip()
         quota=q if re.match(r'^[0-9]+\.?[0-9]*$',q) else "0"
     rc=create_user(proto,user,days,passwd,limit,quota)
@@ -2849,6 +2895,7 @@ def ui_list_users(title,protos):
             if p in ("vmess","vless","trojan"): used=get_xray_traffic(f.name)
             elif p=="v2raydns": used=get_v2ray_traffic(f.name)
             elif p=="ssh": used=get_ssh_traffic(f.name)
+            elif p=="zivpn": used=get_zivpn_traffic(f.name)
             tr=f"{fmt_bytes(used)} / {qv:.1f} GB" if qv>0 else f"{fmt_bytes(used)} / Unlimited"
             ex=e if e else "permanent"
             vis=re.sub(r'\x1b\[[0-9;]*m','',st)
@@ -3705,6 +3752,18 @@ def get_ssh_traffic(user):
     except Exception: pass
     return used
 
+def get_zivpn_traffic(user):
+    """Conso zivpn depuis /etc/zivpn/quota-state.json.
+    L'etat est indexe par PASSWORD (comme auth.config/quota) ; on resout
+    le meta -> pass, avec repli sur le nom brut si besoin."""
+    try:
+        st = json.loads(Path("/etc/zivpn/quota-state.json").read_text())
+        used = st.get("used", {})
+        pw = _meta_get(user, "pass")
+        return int(used.get(pw, used.get(user, 0)))
+    except Exception:
+        return 0
+
 def _ssh_tracker_kill(user, state):
     for cid, c in state.get("conns", {}).items():
         if c.get("user") != user: continue
@@ -4013,6 +4072,8 @@ def _detail_quota(proto, user, quota):
     try:
         if proto == "ssh":
             used = get_ssh_traffic(user)
+        elif proto == "zivpn":
+            used = get_zivpn_traffic(user)
         elif proto in ("vless", "vmess", "trojan"):
             try:
                 with open(XRAY_USERS) as f: d = json.load(f)
@@ -4312,7 +4373,7 @@ if BOT_AVAILABLE:
                     if not f.is_file():continue
                     pp=_meta_get(f.name,"proto")
                     if(p=="ssh"and pp=="ssh")or(p=="zivpn"and pp=="zivpn")or(p=="hyst"and pp=="hysteria"):
-                        rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_ssh_traffic(f.name) if pp=="ssh" else 0))
+                        rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_ssh_traffic(f.name) if pp=="ssh" else get_zivpn_traffic(f.name) if pp=="zivpn" else 0))
             if not rows and p in("xray","v2ray") and USERDIR.exists():
                 for f in sorted(USERDIR.iterdir()):
                     if not f.is_file():continue
