@@ -813,7 +813,7 @@ def install_ssl_tls():
     if sh("command -v ssl_tls 2>/dev/null") != "" and Path("/etc/systemd/system/ssl_tls.service").exists():
         print(f" {C['GREEN']}✔ SSL/TLS déjà installé.{C['RST']}");return
     sh("apt-get install -y -qq curl file 2>/dev/null")
-    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/ssl_tls' -o /usr/local/bin/ssl_tls 2>/dev/null && chmod +x /usr/local/bin/ssl_tls 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ssl_tls.{C['RST']}");return
     if "ELF" not in sh("file /usr/local/bin/ssl_tls 2>/dev/null"):
         print(f" {C['RED']}✗ Binaire ssl_tls invalide (pas un ELF).{C['RST']}");return
@@ -861,11 +861,11 @@ def install_sshws():
     sh("apt-get install -y -qq curl python3-websockets 2>/dev/null || true")
     if sh("python3 -c 'import websockets' 2>/dev/null && echo OK") != "OK":
         sh("pip3 install websockets --quiet --break-system-packages 2>/dev/null || true")
-    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null && echo OK")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/sshws' -o /usr/local/bin/sshws 2>/dev/null && chmod +x /usr/local/bin/sshws 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement sshws.{C['RST']}");return
     if "ELF" not in sh("file /usr/local/bin/sshws 2>/dev/null"):
         print(f" {C['RED']}✗ Binaire sshws invalide (pas un ELF).{C['RST']}");return
-    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && sha256sum -c /tmp/sshws.sha256 2>/dev/null && echo OK")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && sha256sum -c /tmp/sshws.sha256 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
     svc = """[Unit]
 Description=SSHWS Slipstream Tunnel
@@ -1081,7 +1081,7 @@ def install_udp_custom():
     if sh("command -v udp-custom 2>/dev/null") != "" and Path("/etc/systemd/system/udp-custom.service").exists():
         print(f" {C['GREEN']}✔ UDP-Custom déjà installé.{C['RST']}");return
     sh("apt-get install -y -qq curl 2>/dev/null")
-    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null && echo OK")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/udp-custom' -o /usr/local/bin/udp-custom 2>/dev/null && chmod +x /usr/local/bin/udp-custom 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement udp-custom.{C['RST']}");return
     Path("/etc/udp-custom").mkdir(parents=True, exist_ok=True)
     Path("/etc/udp-custom/config.json").write_text('{"listen":":36712","exclude_port":[53,5300],"timeout":600,"auth":{"mode":"passwords","config":[]}}')
@@ -1993,7 +1993,7 @@ def uninstall_hysteria():
 def install_zivpn():
     if sh("command -v zivpn 2>/dev/null") != "" and Path("/etc/systemd/system/zivpn.service").exists():
         print(f" {C['GREEN']}✔ ZIVPN déjà installé.{C['RST']}");return
-    r=sh("curl -fsSL 'https://github.com/kinf744/Kighmu/releases/download/v1.0.0/udp-zivpn-linux-amd64' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null && echo OK")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/zivpn' -o /usr/local/bin/zivpn 2>/dev/null && chmod +x /usr/local/bin/zivpn 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ZIVPN.{C['RST']}");return
     Path("/etc/zivpn").mkdir(parents=True, exist_ok=True)
     DOMAIN = _ensure_domain() or "zivpn.local"
