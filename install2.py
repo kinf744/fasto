@@ -1047,9 +1047,8 @@ def _acme_cert(domain, cert_dir):
 
 def install_badvpn():
     if sh("command -v badvpn-udpgw 2>/dev/null") != "" and Path("/etc/systemd/system/badvpn-7100.service").exists(): return
-    sh("apt-get install -y -qq cmake build-essential git 2>/dev/null")
-    sh("cd /tmp && rm -rf badvpn && git clone --depth 1 https://github.com/ambrop72/badvpn.git 2>/dev/null")
-    sh("cd /tmp/badvpn && mkdir -p build && cd build && cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 >/dev/null 2>&1 && make -j$(nproc) >/dev/null 2>&1 && cp udpgw/badvpn-udpgw /usr/local/bin/ && chmod +x /usr/local/bin/badvpn-udpgw")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/badvpn-udpgw' -o /usr/local/bin/badvpn-udpgw 2>/dev/null && chmod +x /usr/local/bin/badvpn-udpgw 2>/dev/null && echo OK")
+    if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement BadVPN.{C['RST']}");return
     for port in ["7100","7200","7300"]:
         Path(f"/etc/systemd/system/badvpn-{port}.service").write_text(f"""[Unit]
 Description=BadVPN UDPGW {port}
@@ -1155,7 +1154,7 @@ def install_slowdns():
     if sh("command -v dnstt-server 2>/dev/null") != "":
         print(f" {C['GREEN']}✔ dnstt-server déjà présent.{C['RST']}")
     else:
-        r = sh(f"curl -fsSL 'https://dnstt-server-client.s3.amazonaws.com/dnstt-server-linux-amd64' -o {tmp} 2>/dev/null && stat -c%s {tmp} 2>/dev/null")
+        r = sh(f"curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/dnstt-server' -o {tmp} 2>/dev/null && stat -c%s {tmp} 2>/dev/null")
         try: size = int(r)
         except: size = 0
         if size < 1048576:
@@ -1721,10 +1720,9 @@ def install_xray():
     sh("apt-get install -y -qq haproxy curl socat wget unzip jq ca-certificates 2>/dev/null || true")
     if sh("command -v xray 2>/dev/null") == "":
         print(f" {C['YELLOW']}► Installation de Xray...{C['RST']}")
-        r=sh("curl -fsSL https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh | bash 2>&1")
-        if "success" not in r.lower() and sh("command -v xray 2>/dev/null") == "":
-            print(f" {C['RED']}✗ Échec installation Xray: téléchargement impossible.{C['RST']}")
-            print(f" {C['YELLOW']}► Vérifiez votre connexion Internet ou installez Xray manuellement.{C['RST']}")
+        r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/xray' -o /usr/local/bin/xray 2>/dev/null && chmod +x /usr/local/bin/xray 2>/dev/null && echo OK")
+        if "OK" not in r:
+            print(f" {C['RED']}✗ Échec téléchargement Xray.{C['RST']}")
             return
     Path("/etc/xray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/xray").mkdir(parents=True, exist_ok=True)
@@ -1870,9 +1868,9 @@ def install_v2ray():
     if iface:
         sh(f"tc qdisc del dev {iface} root 2>/dev/null || true")
         sh(f"tc qdisc add dev {iface} root fq 2>/dev/null || true")
-    sh("curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash 2>/dev/null || true")
-    if sh("command -v v2ray 2>/dev/null") == "":
-        print(f" {C['RED']}✗ Échec installation V2ray.{C['RST']}");return
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/v2ray' -o /usr/local/bin/v2ray 2>/dev/null && chmod +x /usr/local/bin/v2ray 2>/dev/null && echo OK")
+    if "OK" not in r:
+        print(f" {C['RED']}✗ Échec téléchargement V2ray.{C['RST']}");return
     Path("/etc/v2ray").mkdir(parents=True, exist_ok=True)
     Path("/var/log/v2ray").mkdir(parents=True, exist_ok=True)
     V2RAY_CONFIG = Path("/etc/v2ray/config.json")
