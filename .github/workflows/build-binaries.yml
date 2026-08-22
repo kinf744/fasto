@@ -7,6 +7,9 @@ on:
       - '.github/workflows/build-binaries.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-x86_64:
     runs-on: ubuntu-latest
@@ -75,7 +78,6 @@ jobs:
           SIZE=$(stat -c%s dist/install2)
           SIZE_MB=$((SIZE / 1024 / 1024))
           echo "Binary size: ${SIZE_MB}MB"
-          # Accept 8-25 MB range (GitHub Actions builds are typically smaller)
           if [ $SIZE_MB -lt 8 ] || [ $SIZE_MB -gt 25 ]; then
             echo "ERROR: Binary size ${SIZE_MB}MB not in range 8-25MB"
             exit 1
@@ -121,7 +123,6 @@ jobs:
           SIZE=$(stat -c%s install2-arm64.bin)
           SIZE_MB=$((SIZE / 1024 / 1024))
           echo "ARM64 Binary size: ${SIZE_MB}MB"
-          # Accept 8-25 MB range
           if [ $SIZE_MB -lt 8 ] || [ $SIZE_MB -gt 25 ]; then
             echo "ERROR: ARM64 Binary size ${SIZE_MB}MB not in range 8-25MB"
             exit 1
@@ -136,10 +137,11 @@ jobs:
   release:
     needs: [build-x86_64, build-arm64]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
       
       - name: Download x86_64 binary
         uses: actions/download-artifact@v4
