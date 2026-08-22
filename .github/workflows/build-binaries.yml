@@ -141,7 +141,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
+          persist-credentials: false
       
       - name: Download x86_64 binary
         uses: actions/download-artifact@v4
@@ -155,7 +155,7 @@ jobs:
           name: install2-arm64
           path: .
       
-      - name: Commit binaries
+      - name: Commit and push binaries
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -163,4 +163,4 @@ jobs:
           cp install2-arm64.bin install2-arm64.bin
           git add install2.bin install2-arm64.bin
           git commit -m "chore: update binaries [skip ci]" || echo "No changes"
-          git push origin main
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git main
