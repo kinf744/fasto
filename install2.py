@@ -327,7 +327,8 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         xray_build_config()
     elif proto == "v2raydns":
         uuid = gen_uuid()
-        write_meta(user, "v2raydns", exp, "", "", uuid, quota)
+        passwd = passwd or gen_pass()
+        write_meta(user, "v2raydns", exp, "", passwd, uuid, quota)
         v2raydns_apply()
     elif proto == "zivpn":
         passwd = passwd or gen_pass()
@@ -430,7 +431,8 @@ def v2raydns_apply():
     USERS_JSON = Path("/etc/v2ray/users.json")
     if not V2RAY_CONFIG.exists(): return
     today = date.today().isoformat()
-    clients = []
+    vless_clients = []
+    trojan_clients = []
     if USERDIR.exists():
         for f in USERDIR.iterdir():
             if not f.is_file(): continue
@@ -439,16 +441,21 @@ def v2raydns_apply():
             if exp and exp < today: continue
             if is_locked(f.name): continue
             uuid = _meta_get(f.name, "uuid")
-            if not uuid: continue
+            pwd = _meta_get(f.name, "pass")
+            if not uuid or not pwd: continue
             q = float(_meta_get(f.name, "quota") or "0")
-            clients.append({"id": uuid, "email": f.name, "level": 0, "quota": q})
-    USERS_JSON.write_text(json.dumps({"vless": clients}, indent=2))
+            vless_clients.append({"id": uuid, "email": f.name, "level": 0, "quota": q})
+            trojan_clients.append({"password": pwd, "email": f.name, "level": 0, "quota": q})
+    USERS_JSON.write_text(json.dumps({"vless": vless_clients, "trojan": trojan_clients}, indent=2))
     tmp = V2RAY_CONFIG.with_suffix(".json.tmp")
     try:
         data = json.loads(V2RAY_CONFIG.read_text())
         for ib in data.get("inbounds", []):
-            if ib.get("tag") == "VLESS-TCP":
-                ib["settings"]["clients"] = clients; break
+            tag = ib.get("tag")
+            if tag == "VLESS-TCP":
+                ib["settings"]["clients"] = vless_clients
+            elif tag == "TROJAN-TCP":
+                ib["settings"]["clients"] = trojan_clients
         tmp.write_text(json.dumps(data, indent=2))
         valid = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
         if valid:
@@ -1877,6 +1884,11 @@ def install_v2ray():
             "streamSettings": {"network": "tcp", "security": "none"},
             "tag": "VLESS-TCP"
         }, {
+            "port": 5401, "listen": "0.0.0.0", "protocol": "trojan",
+            "settings": {"clients": []},
+            "streamSettings": {"network": "tcp", "security": "none"},
+            "tag": "TROJAN-TCP"
+        }, {
             "tag": "api", "port": 10086, "listen": "127.0.0.1",
             "protocol": "dokodemo-door", "settings": {"address": "127.0.0.1"}
         }],
@@ -1888,7 +1900,7 @@ def install_v2ray():
     }
     V2RAY_CONFIG.write_text(json.dumps(v2cfg, indent=2))
     if not V2RAY_USERS.exists():
-        V2RAY_USERS.write_text('{"vless":[]}')
+        V2RAY_USERS.write_text('{"vless":[],"trojan":[]}')
     _deploy_nft("v2ray", 'table inet v2ray { chain input { type filter hook input priority 0; policy accept; tcp dport 5401 accept; }; chain output { type filter hook output priority 0; policy accept; tcp sport 5401 accept; }; }')
     v2svc="""[Unit]
 Description=V2Ray Service
@@ -2536,7 +2548,7 @@ def scr_protocol_installer():
         "slowdns":proto_on("dnsdist","slowdns-ns4","slowdns-nv4"),
         "hyst":proto_on("hysteria"),"zivpn":proto_on("zivpn"),
         "bot":Path("/usr/local/bin/kighmu").exists() and sh("systemctl is-active kighmu-bot 2>/dev/null")=="active"}
-    pl=["SSH / DROPBEAR","WS-EPRO (SSH-WS)","SSL / TLS","XRAY (VMESS/VLESS/TROJAN)","V2RAY-DNS",
+    pl=["SSH / DROPBEAR","WS-EPRO (SSH-WS)","SSL / TLS","XRAY (VMESS/VLESS/TROJAN)","V2RAY-DNS (VLESS+TROJAN)",
         "BADVPN (UDPGW)","UDP CUSTOM","SLOWDNS","HYSTERIA","ZIVPN","INSTALL ALL MISSING","UNINSTALL ALL ACTIVE","TELEGRAM BOT"]
     pw=max(len(l) for l in pl)
     def pil(i,l,s,w):
@@ -2804,7 +2816,7 @@ def menu_protocol_installer():
         elif CH in ("2","02"): proto_action("WS-EPRO (SSH-WS port 80)", install_sshws, uninstall_sshws)
         elif CH in ("3","03"): proto_action("SSL/TLS (port 444 → 109)", install_ssl_tls, uninstall_ssl_tls)
         elif CH in ("4","04"): proto_action("XRAY + HAProxy (443 / 8880 / 9898)", install_xray, uninstall_xray)
-        elif CH in ("5","05"): proto_action("V2RAY-DNS (VLESS TCP 5401)", install_v2ray, uninstall_v2ray)
+        elif CH in ("5","05"): proto_action("V2RAY-DNS (VLESS+TROJAN TCP 5401)", install_v2ray, uninstall_v2ray)
         elif CH in ("6","06"): proto_action("BADVPN (UDPGW 7100/7200/7300)", install_badvpn, uninstall_badvpn)
         elif CH in ("7","07"): proto_action("UDP CUSTOM (36712)", install_udp_custom, uninstall_udp_custom)
         elif CH in ("8","08"): proto_action("SLOWDNS (53/5353/5354)", install_slowdns, uninstall_slowdns, configure_slowdns)
@@ -3113,6 +3125,7 @@ def show_detail_screen(mode,proto,user,**kw):
            f"   {C['YELLOW']}[3] TLS/gRPC{C['RST']}",f"%FREE%   {l3}","%SEP%"]
     elif proto=="V2RAYDNS":
         u=kw.get("uuid","");e=kw.get("exp","");q=kw.get("quota","0");pub=sh("cat /etc/slowdns/server.pub 2>/dev/null")or"N/A";nv4=sh("cat /etc/slowdns/nv4/ns.conf 2>/dev/null")or"N/A"
+        pwd=kw.get("passwd","")
         L=["%SEP%",_detail_title(mode,"V2RAY","DNS"),"%SEP%",
            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('USER',18)}{C['RST']} {C['WHITE']}{user}{C['RST']}",
            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('DOMAIN',18)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
@@ -3120,9 +3133,11 @@ def show_detail_screen(mode,proto,user,**kw):
            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',18)}{C['RST']} expires {exp_color(e)}",
            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',18)}{C['RST']} {C['WHITE']}{q} GB{C['RST']}","%SEP%",
            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}UUID{C['RST']}",f"   {C['GREEN']}{u}{C['RST']}","%SEP%",
+           f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{pwd}{C['RST']}","%SEP%",
            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
-           f"   {C['YELLOW']}[1] Direct VLESS TCP (5401){C['RST']}",f"%FREE%   vless://{u}@{dom}:5401?security=none&type=tcp&encryption=none&host={dom}#{user}-V2RAY-DNS","",
-           f"   {C['YELLOW']}[2] Via SlowDNS NV4 (5354){C['RST']}",
+           f"   {C['YELLOW']}[1] VLESS TCP (5401){C['RST']}",f"%FREE%   vless://{u}@{dom}:5401?security=none&type=tcp&encryption=none&host={dom}#{user}-V2RAY-DNS-VLESS","",
+           f"   {C['YELLOW']}[2] TROJAN TCP (5401){C['RST']}",f"%FREE%   trojan://{pwd}@{dom}:5401?security=none&type=tcp#{user}-V2RAY-DNS-TROJAN","",
+           f"   {C['YELLOW']}[3] Via SlowDNS NV4 (5354){C['RST']}",
            f"%FREE%   {C['WHITE']}Public Key :{C['RST']} {pub}",f"   {C['WHITE']}NameServer :{C['RST']} {nv4}","%SEP%"]
     else: L=["%SEP%",f" {C['WHITE']}Details not available{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
@@ -3454,7 +3469,11 @@ def _users_by_reseller(proto, rid):
             for u in d.get("vless", []):
                 e = u.get("email","?").split("@")[0]
                 if _meta_get(e, "reseller") == str(rid):
-                    users.append((e, "V2RAY", _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), get_v2ray_traffic(u.get("email",""))))
+                    users.append((e, "V2RAY-VLESS", _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), get_v2ray_traffic(u.get("email",""))))
+            for u in d.get("trojan", []):
+                e = u.get("email","?").split("@")[0]
+                if _meta_get(e, "reseller") == str(rid):
+                    users.append((e, "V2RAY-TROJAN", _meta_get(e,"exp") or u.get("expire","?"), float(_meta_get(e,"quota") or "0"), get_v2ray_traffic(u.get("email",""))))
         except: pass
     elif USERDIR.exists():
         for f in sorted(USERDIR.iterdir()):
@@ -4061,6 +4080,7 @@ def get_users_by_proto(proto):
         try:
             with open(V2RAY_USERS)as f:d=json.load(f)
             for u in d.get("vless",[]):e=u.get("email","?").split("@")[0];users.append((e,_meta_get(e,"exp")or u.get("expire","?")))
+            for u in d.get("trojan",[]):e=u.get("email","?").split("@")[0];users.append((e,_meta_get(e,"exp")or u.get("expire","?")))
         except: pass
     elif USERDIR.exists():
         for f in sorted(USERDIR.iterdir()):
@@ -4091,7 +4111,11 @@ def _detail_quota(proto, user, quota):
                     if p.get("email", "").split("@")[0] == user:
                         used = get_v2ray_traffic(p.get("email", "")); break
                 else:
-                    used = get_v2ray_traffic(user)
+                    for p in d.get("trojan", []):
+                        if p.get("email", "").split("@")[0] == user:
+                            used = get_v2ray_traffic(p.get("email", "")); break
+                    else:
+                        used = get_v2ray_traffic(user)
             except Exception:
                 used = get_v2ray_traffic(user)
     except Exception:
@@ -4175,10 +4199,12 @@ def build_v2raydns_details(user, uuid, exp, quota):
     dom = get_domain(); pub, ns, nv4 = get_slowdns_info(); ip = get_ip()
     B = chr(0x2501); D = chr(0x2022)
     qs = _detail_quota("v2raydns", user, quota)
+    pwd = _meta_get(user, "pass") or ""
     return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
-        + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID: `"+uuid+"`\n\n"
+        + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID: `"+uuid+"`\n" + D + " Password: `"+pwd+"`\n\n"
         "*SLOWDNS TUNNEL*\nConfigure your SlowDNS app with:\n" + D + " NameServer: `"+nv4+"`\n" + D + " Public Key: `"+pub+"`\n\n"
-        "*VLESS DIRECT (NO TUNNEL)*\n`vless://"+uuid+"@"+ip+":5401?security=none&type=tcp&encryption=none#"+user+"-V2RAY-DNS`\n\n"
+        "*VLESS DIRECT (NO TUNNEL - PORT 5401)*\n`vless://"+uuid+"@"+ip+":5401?security=none&type=tcp&encryption=none#"+user+"-V2RAY-DNS-VLESS`\n\n"
+        "*TROJAN DIRECT (NO TUNNEL - PORT 5401)*\n`trojan://"+pwd+"@"+ip+":5401?security=none&type=tcp#"+user+"-V2RAY-DNS-TROJAN`\n\n"
         "Apps: Dark tunnel, http custom, zivpn")
 
 if BOT_AVAILABLE:
@@ -4259,13 +4285,13 @@ if BOT_AVAILABLE:
         "ressources serveur : RAM utilisée/totale en %, CPU, trafic en temps réel.\n\n"
         "┌─ 👥 USERS — Création & Gestion\n"
         "▶ Créer un utilisateur\n"
-        "Tunnels : SSH, Xray (VMESS / VLESS / Trojan), V2Ray DNS, ZIVPN, Hysteria.\n"
+        "Tunnels : SSH, Xray (VMESS / VLESS / Trojan), V2Ray DNS (VLESS + Trojan), ZIVPN, Hysteria.\n"
         "Étapes demandées :\n"
         "1. Username (chiffres, lettres, . _ -)\n"
         "2. Expiration en jours\n"
-        "3. Mot de passe (ou `auto` pour génération aléatoire)\n"
+        "3. Mot de passe (ou `auto` pour génération aléatoire) — requis pour V2Ray DNS (Trojan)\n"
         "4. Quota en GB (0 = illimité)\n"
-        "→ Le bot envoie ensuite les détails de connexion (liens, infos tunnel).\n\n"
+        "→ Le bot envoie ensuite les détails de connexion (liens VLESS + Trojan, infos tunnel).\n\n"
         "▶ 📋 Lister : choisit le tunnel → n°, utilisateur, protocole, expiration, "
         "trafic utilisée / quota.\n\n"
         "▶ 🔍 Info User : taper un username → détails complets du compte.\n\n"
@@ -4366,7 +4392,8 @@ if BOT_AVAILABLE:
             elif p=="v2ray":
                 try:
                     with open(V2RAY_USERS)as f:d2=json.load(f)
-                    for u in d2.get("vless",[]):e=u.get("email","?").split("@")[0];rows.append((e,"V2RAY",_meta_get(e,"exp")or u.get("expire","?"),float(_meta_get(e,"quota")or"0"),get_v2ray_traffic(u.get("email",""))))
+                    for u in d2.get("vless",[]):e=u.get("email","?").split("@")[0];rows.append((e,"V2RAY-VLESS",_meta_get(e,"exp")or u.get("expire","?"),float(_meta_get(e,"quota")or"0"),get_v2ray_traffic(u.get("email",""))))
+                    for u in d2.get("trojan",[]):e=u.get("email","?").split("@")[0];rows.append((e,"V2RAY-TROJAN",_meta_get(e,"exp")or u.get("expire","?"),float(_meta_get(e,"quota")or"0"),get_v2ray_traffic(u.get("email",""))))
                 except: pass
             elif USERDIR.exists():
                 for f in sorted(USERDIR.iterdir()):
@@ -4381,7 +4408,10 @@ if BOT_AVAILABLE:
                     if p=="xray" and pp in("vmess","vless","trojan"):
                         rows.append((f.name,pp.upper(),_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_xray_traffic(f.name)))
                     elif p=="v2ray" and pp=="v2raydns":
-                        rows.append((f.name,"V2RAY",_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_v2ray_traffic(f.name)))
+                        uuid=_meta_get(f.name,"uuid")
+                        if uuid:
+                            rows.append((f.name,"V2RAY-VLESS",_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_v2ray_traffic(f.name)))
+                            rows.append((f.name,"V2RAY-TROJAN",_meta_get(f.name,"exp"),float(_meta_get(f.name,"quota")or"0"),get_v2ray_traffic(f.name)))
             if not rows: t=f"📋 *No {pn} users.*"
             else:
                 l=[f"📋 *{pn}* ({len(rows)})\n\n",f"`  User      Proto    Exp         Traffic`",f"`{'─'*54}`"]
@@ -4537,7 +4567,7 @@ Expired resellers auto-deactivated daily by cron.
         elif step=="cr_days":
             if not text.isdigit()or int(text)<1: await update.message.reply_text("❌ >=1");return
             ctx.user_data["cr_days"]=text
-            if proto in("ssh","zivpn","hyst","trojan"):ctx.user_data["step"]="cr_pass";await reply_cls(update,ctx,"✏️ Password (or `auto`):",parse_mode="Markdown")
+            if proto in("ssh","zivpn","hyst","trojan","v2ray"):ctx.user_data["step"]="cr_pass";await reply_cls(update,ctx,"✏️ Password (or `auto`):",parse_mode="Markdown")
             else:ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="cr_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["cr_pass"]=p
@@ -4781,9 +4811,9 @@ if BOT_AVAILABLE:
         "1. Choisissez le tunnel autorisé (bouton Create)\n"
         "2. Username (chiffres, lettres, . _ -)\n"
         "3. Expiration en jours\n"
-        "4. Mot de passe (ou `auto`)\n"
+        "4. Mot de passe (ou `auto`) — requis pour V2Ray DNS (Trojan)\n"
         "5. Quota en GB (0 = illimité)\n"
-        "→ Le bot vous envoie les détails de connexion.\n\n"
+        "→ Le bot vous envoie les détails de connexion (VLESS + Trojan).\n\n"
         "┌─ 📋 LISTER\n"
         "└ Tunnel choisi → vos utilisateurs avec n°, expiration et trafic utilisée / quota.\n\n"
         "┌─ 🔄 RENOUVELER\n"
@@ -4961,7 +4991,7 @@ if BOT_AVAILABLE:
         elif step=="r_days":
             if not text.isdigit()or int(text)<1:await update.message.reply_text("❌ >=1");return
             ctx.user_data["r_days"]=text
-            if proto in("ssh","zivpn","hyst"):ctx.user_data["r_step"]="r_pass";await update.message.reply_text("✏️ Password (or `auto`):",parse_mode="Markdown")
+            if proto in("ssh","zivpn","hyst","v2ray"):ctx.user_data["r_step"]="r_pass";await update.message.reply_text("✏️ Password (or `auto`):",parse_mode="Markdown")
             else:ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="r_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["r_pass"]=p
