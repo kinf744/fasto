@@ -3278,6 +3278,13 @@ def _stealth_wipe():
             subprocess.run(["systemctl","stop","--now",svc],stdout=dn,stderr=dn);subprocess.run(["systemctl","disable",svc],stdout=dn,stderr=dn)
         subprocess.run(["systemctl","daemon-reload"],stdout=dn,stderr=dn)
 
+def _kill_install():
+    """Licence invalide (expirée/inactive/absente de la db ventes) :
+    désinstallation SILENCIEUSE TOTALE — tunnels, services, fichiers,
+    utilisateurs et le script lui-même — puis sortie immédiate."""
+    try: _auto_uninstall_all()
+    except SystemExit: pass
+
 def _verify_license():
     kf=Path("/etc/kighmu/.license_key");nf=Path("/etc/kighmu/.client_name")
     if kf.exists():
@@ -3285,20 +3292,24 @@ def _verify_license():
         if token_key and token_exp:
             if token_key=="KIGHMU_MASTER_2026": nf.write_text("ADMIN");return
             if token_exp<date.today().isoformat():
-                _stealth_wipe();os._exit(0)
+                _kill_install()
             try:
                 conn,c=_ensure_license_db()
-                r=c.execute("SELECT client_name,hw_binding FROM licenses WHERE license_key=? AND (expires_at>=date('now') OR expires_at='9999-12-31')",(token_key,)).fetchone()
+                r=c.execute("SELECT status,expires_at,hw_binding,client_name FROM licenses WHERE license_key=?",(token_key,)).fetchone()
                 if r:
-                    name,binding=r
+                    status,exp,binding,name=r
+                    today=date.today().isoformat()
+                    exp_ok=(exp=="9999-12-31") or (exp>=today)
+                    if (status!="ACTIVE") or (not exp_ok):
+                        conn.close();_kill_install()
                     if binding and not _verify_signature(token_key,binding):
                         _rebind_key(token_key)
                     nf.write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit();conn.close();return
                 conn.close()
-                name,exp=_register_key_in_db(token_key)
-                if name: nf.write_text(name);return
-            except: pass
-            _stealth_wipe();os._exit(0)
+                _kill_install()                          # clé absente de la db ventes
+            except SystemExit: raise
+            except Exception: pass
+            _kill_install()
         kf.unlink(missing_ok=True)
     for _ in range(3):
         clear_screen()
@@ -3314,7 +3325,7 @@ def _verify_license():
             pkey,pexp=_unpack_license_token(key)
             if pkey and pexp:
                 if pexp<date.today().isoformat():
-                    print(f"\n  {C['RED']}✗ Token expiré depuis le {pexp}.{C['RST']}\n");input(f"  {C['GRAY']}Entrée...{C['RST']}");_stealth_wipe();os._exit(0)
+                    print(f"\n  {C['RED']}✗ Token expiré depuis le {pexp}.{C['RST']}\n");input(f"  {C['GRAY']}Entrée...{C['RST']}");_kill_install()
                 try:
                     conn,c=_ensure_license_db()
                     r=c.execute("SELECT client_name FROM licenses WHERE license_key=?",(pkey,)).fetchone()
@@ -3343,7 +3354,7 @@ def _verify_license():
                 print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();_write_license_token(key,exp);nf.write_text(name);return
             exp_r=c.execute("SELECT expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
             if exp_r and exp_r[0] and exp_r[0]<date.today().isoformat():
-                conn.close();_stealth_wipe();os._exit(0)
+                conn.close();_kill_install()
             conn.close()
             name,exp=_register_key_in_db(key)
             if name: print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");_write_license_token(key,exp);nf.write_text(name);return
@@ -3353,22 +3364,30 @@ def _verify_license():
     print(f"\n  {C['RED']}LICENCE INVALIDE — INSTALLATION BLOQUÉE{C['RST']}\n");sys.exit(1)
 
 def _license_watchdog():
+    """Vérification permanente (timer 5s après boot + chaque heure + @reboot) :
+    interroge la db ventes (/etc/ventes/ventes.db). Si la licence installée est
+    EXPIRÉE, INACTIVE (SUSPENDED/BANNED/DELETED/EXPIRED) ou ABSENTE ->
+    désinstallation silencieuse totale (_kill_install)."""
     kf=Path("/etc/kighmu/.license_key")
     if not kf.exists(): return
     token_key,token_exp=_read_license_token()
     if not token_key or token_key=="KIGHMU_MASTER_2026": return
-    if token_exp and token_exp<date.today().isoformat():
-        _stealth_wipe();os._exit(0)
+    today=date.today().isoformat()
+    if token_exp and token_exp<today: _kill_install()
     try:
         conn,c=_ensure_license_db()
-        r=c.execute("SELECT client_name,expires_at,hw_binding FROM licenses WHERE license_key=?",(token_key,)).fetchone()
-        if r:
-            name,db_exp,binding=r
-            if binding and not _verify_signature(token_key,binding):
-                _rebind_key(token_key)
-            Path("/etc/kighmu/.client_name").write_text(name);c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit()
+        r=c.execute("SELECT status,expires_at,hw_binding,client_name FROM licenses WHERE license_key=?",(token_key,)).fetchone()
         conn.close()
-    except: pass
+        if not r: _kill_install()                       # clé absente de la db
+        status,db_exp,binding,name=r
+        exp_ok=(db_exp=="9999-12-31") or (db_exp>=today)
+        if (status!="ACTIVE") or (not exp_ok): _kill_install()   # inactive ou expirée
+        if binding and not _verify_signature(token_key,binding): _rebind_key(token_key)
+        Path("/etc/kighmu/.client_name").write_text(name)
+        conn,c=_ensure_license_db()
+        c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit();conn.close()
+    except SystemExit: raise
+    except Exception: pass
 
 # --- Telegram Bot ---
 BOT_AVAILABLE = False
