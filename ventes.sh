@@ -60,7 +60,7 @@ verify_integrity() {
 }
 
 # -------- Constantes ----------------------------------------------------------
-readonly VERSION="1.0.0"
+readonly VERSION="1.0.1"
 readonly NAME="VENTES"
 readonly DB_DIR="/etc/ventes"
 readonly DB="${DB_DIR}/ventes.db"
@@ -292,14 +292,15 @@ _apply_schema() {
             CREATE INDEX IF NOT EXISTS idx_licenses_name  ON licenses(client_name);
             CREATE INDEX IF NOT EXISTS idx_audit_time     ON audit(timestamp);
             PRAGMA user_version = 2;
-        "
-        return
+        " || return 1
+        return 0
     fi
 
     if (( ver < 2 )); then
         _sql "ALTER TABLE licenses ADD COLUMN hw_binding TEXT DEFAULT NULL;" 2>/dev/null || true
-        _sql "PRAGMA user_version = 2;"
+        _sql "PRAGMA user_version = 2;" || return 1
     fi
+    return 0
 }
 
 _auto_restore_db() {
@@ -319,16 +320,46 @@ _init_db() {
     _init_dirs
     _auto_restore_db || true
 
+    # ── Auto-réparation : détecte une base corrompue/illisible AVANT tout usage.
+    # Sans cela, set -Eeuo pipefail tue le script en silence (exit sqlite) et le
+    # panneau principal ne s'ouvre jamais.
+    if [[ -f "$DB" ]]; then
+        if ! _sql "PRAGMA integrity_check;" >/dev/null 2>&1; then
+            chattr -i "$DB" 2>/dev/null || true
+            local stamp corrupted_name
+            stamp=$(date '+%Y%m%d-%H%M%S')
+            corrupted_name="${DB}.corrupted.${stamp}"
+            cp "$DB" "$corrupted_name" 2>/dev/null || true
+            rm -f "$DB" 2>/dev/null || true
+            if [[ -f "$corrupted_name" ]]; then
+                chmod 600 "$corrupted_name" 2>/dev/null || true
+                _warn "Base corrompue archivée : $(basename "$corrupted_name")"
+            fi
+        fi
+    fi
+
     if [[ ! -f "$DB" ]]; then
         _sql "VACUUM;" 2>/dev/null || true
         _info "Nouvelle base créée : $DB"
     fi
 
-    _apply_schema
+    if ! _apply_schema; then
+        chattr -i "$DB" 2>/dev/null || true
+        local stamp2
+        stamp2=$(date '+%Y%m%d-%H%M%S')
+        cp "$DB" "${DB}.unreadable.${stamp2}" 2>/dev/null || true
+        rm -f "$DB" 2>/dev/null || true
+        _sql "VACUUM;" 2>/dev/null || true
+        if ! _apply_schema; then
+            _err "Impossible d'initialiser la base. Vérifiez le disque/les permissions."
+            exit 1
+        fi
+        _warn "Base reconstruite à neuf (l'ancienne a été archivée)."
+    fi
 
     # config.json par défaut
     if [[ ! -f "$CONFIG" ]]; then
-        cat > "$CONFIG" <<-EOF
+        cat > "$CONFIG" <<-EOF || true
 {
     "version": "$VERSION",
     "created_at": "$(_now)",
