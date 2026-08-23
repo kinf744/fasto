@@ -17,7 +17,7 @@ fi
 [[ $EUID -eq 0 ]] || { echo "ERREUR : à exécuter en root." >&2; exit 1; }
 umask 077
 
-readonly VERSION="2.3"
+readonly VERSION="2.4"
 readonly DB_DIR="/etc/ventes"
 readonly DB="${DB_DIR}/ventes.db"
 readonly CONFIG="${DB_DIR}/config.json"
@@ -158,8 +158,17 @@ _silent_backup() {
 }
 
 _ensure_cron() {
-    crontab -l 2>/dev/null | grep -q '/usr/local/bin/ventes' && return 0
-    (crontab -l 2>/dev/null; echo '0 4 * * * /usr/local/bin/ventes >/dev/null 2>&1') | crontab - 2>/dev/null || true
+    local cur; cur=$(crontab -l 2>/dev/null || true)
+    {
+        [[ -n "$cur" ]] && printf '%s\n' "$cur"
+        # Sauvegarde quotidienne
+        [[ "$cur" != *'/usr/local/bin/ventes >'* ]] \
+            && echo '0 4 * * * /usr/local/bin/ventes >/dev/null 2>&1'
+        # Fallback reboot : relance le watchdog même sans systemd (verrou anti-doublon)
+        [[ "$cur" != *'ventes-watchdog'* ]] \
+            && echo '@reboot sleep 30; /usr/local/bin/ventes-watchdog >/dev/null 2>&1'
+        true
+    } | crontab - 2>/dev/null || true
 }
 
 # ==============================================================================
@@ -389,10 +398,15 @@ act_stats() {
 # ==============================================================================
 
 # Service continu : passe les licences expirées en EXPIRED + audit, toutes les 5 min.
+# Renforcé : survit aux crashs (Restart sans limite), aux reboots (systemd OU cron),
+# anti-doublon par verrou, arrêt instantané.
 _install_watchdog_service() {
     cat > "$WATCHDOG_BIN" <<'WD'
 #!/usr/bin/env bash
 # VENTES Watchdog — surveillance continue des licences
+exec 9>/var/lock/ventes-watchdog.lock
+flock -n 9 || exit 0          # un seul exemplaire, jamais de doublon
+trap 'exit 0' TERM INT
 DB="/etc/ventes/ventes.db"
 while true; do
     if [[ -f "$DB" ]]; then
@@ -404,7 +418,8 @@ while true; do
             sqlite3 "$DB" "UPDATE licenses SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at<date('now');" 2>/dev/null
         fi
     fi
-    sleep 300
+    sleep 300 &
+    wait $! || true           # kill immédiat pendant la pause
 done
 WD
     chmod 700 "$WATCHDOG_BIN"
@@ -412,13 +427,18 @@ WD
     cat > "/etc/systemd/system/${WATCHDOG_SVC}.service" <<EOF
 [Unit]
 Description=VENTES Watchdog — surveillance continue des licences
+Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 
 [Service]
 Type=simple
 ExecStart=${WATCHDOG_BIN}
 Restart=always
-RestartSec=10
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target
