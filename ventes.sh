@@ -17,7 +17,7 @@ fi
 [[ $EUID -eq 0 ]] || { echo "ERREUR : à exécuter en root." >&2; exit 1; }
 umask 077
 
-readonly VERSION="2.5"
+readonly VERSION="2.6"
 readonly DB_DIR="/etc/ventes"
 readonly DB="${DB_DIR}/ventes.db"
 readonly CONFIG="${DB_DIR}/config.json"
@@ -277,6 +277,7 @@ act_create() {
     printf '  🔗 API : \033[0;97mSCRIPT D'"'"'AUTOMATION\033[0m\n'
     printf '  \033[0;90m🔢 N'"'"'OUBLIER PAS D'"'"'AVOIR DEUX NS-DOMAIN ET UN SOUS DOMAINE QUI POINT VERS VOTRE VPS\033[0m\n'
     printf '\n'
+    _pause
 }
 
 act_list() {
