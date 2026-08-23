@@ -17,7 +17,7 @@ fi
 [[ $EUID -eq 0 ]] || { echo "ERREUR : à exécuter en root." >&2; exit 1; }
 umask 077
 
-readonly VERSION="2.2"
+readonly VERSION="2.3"
 readonly DB_DIR="/etc/ventes"
 readonly DB="${DB_DIR}/ventes.db"
 readonly CONFIG="${DB_DIR}/config.json"
@@ -25,9 +25,9 @@ readonly CHKSUM_FILE="${DB_DIR}/.checksum"
 readonly BACKUP_DIR="${DB_DIR}/backups"
 readonly DAILY_KEEP=7
 
-# ── État du panel Kighmu (affichage seul) ─────────────────────────────────────
-readonly KIGHMU_BIN="/usr/local/bin/kighmu"
-readonly CORE_SERVICES=(xray haproxy dropbear-custom v2ray sshws ssl_tls dnsdist zivpn hysteria udp-custom)
+# ── Service de surveillance continue des licences ─────────────────────────────
+readonly WATCHDOG_BIN="/usr/local/bin/ventes-watchdog"
+readonly WATCHDOG_SVC="ventes-watchdog"
 
 readonly RST='\033[0m' BLD='\033[1m' DIM='\033[2m'
 readonly RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
@@ -385,16 +385,118 @@ act_stats() {
 }
 
 # ==============================================================================
-#  ÉTAT DU PANEL (affichage seul — l'installation se fait via install.sh)
+#  INSTALLATION / DÉSINSTALLATION — strictement limitées à VENTES (zéro tunnel)
 # ==============================================================================
-_panel_installed() { [[ -x "$KIGHMU_BIN" && "$(head -c4 "$KIGHMU_BIN" 2>/dev/null)" == $'\x7fELF' ]]; }
 
-_svc_active_count() {
-    local n=0 s
-    for s in "${CORE_SERVICES[@]}"; do
-        systemctl is-active --quiet "$s" 2>/dev/null && n=$((n+1))
-    done
-    echo "$n"
+# Service continu : passe les licences expirées en EXPIRED + audit, toutes les 5 min.
+_install_watchdog_service() {
+    cat > "$WATCHDOG_BIN" <<'WD'
+#!/usr/bin/env bash
+# VENTES Watchdog — surveillance continue des licences
+DB="/etc/ventes/ventes.db"
+while true; do
+    if [[ -f "$DB" ]]; then
+        expired=$(sqlite3 "$DB" "SELECT uuid||'|'||client_name FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at<date('now');" 2>/dev/null)
+        if [[ -n "$expired" ]]; then
+            while IFS='|' read -r u n; do
+                sqlite3 "$DB" "INSERT INTO audit (timestamp, action, license_uuid, details) VALUES (datetime('now'),'AUTO_EXPIRE','$u','$n');" 2>/dev/null
+            done <<< "$expired"
+            sqlite3 "$DB" "UPDATE licenses SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at<date('now');" 2>/dev/null
+        fi
+    fi
+    sleep 300
+done
+WD
+    chmod 700 "$WATCHDOG_BIN"
+
+    cat > "/etc/systemd/system/${WATCHDOG_SVC}.service" <<EOF
+[Unit]
+Description=VENTES Watchdog — surveillance continue des licences
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${WATCHDOG_BIN}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now "${WATCHDOG_SVC}.service" 2>/dev/null || true
+}
+
+_remove_watchdog_service() {
+    systemctl disable --now "${WATCHDOG_SVC}.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${WATCHDOG_SVC}.service" "$WATCHDOG_BIN"
+    systemctl daemon-reload 2>/dev/null || true
+}
+
+_watchdog_active()   { systemctl is-active --quiet "${WATCHDOG_SVC}.service" 2>/dev/null; }
+_watchdog_installed(){ [[ -f "/etc/systemd/system/${WATCHDOG_SVC}.service" ]]; }
+_deps_ok()           { command -v sqlite3 &>/dev/null; }
+_db_ok()             { [[ -f "$DB" ]] && _sql "PRAGMA integrity_check;" >/dev/null 2>&1; }
+
+# État global : complete | partielle | absente
+_install_state() {
+    if _deps_ok && _db_ok && _watchdog_installed; then
+        _watchdog_active && { echo complete; return; }
+        echo partielle; return
+    fi
+    echo absente
+}
+
+act_install() {
+    printf '\n  \033[0;97m\033[1m🚀 INSTALLATION VENTES\033[0m\n\n' >&2
+
+    echo -ne "  ${YELLOW}→${RST} Dépendances (sqlite3)..." >&2
+    _check_deps
+    printf ' \033[0;32m✓\033[0m\n' >&2
+
+    echo -ne "  ${YELLOW}→${RST} Base de licences..." >&2
+    _init_db
+    printf ' \033[0;32m✓\033[0m\n' >&2
+
+    echo -ne "  ${YELLOW}→${RST} Service de surveillance continue..." >&2
+    _install_watchdog_service
+    printf ' \033[0;32m✓\033[0m\n' >&2
+
+    echo -ne "  ${YELLOW}→${RST} Sauvegarde quotidienne (4h00)..." >&2
+    _ensure_cron
+    printf ' \033[0;32m✓\033[0m\n' >&2
+
+    printf '\n'
+    if _watchdog_active; then
+        _ok "Installation complète — watchdog actif (vérification toutes les 5 min)."
+    else
+        _warn "Installée mais systemd indisponible : le watchdog ne tourne pas."
+    fi
+    _pause
+}
+
+act_uninstall() {
+    printf '\n  \033[0;97m\033[1m💣 DÉSINSTALLATION VENTES\033[0m\n\n'
+    _warn "Supprime uniquement ce que VENTES a installé/créé :"
+    _warn "service watchdog, cron de sauvegarde, base de licences."
+    _info "Le panel et les tunnels ne sont PAS touchés."
+    printf '\n' >&2
+    CONFIRM "Tout désinstaller ?" || { _info "Annulé."; return; }
+
+    local keep=0
+    if CONFIRM "Conserver la base de licences ?"; then keep=1; fi
+
+    # 1. Service continu + cron
+    _remove_watchdog_service
+    crontab -l 2>/dev/null | grep -v '/usr/local/bin/ventes' | crontab - 2>/dev/null || true
+
+    # 2. Fichiers
+    (( keep )) || rm -rf "$DB_DIR"
+
+    # 3. Le script se retire lui-même
+    rm -f /usr/local/bin/ventes
+    _ok "Désinstallation terminée — système propre."
+    exit 0
 }
 
 # ==============================================================================
@@ -418,35 +520,35 @@ _header() {
     printf '  \033[0;34m║\033[0m  \033[0;97m\033[1mVENTES\033[0m \033[0;90m· Licences · v%s\033[0m\033[0;34m               ║\033[0m\n' "$VERSION"
     printf '  \033[0;34m╚══════════════════════════════════════════╝\033[0m\n'
 
-    # État panel : installé ? services actifs ?
-    local st_ico st_txt sv_ico sv_txt act tot
-    tot=${#CORE_SERVICES[@]}
-    if _panel_installed; then
-        st_ico="${GREEN}●${RST}"; st_txt="Installé"
-        act=$(_svc_active_count)
-        if   (( act == tot )); then sv_ico="${GREEN}●${RST}"; sv_txt="${act}/${tot} actifs"
-        elif (( act > 0 ));    then sv_ico="${YELLOW}●${RST}"; sv_txt="${act}/${tot} actifs"
-        else                        sv_ico="${RED}●${RST}";   sv_txt="0/${tot} — inactifs"
-        fi
-    else
-        st_ico="${RED}○${RST}"; st_txt="Non installé"
-        sv_ico="${GRAY}○${RST}";  sv_txt="—"
-    fi
-    printf '  \033[0;90mPanneau :\033[0m %b %-13s \033[0;90mServices :\033[0m %b %s\n' \
-        "$st_ico" "$st_txt" "$sv_ico" "$sv_txt"
+    # État installation + service continu (strictement VENTES)
+    local in_ico in_txt sv_ico sv_txt state
+    state=$(_install_state)
+    case "$state" in
+        complete)  in_ico="${GREEN}●${RST}"; in_txt="Complète"
+                   if _watchdog_active; then sv_ico="${GREEN}●${RST}"; sv_txt="ACTIF"
+                   else sv_ico="${YELLOW}●${RST}"; sv_txt="ARRÊTÉ"; fi ;;
+        partielle) in_ico="${YELLOW}●${RST}"; in_txt="Partielle"
+                   sv_ico="${RED}●${RST}"; sv_txt="INACTIF" ;;
+        *)         in_ico="${RED}○${RST}";   in_txt="Non installée"
+                   sv_ico="${GRAY}○${RST}";  sv_txt="—" ;;
+    esac
+    printf '  \033[0;90mInstallation :\033[0m %b %-13s \033[0;90mService :\033[0m %b %s\n' \
+        "$in_ico" "$in_txt" "$sv_ico" "$sv_txt"
     printf '  \033[0;90mLicences :\033[0;32m %s\033[0m\033[0;90m / %s%s\033[0m\n' "$active" "$total" "$warn_line"
 
     printf '\n'
-    printf '   \033[0;36m1\033[0m)  ➕  Nouvelle licence\n'
-    printf '   \033[0;36m2\033[0m)  📋  Liste des licences\n'
-    printf '   \033[0;36m3\033[0m)  🔍  Rechercher\n'
-    printf '   \033[0;36m4\033[0m)  🔄  Renouveler / Prolonger\n'
-    printf '   \033[0;36m5\033[0m)  ⏸  Suspendre / Réactiver\n'
-    printf '   \033[0;36m6\033[0m)  🗑  Supprimer\n'
-    printf '   \033[0;36m7\033[0m)  💾  Sauvegarde\n'
-    printf '   \033[0;36m8\033[0m)  📊  Statistiques\n'
+    printf '   \033[0;36m 1\033[0m)  🚀  Installation (VENTES + service continu)\n'
+    printf '   \033[0;36m 2\033[0m)  ➕  Nouvelle licence\n'
+    printf '   \033[0;36m 3\033[0m)  📋  Liste des licences\n'
+    printf '   \033[0;36m 4\033[0m)  🔍  Rechercher\n'
+    printf '   \033[0;36m 5\033[0m)  🔄  Renouveler / Prolonger\n'
+    printf '   \033[0;36m 6\033[0m)  ⏸  Suspendre / Réactiver\n'
+    printf '   \033[0;36m 7\033[0m)  🗑  Supprimer\n'
+    printf '   \033[0;36m 8\033[0m)  💾  Sauvegarde\n'
+    printf '   \033[0;36m 9\033[0m)  📊  Statistiques\n'
     printf '\n'
-    printf '   \033[0;31mq\033[0m)  Quitter\n\n'
+    printf '   \033[0;31m10\033[0m)  💣  Désinstallation (nettoie VENTES)\n'
+    printf '   \033[0;33m q\033[0m)  Quitter\n\n'
 }
 
 _main_menu() {
@@ -457,14 +559,16 @@ _main_menu() {
         c=""
         read -r c || exit 0
         case "$c" in
-            1) act_create ;;
-            2) act_list ;;
-            3) act_search ;;
-            4) act_renew ;;
-            5) act_toggle ;;
-            6) act_delete ;;
-            7) act_backup ;;
-            8) act_stats ;;
+            1) act_install ;;
+            2) act_create ;;
+            3) act_list ;;
+            4) act_search ;;
+            5) act_renew ;;
+            6) act_toggle ;;
+            7) act_delete ;;
+            8) act_backup ;;
+            9) act_stats ;;
+            10) act_uninstall ;;
             q|Q|0) clear; exit 0 ;;
             *) ;;
         esac
