@@ -17,7 +17,7 @@ fi
 [[ $EUID -eq 0 ]] || { echo "ERREUR : à exécuter en root." >&2; exit 1; }
 umask 077
 
-readonly VERSION="2.4"
+readonly VERSION="2.5"
 readonly DB_DIR="/etc/ventes"
 readonly DB="${DB_DIR}/ventes.db"
 readonly CONFIG="${DB_DIR}/config.json"
@@ -75,8 +75,7 @@ _gen_uuid() {
         "$(printf '%x' $(( 0x${h:16:2} & 0x3f | 0x80 )))" "${h:18:2}" "${h:20:12}"
 }
 _gen_key() {
-    local len=$(( 32 + (RANDOM % 17) ))
-    dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | cut -d' ' -f1 | head -c "$len"
+    dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | cut -d' ' -f1   # 32 car. hex aléatoires
 }
 
 LICENSE_SECRET="$(printf '%s' 'KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2' | sha256sum | cut -d' ' -f1)"
@@ -253,24 +252,31 @@ act_create() {
     ASK "Durée en jours (0 = illimité)" "30"; local days="$REPLY_VAL"
     [[ "$days" =~ ^[0-9]+$ ]] || days=30
 
-    local uuid key exp
+    local uuid key exp exp_fr
     uuid=$(_gen_uuid); key=$(_gen_key); exp=$(_expire_at "$days")
+    if [[ "$exp" == "9999-12-31" ]]; then exp_fr="∞ Illimité"; else exp_fr=$(date -d "$exp" '+%d/%m/%Y' 2>/dev/null || echo "$exp"); fi
 
     _sql "INSERT INTO licenses (uuid, license_key, client_name, status, created_at, expires_at)
           VALUES ('$uuid', '$key', '$(_esc "$name")', 'ACTIVE', '$(_now)', '$exp');" \
         && _sql "INSERT INTO audit (timestamp, action, license_uuid, details) VALUES ('$(_now)','CREATE','$uuid','$(_esc "$name")');"
 
     printf '\n'
-    _ok "Licence créée pour $(printf '%b' "${WHITE}${name}${RST}")"
+    printf '  \033[0;97m• \033[0;33m💥 ━─━─ KEY - \033[0;36m%s\033[0;33m ━─━─ 💥\033[0m \033[0;97m•\033[0m\n' "${name^^}"
+    printf '  👤 Nom d'"'"'utilisateur : \033[0;36m%s\033[0m\n' "$name"
+    printf '  📅 Durée : \033[0;33m%s\033[0m\n' "$exp_fr"
     printf '\n'
-    printf '  ┌─────────────────────────────────────────┐\n'
-    printf '  │ Clé : \033[0;32m\033[1m%-29s\033[0m │\n' "$key"
-    printf '  └─────────────────────────────────────────┘\n'
-    [[ "$days" != "0" ]] && printf '  Expire le \033[0;36m%s\033[0m \033[0;90m(+%sj)\033[0m\n' "$exp" "$days"
-    printf '\n  \033[0;90m── À envoyer au client ───────────────────────\033[0m\n'
-    printf '  bash <(curl -sL https://frav.kingom.ggff.net/install.sh)\n'
-    printf '  Clé : \033[0;32m%s\033[0m\n' "$key"
-    printf '  \033[0;90m──────────────────────────────────────────────\033[0m\n\n'
+    printf '  🔑 Clé licence :\n'
+    printf '  \033[0;32m\033[1m%s\033[0m\n' "$key"
+    printf '\n'
+    printf '  📥 Instalador :\n'
+    printf '  \033[0;97mbash <(curl -sL https://frav.kingom.ggff.net/fasto/raw/main/install.sh)\033[0m\n'
+    printf '\n'
+    printf '  🐧 Ubuntu Recomender : \033[0;97m20.04, 22.04, 24.04\033[0m\n'
+    printf '  🌀 Debian recommander : \033[0;97m11, 12\033[0m\n'
+    printf '  \033[0;90m──────────────────────\033[0m\n'
+    printf '  🔗 API : \033[0;97mSCRIPT D'"'"'AUTOMATION\033[0m\n'
+    printf '  \033[0;90m🔢 N'"'"'OUBLIER PAS D'"'"'AVOIR DEUX NS-DOMAIN ET UN SOUS DOMAINE QUI POINT VERS VOTRE VPS\033[0m\n'
+    printf '\n'
 }
 
 act_list() {
