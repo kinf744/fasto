@@ -27,7 +27,7 @@ jobs:
           VFILE=$(python3 -c "import telegram._version as v; print(v.__file__)")
           python3 -m nuitka \
             --nofollow-import-to=telegram._version \
-            --include-data-files=\"$VFILE=telegram/_version.py\" \
+            --include-data-files=$VFILE=telegram/_version.py \
             --standalone --onefile \
             --output-filename=install2.bin \
             --include-package=telegram \
