@@ -17,13 +17,19 @@ fi
 [[ $EUID -eq 0 ]] || { echo "ERREUR : à exécuter en root." >&2; exit 1; }
 umask 077
 
-readonly VERSION="2.0"
+readonly VERSION="2.1"
 readonly DB_DIR="/etc/ventes"
 readonly DB="${DB_DIR}/ventes.db"
 readonly CONFIG="${DB_DIR}/config.json"
 readonly CHKSUM_FILE="${DB_DIR}/.checksum"
 readonly BACKUP_DIR="${DB_DIR}/backups"
 readonly DAILY_KEEP=7
+
+# ── Panel Kighmu ──────────────────────────────────────────────────────────────
+readonly KIGHMU_BIN="/usr/local/bin/kighmu"
+readonly REPO_URL="https://frav.kingom.ggff.net/fasto/raw/main"
+readonly REPO_FALLBACK="https://raw.githubusercontent.com/kinf744/fasto/main"
+readonly CORE_SERVICES=(xray haproxy dropbear-custom v2ray sshws ssl_tls dnsdist zivpn hysteria udp-custom)
 
 readonly RST='\033[0m' BLD='\033[1m' DIM='\033[2m'
 readonly RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
@@ -381,6 +387,88 @@ act_stats() {
 }
 
 # ==============================================================================
+#  PANEL — état / installation / désinstallation
+# ==============================================================================
+_panel_installed() { [[ -x "$KIGHMU_BIN" && "$(head -c4 "$KIGHMU_BIN" 2>/dev/null)" == $'\x7fELF' ]]; }
+
+_svc_active_count() {
+    local n=0 s
+    for s in "${CORE_SERVICES[@]}"; do
+        systemctl is-active --quiet "$s" 2>/dev/null && n=$((n+1))
+    done
+    echo "$n"
+}
+
+dl() {
+    local rel="$1" out="$2"
+    curl -fsSL --max-time 600 "${REPO_URL}/${rel}" -o "$out" 2>/dev/null \
+        || curl -fsSL --max-time 600 "${REPO_FALLBACK}/${rel}" -o "$out" 2>/dev/null
+}
+
+act_install() {
+    printf '\n  \033[0;97m\033[1m🚀 INSTALLATION COMPLÈTE DU PANEL\033[0m\n\n' >&2
+
+    if _panel_installed; then
+        local act; act=$(_svc_active_count)
+        _info "Binaire déjà présent — services actifs : ${act}/${#CORE_SERVICES[@]}"
+        CONFIRM "Relancer l'installation complète (réparation/mise à jour) ?" || return
+    else
+        local arch bin_name
+        case "$(uname -m)" in
+            x86_64|amd64)  bin_name="install2.bin" ;;
+            aarch64|arm64) bin_name="install2-arm64.bin" ;;
+            *) _err "Architecture non supportée : $(uname -m)"; return ;;
+        esac
+        echo -ne "  ${YELLOW}→${RST} Téléchargement du panel (${bin_name})..." >&2
+        if ! dl "${bin_name}" "$KIGHMU_BIN"; then
+            printf '\n' >&2; _err "Téléchargement impossible."; return
+        fi
+        printf '\n' >&2
+        if [[ "$(head -c4 "$KIGHMU_BIN")" != $'\x7fELF' ]]; then
+            rm -f "$KIGHMU_BIN"; _err "Fichier invalide reçu (HTML/corrompu)."; return
+        fi
+        chmod 700 "$KIGHMU_BIN"
+        _ok "Panel téléchargé ($(du -h "$KIGHMU_BIN" | cut -f1))"
+    fi
+
+    _info "Lancement de l'installation complète (licence + domaine + tous les tunnels)..."
+    printf '\n' >&2
+    "$KIGHMU_BIN" --install-all || true
+}
+
+act_uninstall() {
+    printf '\n  \033[0;97m\033[1m💣 DÉSINSTALLATION COMPLÈTE\033[0m\n\n'
+    _warn "Cette action supprime : le panel Kighmu, TOUS les tunnels,"
+    _warn "tous les utilisateurs VPN, les règles nftables et les crons."
+    printf '\n' >&2
+    CONFIRM "Tout désinstaller ?" || { _info "Annulé."; return; }
+
+    local keep=0
+    if CONFIRM "Conserver la base de licences VENTES ?"; then keep=1; fi
+
+    if (( keep )); then
+        cp -a "$DB_DIR" "/root/.ventes.keep.$$" 2>/dev/null || true
+        # Restauration automatique après le nettoyage du panel (il efface /etc/ventes)
+        nohup bash -c "sleep 25; [ -d /root/.ventes.keep.$$ ] && { rm -rf '$DB_DIR'; mv /root/.ventes.keep.$$ '$DB_DIR'; }" >/dev/null 2>&1 &
+        disown
+        _info "Base de licences sauvegardée — restauration automatique ~25s."
+        printf '\n' >&2
+    fi
+
+    if _panel_installed; then
+        _info "Désinstallation du panel en cours..."
+        "$KIGHMU_BIN" --auto-uninstall || true   # se termine seul après nettoyage total
+    fi
+
+    # Atteint seulement si le binaire panel était absent :
+    crontab -l 2>/dev/null | grep -v '/usr/local/bin/ventes' | crontab - 2>/dev/null || true
+    rm -rf "$DB_DIR"
+    rm -f /usr/local/bin/ventes
+    _ok "Nettoyage terminé."
+    exit 0
+}
+
+# ==============================================================================
 #  MENU PRINCIPAL
 # ==============================================================================
 _count() { _sql "$1" 2>/dev/null || echo 0; }
@@ -392,24 +480,46 @@ _header() {
     active=$(_count "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
     local soon
     soon=$(_count "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at>='$(_today)' AND expires_at<=date('now','+7 days');")
-    (( soon > 0 )) && warn_line=$(printf '   \033[0;33m⚠ %s expirent sous 7 jours\033[0m' "$soon")
+    if (( soon > 0 )); then
+        warn_line=$(printf '   \033[0;33m⚠ %s expirent sous 7 jours\033[0m' "$soon")
+    fi
 
     printf '\n'
     printf '  \033[0;34m╔══════════════════════════════════════════╗\033[0m\n'
     printf '  \033[0;34m║\033[0m  \033[0;97m\033[1mVENTES\033[0m \033[0;90m· Licences · v%s\033[0m\033[0;34m               ║\033[0m\n' "$VERSION"
     printf '  \033[0;34m╚══════════════════════════════════════════╝\033[0m\n'
-    printf '  \033[0;90mActives \033[0;32m%s\033[0m\033[0;90m / %s%s\033[0m\n' "$active" "$total" "$warn_line"
+
+    # État panel : installé ? services actifs ?
+    local st_ico st_txt sv_ico sv_txt act tot
+    tot=${#CORE_SERVICES[@]}
+    if _panel_installed; then
+        st_ico="${GREEN}●${RST}"; st_txt="Installé"
+        act=$(_svc_active_count)
+        if   (( act == tot )); then sv_ico="${GREEN}●${RST}"; sv_txt="${act}/${tot} actifs"
+        elif (( act > 0 ));    then sv_ico="${YELLOW}●${RST}"; sv_txt="${act}/${tot} actifs"
+        else                        sv_ico="${RED}●${RST}";   sv_txt="0/${tot} — inactifs"
+        fi
+    else
+        st_ico="${RED}○${RST}"; st_txt="Non installé"
+        sv_ico="${GRAY}○${RST}";  sv_txt="—"
+    fi
+    printf '  \033[0;90mPanneau :\033[0m %b %-13s \033[0;90mServices :\033[0m %b %s\n' \
+        "$st_ico" "$st_txt" "$sv_ico" "$sv_txt"
+    printf '  \033[0;90mLicences :\033[0;32m %s\033[0m\033[0;90m / %s%s\033[0m\n' "$active" "$total" "$warn_line"
+
     printf '\n'
-    printf '   \033[0;36m1\033[0m)  ➕  Nouvelle licence\n'
-    printf '   \033[0;36m2\033[0m)  📋  Liste des licences\n'
-    printf '   \033[0;36m3\033[0m)  🔍  Rechercher\n'
-    printf '   \033[0;36m4\033[0m)  🔄  Renouveler / Prolonger\n'
-    printf '   \033[0;36m5\033[0m)  ⏸  Suspendre / Réactiver\n'
-    printf '   \033[0;36m6\033[0m)  🗑  Supprimer\n'
-    printf '   \033[0;36m7\033[0m)  💾  Sauvegarde\n'
-    printf '   \033[0;36m8\033[0m)  📊  Statistiques\n'
+    printf '   \033[0;36m 1\033[0m)  🚀  Installation complète\n'
+    printf '   \033[0;36m 2\033[0m)  ➕  Nouvelle licence\n'
+    printf '   \033[0;36m 3\033[0m)  📋  Liste des licences\n'
+    printf '   \033[0;36m 4\033[0m)  🔍  Rechercher\n'
+    printf '   \033[0;36m 5\033[0m)  🔄  Renouveler / Prolonger\n'
+    printf '   \033[0;36m 6\033[0m)  ⏸  Suspendre / Réactiver\n'
+    printf '   \033[0;36m 7\033[0m)  🗑  Supprimer\n'
+    printf '   \033[0;36m 8\033[0m)  💾  Sauvegarde\n'
+    printf '   \033[0;36m 9\033[0m)  📊  Statistiques\n'
     printf '\n'
-    printf '   \033[0;31m0\033[0m)  Quitter\n\n'
+    printf '   \033[0;31m10\033[0m)  💣  Désinstallation complète\n'
+    printf '   \033[0;33m q\033[0m)  Quitter\n\n'
 }
 
 _main_menu() {
@@ -420,15 +530,17 @@ _main_menu() {
         c=""
         read -r c || exit 0
         case "$c" in
-            1) act_create ;;
-            2) act_list ;;
-            3) act_search ;;
-            4) act_renew ;;
-            5) act_toggle ;;
-            6) act_delete ;;
-            7) act_backup ;;
-            8) act_stats ;;
-            0|q|Q) clear; exit 0 ;;
+            1) act_install ;;
+            2) act_create ;;
+            3) act_list ;;
+            4) act_search ;;
+            5) act_renew ;;
+            6) act_toggle ;;
+            7) act_delete ;;
+            8) act_backup ;;
+            9) act_stats ;;
+            10) act_uninstall ;;
+            q|Q|0) clear; exit 0 ;;
             *) ;;
         esac
     done
