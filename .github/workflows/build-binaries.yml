@@ -21,7 +21,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file
-          pip install nuitka==4.1.3 zstandard telegram
+          pip install nuitka==4.1.3 zstandard python-telegram-bot
       - name: Build (Nuitka)
         run: |
           python3 -m nuitka \
@@ -51,7 +51,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file
-          pip install nuitka==4.1.3 zstandard telegram
+          pip install nuitka==4.1.3 zstandard python-telegram-bot
       - name: Build (Nuitka natif ARM64)
         run: |
           python3 -m nuitka \
