@@ -2130,10 +2130,16 @@ def install_telegram_bot():
     BOT_DIR = Path("/etc/kighmu/bot")
     BOT_DIR.mkdir(parents=True, exist_ok=True)
     (BOT_DIR / "config.json").write_text(json.dumps({"token": token, "admin_id": int(aid_s)}, indent=2))
-    # Copy self as bot script
+    # Copy self as bot script (copie binaire-safe : source .py OU binaire Nuitka)
+    src_self = Path(sys.argv[0]).resolve()
     bot_script = Path("/usr/local/bin/kighmu-bot")
-    bot_script.write_text(Path(sys.argv[0]).read_text())
+    if src_self != bot_script:
+        shutil.copy2(str(src_self), str(bot_script))
     bot_script.chmod(0o755)
+
+    # En binaire compile, python3 ne peut pas executer l'ELF -> ExecStart direct
+    frozen = getattr(sys, "frozen", False) or "__compiled__" in globals()
+    exec_start = "/usr/local/bin/kighmu-bot --bot" if frozen else "/usr/bin/python3 /usr/local/bin/kighmu-bot --bot"
     svc = f"""[Unit]
 Description=Kighmu Telegram Bot
 After=network.target
@@ -2141,7 +2147,7 @@ StartLimitIntervalSec=0
 StartLimitBurst=0
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/kighmu-bot --bot
+ExecStart={exec_start}
 WorkingDirectory=/etc/kighmu/bot
 Restart=always
 RestartSec=10
