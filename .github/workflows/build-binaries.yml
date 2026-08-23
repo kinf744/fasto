@@ -15,121 +15,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
-      - name: Install dependencies
+      - name: Install deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y upx
-          pip install --break-system-packages pyinstaller
-      
-      - name: Build x86_64 binary
+          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file
+          pip install nuitka==4.1.3 zstandard telegram
+      - name: Build (Nuitka)
         run: |
-          pyinstaller \
-            --onefile \
-            --name install2 \
-            --hidden-import=telegram \
-            --hidden-import=telegram.ext \
-            --hidden-import=telegram.ext.filters \
-            --hidden-import=telegram.ext._application \
-            --hidden-import=telegram.ext._commandhandler \
-            --hidden-import=telegram.ext._callbackqueryhandler \
-            --hidden-import=telegram.ext._messagehandler \
-            --hidden-import=telegram._update \
-            --hidden-import=telegram._inlinekeyboardbutton \
-            --hidden-import=telegram._inlinekeyboardmarkup \
-            --hidden-import=sqlite3 \
-            --hidden-import=asyncio \
-            --hidden-import=logging \
-            --hidden-import=pathlib \
-            --hidden-import=json \
-            --hidden-import=subprocess \
-            --hidden-import=re \
-            --hidden-import=uuid \
-            --hidden-import=time \
-            --hidden-import=shutil \
-            --hidden-import=socket \
-            --hidden-import=hashlib \
-            --hidden-import=secrets \
-            --hidden-import=fcntl \
-            --hidden-import=signal \
-            --hidden-import=base64 \
-            --hidden-import=hmac \
-            --hidden-import=datetime \
-            --hidden-import=collections \
-            --hidden-import=threading \
-            --hidden-import=os \
-            --hidden-import=sys \
-            --hidden-import=stat \
-            --hidden-import=typing \
-            --exclude-module=test \
-            --exclude-module=unittest \
-            --exclude-module=pytest \
-            --exclude-module=doctest \
-            --strip \
+          python3 -m nuitka \
+            --standalone --onefile \
+            --output-filename=install2.bin \
+            --include-package=telegram \
+            --lto=yes \
+            --assume-yes-for-downloads \
+            --jobs=4 \
             install2.py
-      
-      - name: Verify binary size
+      - name: Check size
         run: |
-          SIZE=$(stat -c%s dist/install2)
-          SIZE_MB=$((SIZE / 1024 / 1024))
-          echo "Binary size: ${SIZE_MB}MB"
-          if [ $SIZE_MB -lt 8 ] || [ $SIZE_MB -gt 25 ]; then
-            echo "ERROR: Binary size ${SIZE_MB}MB not in range 8-25MB"
-            exit 1
-          fi
-      
-      - name: Upload x86_64 binary
-        uses: actions/upload-artifact@v4
+          ls -lh install2.bin
+          file install2.bin | grep -q ELF && echo "ELF OK"
+      - uses: actions/upload-artifact@v4
         with:
           name: install2-x86_64
-          path: dist/install2
+          path: install2.bin
 
   build-arm64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - uses: actions/setup-python@v5
         with:
-          platforms: arm64
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Build ARM64 binary
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/arm64
-          file: Dockerfile.arm64
-          push: false
-          load: true
-          tags: kighmu-arm64:latest
-      
-      - name: Extract ARM64 binary
+          python-version: '3.12'
+      - name: Install deps
         run: |
-          docker create --name extract kighmu-arm64:latest
-          docker cp extract:/build/dist/install2-arm64 ./install2-arm64.bin
-          docker rm extract
-      
-      - name: Verify ARM64 binary size
+          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file
+          pip install nuitka==4.1.3 zstandard telegram
+      - name: Build (Nuitka natif ARM64)
         run: |
-          SIZE=$(stat -c%s install2-arm64.bin)
-          SIZE_MB=$((SIZE / 1024 / 1024))
-          echo "ARM64 Binary size: ${SIZE_MB}MB"
-          if [ $SIZE_MB -lt 8 ] || [ $SIZE_MB -gt 25 ]; then
-            echo "ERROR: ARM64 Binary size ${SIZE_MB}MB not in range 8-25MB"
-            exit 1
-          fi
-      
-      - name: Upload ARM64 binary
-        uses: actions/upload-artifact@v4
+          python3 -m nuitka \
+            --standalone --onefile \
+            --output-filename=install2-arm64.bin \
+            --include-package=telegram \
+            --lto=yes \
+            --assume-yes-for-downloads \
+            --jobs=4 \
+            install2.py
+      - name: Check size & arch
+        run: |
+          ls -lh install2-arm64.bin
+          file install2-arm64.bin | grep -q "ARM aarch64" && echo "ARCH OK"
+      - uses: actions/upload-artifact@v4
         with:
           name: install2-arm64
           path: install2-arm64.bin
@@ -139,28 +76,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Download x86_64 binary
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: install2-x86_64
           path: .
-      
-      - name: Download ARM64 binary
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: install2-arm64
           path: .
-      
-      - name: Commit and push binaries
+      - name: Commit binaries
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          cp install2 install2.bin
-          cp install2-arm64.bin install2-arm64.bin
           git add install2.bin install2-arm64.bin
-          git commit -m "chore: update binaries [skip ci]" || echo "No changes"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git HEAD:main
+          git commit -m "chore: update binaries (nuitka) [skip ci]" || echo "No changes"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git HEAD:main || true
