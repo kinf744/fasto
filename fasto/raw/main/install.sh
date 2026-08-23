@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
-# Domaine principal (GitHub Pages, fichiers à la racine) + secours officiel
-REPO_URL="https://frav.kingom.ggff.net"
-REPO_FALLBACK="https://raw.githubusercontent.com/kinf744/fasto/main"
+# Domaine principal (GitHub Pages, fichiers a la racine) + miroirs de secours
+OWNER="kinf744"; REPO="fasto"
+BASES=(
+    "https://frav.kingom.ggff.net"
+    "https://frav.kingom.ggff.net/${REPO}/raw/main"
+    "https://raw.githubusercontent.com/${OWNER}/${REPO}/main"
+    "https://github.com/${OWNER}/${REPO}/raw/main"
+)
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
-WHITE='\033[0;97m'; RST='\033[0m'
+WHITE='\033[0;97m'; GRAY='\033[0;90m'; RST='\033[0m'
 
 echo -e "\n  ${CYAN}╔══════════════════════════════════════════════════════╗${RST}"
 echo -e "            ${WHITE}Kighmu Panel — Installation automatique${RST}"
@@ -17,20 +22,33 @@ echo -e "  ${CYAN}╚═══════════════════�
 os_id=$(grep ^ID= /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')
 [[ "$os_id" =~ ^(debian|ubuntu)$ ]] || { echo -e "  ${RED}✗${RST} Debian/Ubuntu seulement."; exit 1; }
 
-# Téléchargement avec bascule automatique vers le dépôt GitHub si le domaine échoue
+# Telechargement multi-miroirs : IPv4 force, reprises, erreurs visibles.
+# $1=fichier distant  $2=fichier local  $3=taille minimale (octets, optionnel)
 dl() {
-    local rel="$1" out="$2"
-    if ! curl -fsSL --max-time 600 "${REPO_URL}/${rel}" -o "$out" 2>/dev/null; then
-        echo -e "  ${YELLOW}→${RST} Domaine indisponible, essai via GitHub..."
-        curl -fsSL --max-time 600 "${REPO_FALLBACK}/${rel}" -o "$out" 2>/dev/null || {
-            echo -e "  ${RED}✗${RST} Téléchargement impossible : ${rel}"; exit 1; }
-    fi
+    local rel="$1" out="$2" mins="${3:-1024}" base rc
+    for base in "${BASES[@]}"; do
+        echo -e "  ${GRAY}→ Source : ${base}/${rel}${RST}"
+        rm -f "$out"
+        rc=0
+        curl -4 -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 900 \
+             "${base}/${rel}" -o "$out" || rc=$?
+        if [[ $rc -eq 0 && -s "$out" ]]; then
+            local sz; sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
+            if (( sz >= mins )); then return 0; fi
+            echo -e "  ${YELLOW}✗ Fichier tronque (${sz} octets < ${mins}) — miroir suivant...${RST}"
+        else
+            echo -e "  ${YELLOW}✗ Echec curl (code ${rc}) — miroir suivant...${RST}"
+        fi
+    done
+    echo -e "  ${RED}✗ Téléchargement impossible : ${rel}${RST}"
+    echo -e "  ${GRAY}  Diagnostic utile : curl -v -o /tmp/test.bin ${BASES[0]}/${rel}${RST}"
+    exit 1
 }
 
 # Refuse tout contenu non-ELF (page HTML de secours, erreur, etc.)
 require_elf() {
     [[ "$(head -c4 "$1" 2>/dev/null)" == $'\x7fELF' ]] || {
-        echo -e "  ${RED}✗${RST} Fichier invalide reçu (${1}) — abandon."; exit 1; }
+        echo -e "  ${RED}✗ Fichier invalide reçu (${1}) — abandon."; exit 1; }
 }
 
 export DEBIAN_FRONTEND=noninteractive
@@ -40,14 +58,14 @@ echo -e "  ${YELLOW}→${RST} Installation des dépendances..."
 apt-get install -y -qq curl git sqlite3 openssl screen nftables jq unzip python3 2>/dev/null
 
 case "$(uname -m)" in
-    x86_64|amd64)  BIN_NAME="install2.bin" ;;
-    aarch64|arm64) BIN_NAME="install2-arm64.bin" ;;
+    x86_64|amd64)  BIN_NAME="install2.bin";      MIN_SZ=20000000 ;;
+    aarch64|arm64) BIN_NAME="install2-arm64.bin"; MIN_SZ=20000000 ;;
     *) echo -e "  ${RED}✗${RST} Architecture non supportée : $(uname -m)"; exit 1 ;;
 esac
 
 BIN="/usr/local/bin/kighmu"
 echo -e "  ${YELLOW}→${RST} Téléchargement du binaire (${BIN_NAME})..."
-dl "${BIN_NAME}" "$BIN"
+dl "${BIN_NAME}" "$BIN" "$MIN_SZ"
 require_elf "$BIN"
 chmod 700 "$BIN"
 
