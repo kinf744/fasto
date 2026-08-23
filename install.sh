@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-REPO_URL="https://frav.kingom.ggff.net/fasto/raw/main"
+# Domaine principal (GitHub Pages, fichiers à la racine) + secours officiel
+REPO_URL="https://frav.kingom.ggff.net"
+REPO_FALLBACK="https://raw.githubusercontent.com/kinf744/fasto/main"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 WHITE='\033[0;97m'; RST='\033[0m'
 
@@ -13,6 +16,22 @@ echo -e "  ${CYAN}╚═══════════════════�
 
 os_id=$(grep ^ID= /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')
 [[ "$os_id" =~ ^(debian|ubuntu)$ ]] || { echo -e "  ${RED}✗${RST} Debian/Ubuntu seulement."; exit 1; }
+
+# Téléchargement avec bascule automatique vers le dépôt GitHub si le domaine échoue
+dl() {
+    local rel="$1" out="$2"
+    if ! curl -fsSL --max-time 600 "${REPO_URL}/${rel}" -o "$out" 2>/dev/null; then
+        echo -e "  ${YELLOW}→${RST} Domaine indisponible, essai via GitHub..."
+        curl -fsSL --max-time 600 "${REPO_FALLBACK}/${rel}" -o "$out" 2>/dev/null || {
+            echo -e "  ${RED}✗${RST} Téléchargement impossible : ${rel}"; exit 1; }
+    fi
+}
+
+# Refuse tout contenu non-ELF (page HTML de secours, erreur, etc.)
+require_elf() {
+    [[ "$(head -c4 "$1" 2>/dev/null)" == $'\x7fELF' ]] || {
+        echo -e "  ${RED}✗${RST} Fichier invalide reçu (${1}) — abandon."; exit 1; }
+}
 
 export DEBIAN_FRONTEND=noninteractive
 echo -e "  ${YELLOW}→${RST} Mise à jour des paquets..."
@@ -28,7 +47,8 @@ esac
 
 BIN="/usr/local/bin/kighmu"
 echo -e "  ${YELLOW}→${RST} Téléchargement du binaire (${BIN_NAME})..."
-curl -sL "${REPO_URL}/${BIN_NAME}" -o "$BIN"
+dl "${BIN_NAME}" "$BIN"
+require_elf "$BIN"
 chmod 700 "$BIN"
 
 echo -e "  ${GREEN}✓${RST} Lancement du panneau..."

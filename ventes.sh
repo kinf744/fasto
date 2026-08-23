@@ -255,7 +255,7 @@ act_create() {
     printf '  └─────────────────────────────────────────┘\n'
     [[ "$days" != "0" ]] && printf '  Expire le \033[0;36m%s\033[0m \033[0;90m(+%sj)\033[0m\n' "$exp" "$days"
     printf '\n  \033[0;90m── À envoyer au client ───────────────────────\033[0m\n'
-    printf '  bash <(curl -sL https://github.com/kinf744/fasto/raw/main/install.sh)\n'
+    printf '  bash <(curl -sL https://frav.kingom.ggff.net/install.sh)\n'
     printf '  Clé : \033[0;32m%s\033[0m\n' "$key"
     printf '  \033[0;90m──────────────────────────────────────────────\033[0m\n\n'
 }
