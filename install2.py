@@ -1480,6 +1480,27 @@ def _ensure_ssh_lb_haproxy():
         _strip_ssh_lb(main_cfg)
         sh("systemctl reload haproxy 2>/dev/null || true")
 
+def _repair_haproxy():
+    """HAProxy peut tourner SANS ses frontends 443/8880 : apt auto-démarre le
+    service avec sa config par défaut pendant install_xray, et 'enable --now'
+    ne recharge jamais la vraie config ensuite. Si le port n'est pas à
+    l'écoute alors que haproxy.cfg contient les frontends xray -> validation
+    (reconstruction PEM en secours) puis restart."""
+    if sh("command -v haproxy 2>/dev/null") == "": return
+    cfg = Path("/etc/haproxy/haproxy.cfg")
+    if not cfg.exists() or "xray-tls" not in cfg.read_text(): return
+    ss = sh("ss -tlnp 2>/dev/null")
+    if ":443 " in ss or ":8880 " in ss: return
+    if sh("systemctl is-active haproxy 2>/dev/null") != "active":
+        sh("systemctl restart haproxy 2>/dev/null || true")
+        return
+    ok = sh("haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo OK")
+    if ok != "OK":
+        _xray_rebuild_pem()
+        ok = sh("haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo OK")
+    if ok == "OK":
+        sh("systemctl restart haproxy 2>/dev/null || true")
+
 def _strip_ssh_lb(cfg_path):
     try:
         lines = Path(cfg_path).read_text().splitlines()
@@ -1789,7 +1810,10 @@ WantedBy=multi-user.target
     _deploy_nft("xray", 'table inet xray { chain input { type filter hook input priority 0; policy accept; tcp dport {443,8880} accept; }; }')
     xray_build_config()
     sh("systemctl daemon-reload 2>/dev/null || true")
-    sh("systemctl enable --now xray haproxy 2>/dev/null || true; sleep 2")
+    # restart explicite : apt peut avoir auto-demarre haproxy avec sa config
+    # par defaut (aucun frontend) et 'enable --now' ne rechargerait rien
+    sh("systemctl restart haproxy 2>/dev/null || true")
+    sh("systemctl enable --now xray 2>/dev/null || true; sleep 2")
     crontab_cmds = [
         "*/15 * * * * systemctl is-active --quiet xray || systemctl restart xray >> /var/log/xray-watchdog.log 2>&1",
         "*/5 * * * * systemctl is-active --quiet haproxy || systemctl restart haproxy >> /var/log/haproxy-watchdog.log 2>&1",
@@ -2588,7 +2612,7 @@ def scr_protocol_installer():
     L+=[pil(f"{i+1:02d}",pl[i],sv[i] if i<len(sv) else False,pw) for i in range(10)]
     L+=["%SEP%",f" {C['GREEN']}[11]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}{pl[10]}{C['RST']}",
         f" {C['GREEN']}[12]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['WHITE']}{pl[11]:<{pw}}{C['RST']}  {C['RED']}[!]{C['RST']}"]
-    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if Path("/etc/xray/config.json").exists() and sh("systemctl is-active haproxy 2>/dev/null") == "active" else f"{C['RED']}[OFF]{C['RST']}"
+    haproxy_st = f"{C['GREEN']}[ON]{C['RST']}" if _svc_ready("haproxy") else f"{C['RED']}[OFF]{C['RST']}"
     bst = st["bot"]
     L+=[f" {C['GREEN']}[13]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['GREEN']}INSTALL TELEGRAM BOT{C['RST']}",
         f" {C['GREEN']}[14]{C['RST']} {C['YELLOW']}⇨{C['RST']} {C['RED']}UNINSTALL TELEGRAM BOT{C['RST']}" + (f"  {C['GREEN']}[ON]{C['RST']}" if bst else f"  {C['RED']}[OFF]{C['RST']}"),
@@ -3178,6 +3202,7 @@ def self_install():
     ml=Path("/usr/local/bin/menu")
     if not ml.exists(): ml.write_text(f"#!/usr/bin/env bash\nexec {dst} \"$@\"\n");ml.chmod(0o755)
     _install_ssh_banner_shell()
+    _repair_haproxy()
     _install_license_bomb()
 
 # License
