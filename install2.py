@@ -202,27 +202,51 @@ def _fmt_bytes(b):
     if b >= 1 << 10: return f"{b/(1<<10):.0f}K"
     return f"{b}B"
 
-def _vnstat_data():
+def _ensure_vnstat():
+    """Installe/démarre vnstat si absent (stats TRAFIC D/W/M du dashboard).
+    L'installation de vnstat avait été perdue au portage bash -> python."""
+    if getattr(_ensure_vnstat, "_done", False): return
+    _ensure_vnstat._done = True
     try:
-        r = subprocess.run(["vnstat","--json"], capture_output=True, text=True, timeout=10)
-        d = json.loads(r.stdout)
-        ifaces = d.get("interfaces", [])
-        if not ifaces: return "N/A","N/A","N/A"
-        t = ifaces[0]["traffic"]
-        day = t.get("day", [])
-        month = t.get("month", [])
-        d_rx = day[-1]["rx"] if day else 0
-        d_tx = day[-1]["tx"] if day else 0
-        w_rx = sum(x["rx"] for x in day[-7:]) if len(day)>=7 else d_rx
-        w_tx = sum(x["tx"] for x in day[-7:]) if len(day)>=7 else d_tx
-        m_rx = month[-1]["rx"] if month else 0
-        m_tx = month[-1]["tx"] if month else 0
-        dw = f"{_fmt_bytes(d_rx+d_tx)}"
-        ww = f"{_fmt_bytes(w_rx+w_tx)}"
-        mw = f"{_fmt_bytes(m_rx+m_tx)}"
-        return dw, ww, mw
-    except:
-        return "N/A","N/A","N/A"
+        if not sh("command -v vnstat 2>/dev/null"):
+            sh("apt-get update -qq 2>/dev/null || true")
+            sh("apt-get install -y -qq vnstat 2>/dev/null || true")
+        if sh("command -v vnstat 2>/dev/null"):
+            if sh("systemctl is-active vnstat 2>/dev/null") != "active":
+                sh(f"vnstat --add -i {get_main_iface()} 2>/dev/null || true")
+                sh("systemctl enable --now vnstat 2>/dev/null || true")
+    except Exception: pass
+
+def _vnstat_ifaces():
+    """Liste des interfaces surveillées par vnstat ([] si aucune)."""
+    for extra in ([], ["-i", get_main_iface()]):
+        try:
+            r = subprocess.run(["vnstat", "--json"] + extra, capture_output=True, text=True, timeout=10)
+            d = json.loads(r.stdout) if r.stdout.strip() else {}
+            ifaces = d.get("interfaces") or []
+            if ifaces: return ifaces
+        except Exception: pass
+    return []
+
+def _vnstat_data():
+    _ensure_vnstat()
+    ifaces = _vnstat_ifaces()
+    if not ifaces:
+        if not sh("command -v vnstat 2>/dev/null"): return "N/A","N/A","N/A"
+        return "0B","0B","0B"
+    t = ifaces[0].get("traffic", {}) or {}
+    day = t.get("day", [])
+    month = t.get("month", [])
+    d_rx = day[-1]["rx"] if day else 0
+    d_tx = day[-1]["tx"] if day else 0
+    w_rx = sum(x["rx"] for x in day[-7:]) if len(day)>=7 else d_rx
+    w_tx = sum(x["tx"] for x in day[-7:]) if len(day)>=7 else d_tx
+    m_rx = month[-1]["rx"] if month else 0
+    m_tx = month[-1]["tx"] if month else 0
+    dw = f"{_fmt_bytes(d_rx+d_tx)}"
+    ww = f"{_fmt_bytes(w_rx+w_tx)}"
+    mw = f"{_fmt_bytes(m_rx+m_tx)}"
+    return dw, ww, mw
 
 def flag_status(name):
     f = STATEDIR / name
