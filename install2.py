@@ -2071,8 +2071,11 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/zivpn.service").write_text(svc)
     iface = get_main_iface()
     _deploy_nft("zivpn", f'table inet zivpn {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 6000-19999 dnat to :5667; }}; }}')
-    sh("systemctl daemon-reload && systemctl enable --now zivpn.service 2>/dev/null || true")
+    # Appliquer la config finale (auth passwords + quotas des users existants)
+    # AVANT le premier demarrage : evite un process lance sans section quota
+    # (le compteur de trafic n'existe pas si 'quota' etait vide au boot)
     zivpn_apply()
+    sh("systemctl daemon-reload && systemctl enable --now zivpn.service 2>/dev/null || true")
     if sh("systemctl is-active zivpn.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ ZIVPN installé et actif (port 5667).{C['RST']}")
     else: print(f" {C['RED']}✗ ZIVPN: échec démarrage.{C['RST']}")
