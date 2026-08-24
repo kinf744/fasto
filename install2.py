@@ -437,6 +437,10 @@ def _zivpn_sync_config():
             tmp.replace(cfg)
             if cfg.read_bytes() != before:
                 sh("systemctl restart zivpn 2>/dev/null || true")
+                time.sleep(1)
+                if sh("systemctl is-active zivpn 2>/dev/null") != "active":
+                    print(f" {C['RED']}✗ zivpn: restart en echec apres synchro config{C['RST']}")
+                    sh("journalctl -u zivpn -n 10 --no-pager 2>/dev/null || true")
         else:
             print(f" {C['RED']}✗ zivpn: JSON invalide, annulé{C['RST']}")
             tmp.unlink(missing_ok=True)
@@ -446,6 +450,79 @@ def _zivpn_sync_config():
 
 def zivpn_apply():
     _zivpn_sync_config()
+
+ZIVPN_STATE = Path("/etc/zivpn/quota-state.json")
+_ZIVPN_GUARD_MARK = STATEDIR / "zivpn_guard_last"
+
+def _zivpn_expected_quota():
+    """Map password -> 'XGB' attendue, d'apres les users zivpn actifs."""
+    out = {}
+    today = date.today().isoformat()
+    if not USERDIR.exists(): return out
+    for f in USERDIR.iterdir():
+        if not f.is_file(): continue
+        if _meta_get(f.name, "proto") != "zivpn": continue
+        exp = _meta_get(f.name, "exp")
+        if exp and exp != "permanent" and exp < today: continue
+        if is_locked(f.name): continue
+        q = float(_meta_get(f.name, "quota") or "0")
+        if q <= 0: continue
+        pw = _meta_get(f.name, "pass")
+        out[pw or f.name] = f"{int(float(q))}GB"
+    return out
+
+def _zivpn_logger_alive():
+    """Le saver quota de zivpn ecrit l'etat toutes les 30 s. Si le fichier
+    n'est pas rafraichi depuis 120 s alors qu'un quota est configure, le
+    process EN COURS n'a pas le compteur charge (boot sans section quota)."""
+    try:
+        return (time.time() - ZIVPN_STATE.stat().st_mtime) < 120
+    except OSError:
+        return False
+
+def zivpn_quota_guard():
+    """Garde-fou long terme (cron */5) : garantit que zivpn compte bien le
+    trafic. Detecte la derive config/users ET un process demarre sans la
+    section quota (le compteur n'existe que si 'quota' etait non vide au
+    boot). Re-synchronise + restart verifie, avec cooldown anti-boucle."""
+    cfg = Path("/etc/zivpn/config.json")
+    if not cfg.exists(): return 0, "zivpn absent"
+    if sh("systemctl is-active zivpn 2>/dev/null") != "active":
+        sh("systemctl start zivpn 2>/dev/null || true")
+        time.sleep(1)
+        if sh("systemctl is-active zivpn 2>/dev/null") != "active":
+            return 0, "zivpn inactif (echec demarrage)"
+    want = _zivpn_expected_quota()
+    if not want:
+        return 0, "aucun quota configure"
+    try:
+        STATEDIR.mkdir(parents=True, exist_ok=True)
+        last = float(_ZIVPN_GUARD_MARK.read_text().strip())
+    except Exception:
+        last = 0
+    if time.time() - last < 600:
+        return 0, "cooldown"
+    need_apply = False
+    try:
+        data = json.loads(cfg.read_text())
+        cur_auth = sorted((data.get("auth") or {}).get("config", []))
+        cur_quota = data.get("quota") or {}
+        pws = sorted(_active_passwords("zivpn")) or ["zi"]
+        need_apply = (sorted(cur_quota.keys()) != sorted(want.keys())) or (cur_auth != pws)
+    except Exception:
+        need_apply = True
+    alive = _zivpn_logger_alive()
+    if not need_apply and alive:
+        return 0, "ok"
+    zivpn_apply()
+    sh("systemctl restart zivpn 2>/dev/null || true")
+    time.sleep(2)
+    ok = sh("systemctl is-active zivpn 2>/dev/null") == "active"
+    try: _ZIVPN_GUARD_MARK.write_text(str(time.time()))
+    except Exception: pass
+    detail = f"restart={'ok' if ok else 'ECHEC'} (derive_config={need_apply}, compteur_absent={not alive})"
+    log.info(f"zivpn-quota-guard: {detail}")
+    return 1, detail
 
 def hysteria_apply():
     _reload_passwords("/etc/hysteria/config.json", "hysteria", "hysteria")
@@ -2079,6 +2156,9 @@ WantedBy=multi-user.target
     if sh("systemctl is-active zivpn.service 2>/dev/null")=="active":
         print(f" {C['GREEN']}✔ ZIVPN installé et actif (port 5667).{C['RST']}")
     else: print(f" {C['RED']}✗ ZIVPN: échec démarrage.{C['RST']}")
+    # Garde-fou quota : auto-reparation si le process tourne sans compteur
+    if "zivpn-quota-guard" not in sh("crontab -l 2>/dev/null"):
+        sh('(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/kighmu --zivpn-quota-guard >> /var/log/zivpn-quota-guard.log 2>&1") | crontab - 2>/dev/null || true')
 
 def uninstall_zivpn():
     sh("systemctl disable --now zivpn.service 2>/dev/null || true")
@@ -2087,6 +2167,7 @@ def uninstall_zivpn():
     _remove_nft("zivpn")
     # Regenere le catchall udp-custom sans l'exclusion zivpn (devenue obsolete)
     _ensure_nat_catchall()
+    sh("crontab -l 2>/dev/null | grep -v zivpn-quota-guard | crontab - 2>/dev/null || true")
     sh("systemctl daemon-reload 2>/dev/null || true")
     print(f" {C['GREEN']}✔ ZIVPN désinstallé.{C['RST']}")
 
@@ -5212,6 +5293,10 @@ if __name__ == "__main__":
         elif arg == "--quota-enforce":
             b, r = quota_enforce()
             log.info(f"quota-enforce: {b} blocked, {r} restored")
+            sys.exit(0)
+        elif arg == "--zivpn-quota-guard":
+            n, d = zivpn_quota_guard()
+            if n: log.info(f"zivpn-quota-guard: {d}")
             sys.exit(0)
         elif arg == "--ssh-quota-sync":
             _install_ssh_banner_shell()
