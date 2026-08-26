@@ -33,8 +33,8 @@ readonly RST='\033[0m' BLD='\033[1m' DIM='\033[2m'
 readonly RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
 readonly BLUE='\033[0;34m' CYAN='\033[0;36m' WHITE='\033[0;97m' GRAY='\033[0;90m'
 
-trap 'echo' EXIT
-trap 'echo; exit 130' INT
+trap '[[ -t 2 ]] && echo >&2' EXIT
+trap 'echo >&2; exit 130' INT
 
 # ==============================================================================
 #  UTILITAIRES
@@ -50,7 +50,7 @@ _ok()   { printf '  \033[0;32m✓\033[0m  %b\n' "$*"; }
 _err()  { printf '  \033[0;31m✗\033[0m  %b\n' "$*" >&2; }
 _info() { printf '  \033[0;34mℹ\033[0m  %b\n' "$*"; }
 _warn() { printf '  \033[0;33m⚠\033[0m  %b\n' "$*"; }
-_pause(){ printf '  \033[0;90mEntrée pour continuer...\033[0m' >&2; read -r; printf '\n' >&2; }
+_pause(){ printf '  \033[0;90mEntrée pour continuer...\033[0m' >&2; read -r || true; printf '\n' >&2; }
 
 ASK() {
     local q="$1" def="${2:-}"
@@ -70,11 +70,14 @@ CONFIRM() {
 }
 
 _gen_uuid() {
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid; return; fi
+    if command -v uuidgen &>/dev/null; then uuidgen | tr '[:upper:]' '[:lower:]'; return; fi
     local h; h=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-    printf '%s-%s-4%s-%s%s-%s' "${h:0:8}" "${h:8:4}" "${h:13:3}" \
-        "$(printf '%x' $(( 0x${h:16:2} & 0x3f | 0x80 )))" "${h:18:2}" "${h:20:12}"
+    printf '%s-%s-4%s-%02x%s-%s' "${h:0:8}" "${h:8:4}" "${h:12:3}" \
+        "$(( 0x${h:16:2} & 0x3f | 0x80 ))" "${h:18:2}" "${h:20:12}"
 }
 _gen_key() {
+    if command -v openssl &>/dev/null; then openssl rand -hex 16; return; fi
     dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | cut -d' ' -f1   # 32 car. hex aléatoires
 }
 
@@ -150,7 +153,7 @@ _init_db() {
 _silent_backup() {
     [[ -f "$DB" ]] || exit 0
     local f="${BACKUP_DIR}/ventes-$(_today).db.gz"
-    sqlite3 "$DB" ".backup '${BACKUP_DIR}/tmp.db'" 2>/dev/null || cp "$DB" "${BACKUP_DIR}/tmp.db"
+    sqlite3 "$DB" ".backup ${BACKUP_DIR}/tmp.db" 2>/dev/null || cp "$DB" "${BACKUP_DIR}/tmp.db"
     gzip -cf "${BACKUP_DIR}/tmp.db" > "$f" 2>/dev/null || true
     rm -f "${BACKUP_DIR}/tmp.db"
     ls -1t "${BACKUP_DIR}"/ventes-*.db.gz 2>/dev/null | tail -n +$((DAILY_KEEP+1)) | xargs -r rm -f 2>/dev/null || true
@@ -161,7 +164,7 @@ _ensure_cron() {
     {
         [[ -n "$cur" ]] && printf '%s\n' "$cur"
         # Sauvegarde quotidienne
-        [[ "$cur" != *'/usr/local/bin/ventes >'* ]] \
+        [[ "$cur" != *"/usr/local/bin/ventes >"* ]] \
             && echo '0 4 * * * /usr/local/bin/ventes >/dev/null 2>&1'
         # Fallback reboot : relance le watchdog même sans systemd (verrou anti-doublon)
         [[ "$cur" != *'ventes-watchdog'* ]] \
@@ -323,8 +326,17 @@ act_renew() {
     _info "$name expire le $exp"
     ASK "Ajouter combien de jours ?" "30"; local days="$REPLY_VAL"
     [[ "$days" =~ ^[0-9]+$ ]] || days=30
-    local new_exp
-    if [[ "$days" == "0" ]]; then new_exp="9999-12-31"; else new_exp=$(date -d "+${days} days" '+%Y-%m-%d'); fi
+    local new_exp cur_exp_ts today_ts
+    if [[ "$days" == "0" ]]; then new_exp="9999-12-31"
+    else
+        cur_exp_ts=$(date -d "$exp" +%s 2>/dev/null || echo 0)
+        today_ts=$(date -d "$(_today)" +%s)
+        if [[ "$exp" != "9999-12-31" ]] && (( cur_exp_ts > today_ts )); then
+            new_exp=$(date -d "$exp +${days} days" '+%Y-%m-%d')
+        else
+            new_exp=$(date -d "+${days} days" '+%Y-%m-%d')
+        fi
+    fi
     _sql "UPDATE licenses SET expires_at='$new_exp', status='ACTIVE' WHERE uuid='$PICKED_UUID';"
     _sql "INSERT INTO audit (timestamp, action, license_uuid, details) VALUES ('$(_now)','RENEW','$PICKED_UUID','+$days j → $new_exp');"
     _ok "$name → nouvelle expiration : $(printf '%b' "${CYAN}${new_exp}${RST}")"
@@ -375,7 +387,7 @@ act_backup() {
 
 _init_db_backup_once() {
     local f="${BACKUP_DIR}/ventes-$(_today)-$(date '+%H%M%S').db.gz"
-    sqlite3 "$DB" ".backup '${BACKUP_DIR}/tmp.db'" 2>/dev/null || cp "$DB" "${BACKUP_DIR}/tmp.db"
+    sqlite3 "$DB" ".backup ${BACKUP_DIR}/tmp.db" 2>/dev/null || cp "$DB" "${BACKUP_DIR}/tmp.db"
     gzip -cf "${BACKUP_DIR}/tmp.db" > "$f" 2>/dev/null || true
     rm -f "${BACKUP_DIR}/tmp.db"
     _ok "Sauvegarde créée : $(basename "$f")"
