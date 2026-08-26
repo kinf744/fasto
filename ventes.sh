@@ -481,6 +481,215 @@ _watchdog_installed(){ [[ -f "/etc/systemd/system/${WATCHDOG_SVC}.service" ]]; }
 _deps_ok()           { command -v sqlite3 &>/dev/null; }
 _db_ok()             { [[ -f "$DB" ]] && _sql "PRAGMA integrity_check;" >/dev/null 2>&1; }
 
+# ── Bot Telegram (Python, majorité fonctions VPS) ─────────────────────────────
+readonly BOT_CFG="${DB_DIR}/bot.json"
+readonly BOT_PY="/usr/local/bin/ventes-bot"
+readonly BOT_SVC="ventes-bot"
+
+_bot_installed(){ [[ -f "/etc/systemd/system/${BOT_SVC}.service" ]]; }
+_bot_active(){ systemctl is-active --quiet "${BOT_SVC}.service" 2>/dev/null; }
+
+act_bot_menu(){
+    while true; do
+        clear
+        local b_ico b_txt; if _bot_installed; then if _bot_active; then b_ico="${GREEN}●${RST}"; b_txt="ACTIF"; else b_ico="${YELLOW}●${RST}"; b_txt="ARRÊTÉ"; fi; else b_ico="${GRAY}○${RST}"; b_txt="Non installé"; fi
+        printf '\n  \033[0;34m╔══════════════════════════════════════════╗\033[0m\n'
+        printf '  \033[0;34m║\033[0m  \033[0;97m\033[1mBOT TELEGRAM\033[0m \033[0;90m· %b %s\033[0m\033[0;34m              ║\033[0m\n' "$b_ico" "$b_txt"
+        printf '  \033[0;34m╚══════════════════════════════════════════╝\033[0m\n\n'
+        printf '   \033[0;36m 1\033[0m)  📲  Installer le bot (token + ID)\n'
+        printf '   \033[0;36m 2\033[0m)  🗑  Désinstaller le bot\n'
+        printf '   \033[0;90m 0\033[0m)  Retour\n\n'
+        printf '  \033[0;33m►\033[0m \033[0;97mChoix\033[0m : '; local c; read -r c || return
+        case "$c" in 1) act_bot_install;; 2) act_bot_uninstall;; 0|q|Q) return;; *) ;; esac
+    done
+}
+
+act_bot_install(){
+    clear; printf '\n  \033[0;97m\033[1m📲 INSTALLATION BOT TELEGRAM\033[0m\n\n' >&2
+    ASK "Token du bot (via @BotFather)"; local token="$REPLY_VAL"
+    [[ -z "$token" ]] && { _err "Token requis."; return; }
+    ASK "ID Telegram admin (numérique)"; local aid="$REPLY_VAL"
+    [[ "$aid" =~ ^[0-9]+$ ]] || { _err "ID numérique requis."; return; }
+    printf '  \033[0;33m→\033[0m Dépendances Python...\n' >&2
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq python3 python3-pip 2>/dev/null || true
+    pip3 install --quiet --break-system-packages "python-telegram-bot>=20" 2>/dev/null || pip3 install --quiet "python-telegram-bot>=20" 2>/dev/null || true
+    mkdir -p "$(dirname "$BOT_CFG")"
+    printf '{"token":"%s","admin_id":%s}\n' "$token" "$aid" > "$BOT_CFG"
+    chmod 600 "$BOT_CFG"
+    cat > "$BOT_PY" <<'PYEOF'
+#!/usr/bin/env python3
+import os, sys, json, sqlite3, subprocess, re
+from pathlib import Path
+from datetime import date, datetime
+DATADIR = Path("/etc/ventes")
+DB = DATADIR / "ventes.db"
+BOT_CFG = DATADIR / "bot.json"
+TOKEN = ""
+ADMIN_ID = 0
+try:
+    if BOT_CFG.exists():
+        j = json.loads(BOT_CFG.read_text())
+        TOKEN = j.get("token","")
+        ADMIN_ID = int(j.get("admin_id",0))
+except: pass
+try:
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+    BOT_AVAILABLE = True
+except ImportError:
+    BOT_AVAILABLE = False
+def sh(c):
+    try: return subprocess.run(c, shell=True, capture_output=True, text=True, timeout=5).stdout.strip()
+    except: return ""
+def _count(q):
+    try: return int(subprocess.run(["sqlite3", str(DB), q], capture_output=True, text=True, timeout=5).stdout.strip() or "0")
+    except: return 0
+def get_os():
+    try:
+        for l in Path("/etc/os-release").read_text().splitlines():
+            if l.startswith("PRETTY_NAME="): return l.split("=",1)[1].strip().strip('"')
+    except: pass
+    return sh("uname -s") or "N/A"
+def get_ip(): return sh("curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'") or "N/A"
+def is_authorized(uid): return uid == ADMIN_ID
+if BOT_AVAILABLE:
+    def build_menu(btns, n=2): return [btns[i:i+n] for i in range(0, len(btns), n)]
+    def main_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 Dashboard", callback_data="dash"),InlineKeyboardButton("📋 Licences", callback_data="lic_lic"),InlineKeyboardButton("👥 VPS Users", callback_data="vps_users"),InlineKeyboardButton("🔧 Services", callback_data="services"),InlineKeyboardButton("🖥 Serveur", callback_data="server"),InlineKeyboardButton("❓ Aide", callback_data="help")]))
+    def lic_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("➕ Nouvelle", callback_data="lic_create"),InlineKeyboardButton("📋 Liste", callback_data="lic_list"),InlineKeyboardButton("🔍 Rechercher", callback_data="lic_search"),InlineKeyboardButton("🔄 Prolonger", callback_data="lic_renew"),InlineKeyboardButton("⏸ Suspendre", callback_data="lic_toggle"),InlineKeyboardButton("🗑 Supprimer", callback_data="lic_delete"),InlineKeyboardButton("📊 Stats", callback_data="lic_stats"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
+    def vps_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 VPS Dashboard", callback_data="vps_dash"),InlineKeyboardButton("📋 VPS Liste", callback_data="vps_list"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
+    def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Retour", callback_data=t)]])
+    HELP_TEXT = ("🤖 *VENTES Bot* — Panneau VPS via Telegram\n━━━━━━━━━━━━━━\n*/start* — Menu\n*/help* — Aide\n\n📊 *Dashboard* — Licences + VPS\n📋 *Licences* — Créer/Lister/Rechercher/Prolonger/Suspendre/Supprimer/Stats\n👥 *VPS Users* — Compteurs SSH/XRAY/V2RAY/ZIVPN/Hysteria\n🔧 *Services* — haproxy/xray/v2ray/zivpn/hysteria/ssh\n🖥 *Serveur* — OS, arch, uptime, IP\n")
+    async def start(update, ctx):
+        if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Non autorisé."); return
+        await show_main(update, ctx)
+    async def cmd_help(update, ctx):
+        if not is_authorized(update.effective_user.id): return
+        await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+    async def show_main(update, ctx, edit=False):
+        lic_total = _count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';")
+        lic_active = _count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
+        vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
+        t = f"🤖 *VENTES — Panneau VPS*\n━━━━━━━━━━━━━━\n📋 Licences: `{lic_active}/{lic_total}` actives\n👥 VPS Users: `{vps_users}`\n🌐 IP: `{get_ip()}`\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        if edit: await update.callback_query.edit_message_text(t, reply_markup=main_kb(), parse_mode="Markdown")
+        else: await update.message.reply_text(t, reply_markup=main_kb(), parse_mode="Markdown")
+    async def callback_handler(update, ctx):
+        q = update.callback_query; await q.answer()
+        if not is_authorized(q.from_user.id): await q.edit_message_text("⛔ Non autorisé."); return
+        d = q.data
+        if d == "main": await show_main(update, ctx, edit=True)
+        elif d == "dash":
+            lic_total = _count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';"); lic_active = _count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
+            lic_exp = _count(f"SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at<'{date.today().isoformat()}' AND expires_at!='9999-12-31';")
+            vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
+            t = f"📊 *Dashboard*\n━━━━━━━━━━━━━━\n*Licences*\n• Total: `{lic_total}`\n• Actives: `{lic_active}`\n• Expirées: `{lic_exp}`\n\n*VPS*\n• Users: `{vps_users}`\n• IP: `{get_ip()}`"
+            await q.edit_message_text(t, reply_markup=back_kb("main"), parse_mode="Markdown")
+        elif d == "lic_lic": await q.edit_message_text("📋 *Licences* — Choisissez :", reply_markup=lic_kb(), parse_mode="Markdown")
+        elif d == "lic_list":
+            rows = subprocess.run(["sqlite3", str(DB), "SELECT client_name,expires_at,status FROM licenses WHERE status!='DELETED' ORDER BY expires_at LIMIT 20;"], capture_output=True, text=True).stdout.strip().splitlines()
+            t = "📋 Aucune licence." if not rows or rows==[''] else "📋 *Licences (20)*\n```\n" + "\n".join([f"{r.split('|')[0][:18]:18} {r.split('|')[1]:12} {r.split('|')[2]}" for r in rows if "|" in r]) + "\n```"
+            await q.edit_message_text(t, reply_markup=back_kb("lic_lic"), parse_mode="Markdown")
+        elif d == "lic_stats":
+            total=_count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';"); active=_count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
+            susp=_count("SELECT COUNT(*) FROM licenses WHERE status='SUSPENDED';"); exp=_count(f"SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at<'{date.today().isoformat()}' AND expires_at!='9999-12-31';")
+            await q.edit_message_text(f"📊 *Stats*\n• Total: `{total}`\n• Actives: `{active}`\n• Suspendues: `{susp}`\n• Expirées: `{exp}`", reply_markup=back_kb("lic_lic"), parse_mode="Markdown")
+        elif d in ("lic_create","lic_search","lic_renew","lic_toggle","lic_delete"):
+            ctx.user_data["step"]=d; await q.edit_message_text({"lic_create":"✏️ Nom du client :","lic_search":"🔍 Terme :","lic_renew":"🔄 N°/nom à prolonger :","lic_toggle":"⏸ N°/nom à suspendre :","lic_delete":"🗑 N°/nom à supprimer :"}[d])
+        elif d == "vps_users": await q.edit_message_text("👥 *VPS Users*", reply_markup=vps_kb(), parse_mode="Markdown")
+        elif d == "vps_dash":
+            vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
+            await q.edit_message_text(f"👥 *VPS Dashboard*\n• Users: `{vps_users}`\n• IP: `{get_ip()}`", reply_markup=back_kb("vps_users"), parse_mode="Markdown")
+        elif d == "vps_list":
+            users=[f.name for f in Path("/etc/kighmu/users").iterdir() if f.is_file()] if Path("/etc/kighmu/users").exists() else []
+            await q.edit_message_text("📋 *VPS Users* (`{}`)\n".format(len(users)) + ("\n".join(f"• `{u}`" for u in users[:30]) if users else "Aucun"), reply_markup=back_kb("vps_users"), parse_mode="Markdown")
+        elif d == "services":
+            svcs={"haproxy":"haproxy","xray":"xray","v2ray":"v2ray","zivpn":"zivpn","hysteria":"hysteria","ssh":"ssh"}
+            lines=["🔧 *Services*"]+ [f"{'🟢' if sh(f'systemctl is-active {s} 2>/dev/null')=='active' else '🔴'} {n}" for n,s in svcs.items()]
+            await q.edit_message_text("\n".join(lines), reply_markup=back_kb("main"), parse_mode="Markdown")
+        elif d == "server":
+            await q.edit_message_text(f"🖥 *Serveur*\n• OS: `{get_os()}`\n• Arch: `{sh('uname -m')}`\n• Uptime: `{sh('uptime -p 2>/dev/null')}`\n• IP: `{get_ip()}`", reply_markup=back_kb("main"), parse_mode="Markdown")
+        elif d == "help": await q.edit_message_text(HELP_TEXT, reply_markup=back_kb("main"), parse_mode="Markdown")
+    async def text_handler(update, ctx):
+        if not is_authorized(update.effective_user.id): return
+        text=update.message.text.strip(); step=ctx.user_data.get("step","")
+        if step=="lic_create":
+            ctx.user_data["tmp_name"]=text; ctx.user_data["step"]="lic_create_days"; await update.message.reply_text("📅 Durée jours (0=illimité, 30) :")
+        elif step=="lic_create_days":
+            days=text.strip() or "30"
+            if not days.isdigit(): await update.message.reply_text("❌ Nombre invalide."); return
+            h=subprocess.run(["od","-An","-N16","-tx1","/dev/urandom"], capture_output=True, text=True).stdout.replace(" ","").replace("\n","")
+            uuid=f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"; key=subprocess.run(["openssl","rand","-hex","16"], capture_output=True, text=True).stdout.strip() or h[:32]
+            exp="9999-12-31" if days=="0" else subprocess.run(["date","-d",f"+{days} days","+%Y-%m-%d"], capture_output=True, text=True).stdout.strip()
+            try:
+                conn=sqlite3.connect(str(DB)); conn.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at) VALUES (?,?,?,?,datetime('now'),?)", (uuid,key,ctx.user_data["tmp_name"],"ACTIVE",exp)); conn.commit(); conn.close()
+                await update.message.reply_text(f"✅ Licence `{ctx.user_data['tmp_name']}`\n🔑 `{key}`\n📅 `{exp}`", parse_mode="Markdown")
+            except Exception as e: await update.message.reply_text(f"❌ {e}")
+            ctx.user_data.clear()
+        elif step=="lic_search":
+            term=text; rows=subprocess.run(["sqlite3",str(DB),f"SELECT client_name,expires_at,status FROM licenses WHERE client_name LIKE '%{term.replace(chr(39),chr(39)+chr(39))}%' LIMIT 20;"], capture_output=True, text=True).stdout.strip()
+            await update.message.reply_text(f"🔍 `{term}`:\n```\n{rows}\n```" if rows else "Aucun.", parse_mode="Markdown"); ctx.user_data.clear()
+        elif step in ("lic_renew","lic_toggle","lic_delete"):
+            name=text; cur=subprocess.run(["sqlite3",str(DB),f"SELECT uuid,expires_at,status FROM licenses WHERE client_name='{name.replace(chr(39),chr(39)+chr(39))}' LIMIT 1;"], capture_output=True, text=True).stdout.strip()
+            if not cur: await update.message.reply_text("❌ Non trouvé."); ctx.user_data.clear(); return
+            uuid,exp,status=cur.split("|")
+            if step=="lic_renew": ctx.user_data["renew_uuid"]=uuid; ctx.user_data["step"]="lic_renew_days"; await update.message.reply_text(f"🔄 `{name}` expire `{exp}` — jours à ajouter ?")
+            elif step=="lic_toggle":
+                ns="SUSPENDED" if status=="ACTIVE" else "ACTIVE"; subprocess.run(["sqlite3",str(DB),f"UPDATE licenses SET status='{ns}' WHERE uuid='{uuid}';"]); await update.message.reply_text(f"✅ `{name}` → `{ns}`", parse_mode="Markdown"); ctx.user_data.clear()
+            else: subprocess.run(["sqlite3",str(DB),f"UPDATE licenses SET status='DELETED' WHERE uuid='{uuid}';"]); await update.message.reply_text(f"🗑 `{name}` supprimée.", parse_mode="Markdown"); ctx.user_data.clear()
+        elif step=="lic_renew_days":
+            days=text.strip()
+            if not days.isdigit(): await update.message.reply_text("❌ Nombre invalide."); return
+            uuid=ctx.user_data.get("renew_uuid",""); new_exp="9999-12-31" if days=="0" else subprocess.run(["date","-d",f"+{days} days","+%Y-%m-%d"], capture_output=True, text=True).stdout.strip()
+            subprocess.run(["sqlite3",str(DB),f"UPDATE licenses SET expires_at='{new_exp}',status='ACTIVE' WHERE uuid='{uuid}';"])
+            await update.message.reply_text(f"✅ Prolongée → `{new_exp}`", parse_mode="Markdown"); ctx.user_data.clear()
+        else: await update.message.reply_text("Utilisez /start", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="main")]]))
+    async def error_handler(update, ctx): print(f"Error: {ctx.error}")
+def run_bot():
+    if not BOT_AVAILABLE: print("python-telegram-bot manquant"); sys.exit(1)
+    if not TOKEN: print("Token manquant"); sys.exit(1)
+    app=Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", lambda u,c: c.bot.send_message(chat_id=u.effective_chat.id, text=HELP_TEXT, parse_mode="Markdown")))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_error_handler(error_handler)
+    print("VENTES Bot démarré"); app.run_polling()
+if __name__=="__main__":
+    run_bot()
+PYEOF
+    chmod 700 "$BOT_PY"
+    cat > "/etc/systemd/system/${BOT_SVC}.service" <<EOF
+[Unit]
+Description=VENTES Telegram Bot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${BOT_PY}
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now "${BOT_SVC}.service" 2>/dev/null || true
+    if _bot_active; then _ok "Bot installé et actif."; else _err "Échec démarrage — vérifiez le token."; fi
+    _pause
+}
+
+act_bot_uninstall(){
+    clear; printf '\n  \033[0;97m\033[1m🗑 DÉSINSTALLATION BOT\033[0m\n\n' >&2
+    _bot_installed || { _info "Bot non installé."; _pause; return; }
+    CONFIRM "Désinstaller le bot Telegram ?" || { _info "Annulé."; return; }
+    systemctl disable --now "${BOT_SVC}.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${BOT_SVC}.service" "$BOT_PY" "$BOT_CFG"
+    systemctl daemon-reload 2>/dev/null || true
+    _ok "Bot désinstallé."
+    _pause
+}
+
 # État global : complete | partielle | absente
 _install_state() {
     if _deps_ok && _db_ok && _watchdog_installed; then
@@ -594,7 +803,9 @@ _header() {
     printf '   \033[0;36m 8\033[0m)  💾  Sauvegarde\n'
     printf '   \033[0;36m 9\033[0m)  📊  Statistiques\n'
     printf '\n'
+    local bot_ico bot_txt; if _bot_installed; then if _bot_active; then bot_ico="${GREEN}●${RST}"; bot_txt="ACTIF"; else bot_ico="${YELLOW}●${RST}"; bot_txt="ARRÊTÉ"; fi; else bot_ico="${GRAY}○${RST}"; bot_txt="—"; fi
     printf '   \033[0;31m10\033[0m)  💣  Désinstallation (nettoie VENTES)\n'
+    printf '   \033[0;36m11\033[0m)  🤖  Bot Telegram  \033[0;90m[%b %s]\033[0m\n' "$bot_ico" "$bot_txt"
     printf '   \033[0;33m q\033[0m)  Quitter\n\n'
 }
 
@@ -616,6 +827,7 @@ _main_menu() {
             8) act_backup ;;
             9) act_stats ;;
             10) act_uninstall ;;
+            11) act_bot_menu ;;
             q|Q|0) clear; exit 0 ;;
             *) ;;
         esac
