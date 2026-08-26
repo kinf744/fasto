@@ -4727,7 +4727,7 @@ Expired resellers auto-deactivated daily by cron.
             else:ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="cr_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["cr_pass"]=p
-            if proto in("trojan","ssh"):ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
+            if proto in("trojan","ssh","zivpn","hyst","v2ray"):ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["cr_quota"]="0";await do_create(update,ctx)
         elif step=="cr_quota":
             if not re.match(r'^[0-9]+\.?[0-9]*$',text): await update.message.reply_text("❌ Invalid number.");return
@@ -5147,11 +5147,11 @@ if BOT_AVAILABLE:
         elif step=="r_days":
             if not text.isdigit()or int(text)<1:await update.message.reply_text("❌ >=1");return
             ctx.user_data["r_days"]=text
-            if proto in("ssh","zivpn","hyst","v2ray"):ctx.user_data["r_step"]="r_pass";await update.message.reply_text("✏️ Password (or `auto`):",parse_mode="Markdown")
+            if proto in("ssh","zivpn","hyst","trojan","v2ray"):ctx.user_data["r_step"]="r_pass";await update.message.reply_text("✏️ Password (or `auto`):",parse_mode="Markdown")
             else:ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="r_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["r_pass"]=p
-            if proto in("trojan","ssh"):ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
+            if proto in("trojan","ssh","zivpn","hyst","v2ray"):ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["r_quota"]="0";await do_create_reseller(update,ctx,rid2)
         elif step=="r_quota":
             if not re.match(r'^[0-9]+\.?[0-9]*$',text):await update.message.reply_text("❌ Invalid number.");return
