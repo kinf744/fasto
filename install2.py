@@ -2368,7 +2368,7 @@ def _auto_uninstall_all():
     for pat in ["kighmu-*","kighmu@*","xray*","v2ray*","slowdns*","dnsdist*","haproxy*","hysteria*","zivpn*","sshws*","ssl_tls*","udp-custom*","badvpn-*","badvpn@*","dropbear-custom*","ws-dropbear*","nftables-nat*","nftables-restore*","nftables-tunnel@*"]:
         for f in Path("/etc/systemd/system").glob(pat):
             sh(f"rm -rf {f} 2>/dev/null || true")
-    for b in ["kighmu","kighmu.bak","kighmu-panel","kighmu-panel.sh","kighmu.pps_backup","kighmu-bot","kighmu-watchdog.sh","menu","menu.pps_backup","menu-ssh","install2","panel_install.py","ventes","sshws","ssl_tls","xray","v2ray","dnstt-server","dnstt-client","badvpn-udpgw","udp-custom","hysteria-linux-amd64","zivpn","slowdns-ns4-start.sh","slowdns-nv4-start.sh","slowdns-watchdog.sh","init-nftables-kighmu.sh"]:
+    for b in ["kighmu","kighmu.bak","kighmu-panel","kighmu-panel.sh","kighmu.pps_backup","kighmu-bot","kighmu-watchdog.sh","menu","menu.pps_backup","menu-ssh","install2","panel_install.py","sshws","ssl_tls","xray","v2ray","dnstt-server","dnstt-client","badvpn-udpgw","udp-custom","hysteria-linux-amd64","zivpn","slowdns-ns4-start.sh","slowdns-nv4-start.sh","slowdns-watchdog.sh","init-nftables-kighmu.sh"]:
         sh(f"rm -f /usr/local/bin/{b} 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray-* /usr/local/bin/dropbear* /usr/local/sbin/dropbear 2>/dev/null || true")
     for u in panel_system_accounts():
@@ -2378,7 +2378,7 @@ def _auto_uninstall_all():
         for uf in USERDIR.iterdir():
             if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
                 sh(f"userdel -f {uf.name} 2>/dev/null || true")
-    for d in ["/etc/kighmu","/etc/ventes","/etc/xray","/etc/v2ray","/etc/slowdns","/etc/hysteria","/etc/zivpn","/etc/udp-custom","/etc/dnsdist","/etc/nftables","/etc/haproxy","/etc/sshws","/etc/ssl_tls","/etc/dropbear","/etc/logrotate.d/slowdns"]:
+    for d in ["/etc/kighmu","/etc/xray","/etc/v2ray","/etc/slowdns","/etc/hysteria","/etc/zivpn","/etc/udp-custom","/etc/dnsdist","/etc/nftables","/etc/haproxy","/etc/sshws","/etc/ssl_tls","/etc/dropbear","/etc/logrotate.d/slowdns"]:
         sh(f"rm -rf {d} 2>/dev/null || true")
     for d in ["/var/log/xray","/var/log/slowdns","/var/log/hysteria","/var/log/v2ray","/var/log/sshws","/var/log/ssl_tls","/var/log/zivpn","/var/log/kighmu"]:
         sh(f"rm -rf {d} 2>/dev/null || true")
