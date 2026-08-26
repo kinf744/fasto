@@ -1495,6 +1495,7 @@ def xray_gen_config():
         {"tag":"Trojan-XHTTP","port":10016,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/trojan-xhttp"}}},
         {"tag":"Trojan-gRPC","port":10017,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"trojan-grpc"}}},
         {"tag":"VLESS-HUpgrade","port":10018,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"httpupgrade","security":"none","httpupgradeSettings":{"path":"/vless-hupgrade"}}},
+        {"tag":"Trojan-HUpgrade","port":10019,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"httpupgrade","security":"none","httpupgradeSettings":{"path":"/trojan-hupgrade"}}},
         {"tag":"api","port":10085,"listen":"127.0.0.1","protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}
     ]
     config = {
@@ -1691,6 +1692,7 @@ frontend grpc_router
     use_backend xray-vless-xhttp  if {{ path_beg /vless-xhttp }}
     use_backend xray-trojan-xhttp if {{ path_beg /trojan-xhttp }}
     use_backend xray-vless-hupgrade  if {{ path_beg /vless-hupgrade }}
+    use_backend xray-trojan-hupgrade if {{ path_beg /trojan-hupgrade }}
     default_backend xray-vless-grpc
 
 backend grpc_router
@@ -1732,6 +1734,9 @@ backend xray-trojan-grpc
 backend xray-vless-hupgrade
     mode http
     server s1 127.0.0.1:10018
+backend xray-trojan-hupgrade
+    mode http
+    server s1 127.0.0.1:10019
 backend v2ray-tcp
     server s1 127.0.0.1:5401
 """
@@ -1768,7 +1773,7 @@ def xray_build_config():
         tag_map = {
             "VMess-TCP":"vmess","VMess-WS":"vmess","VMess-TLS":"vmess","VMess-WSS":"vmess","VMess-XHTTP":"vmess","VMess-gRPC":"vmess",
             "VLESS-TCP":"vless","VLESS-WS":"vless","VLESS-TLS":"vless","VLESS-WSS":"vless","VLESS-XHTTP":"vless","VLESS-gRPC":"vless","VLESS-HUpgrade":"vless",
-            "Trojan-TCP":"trojan","Trojan-WS":"trojan","Trojan-XHTTP":"trojan","Trojan-gRPC":"trojan",
+            "Trojan-TCP":"trojan","Trojan-WS":"trojan","Trojan-XHTTP":"trojan","Trojan-gRPC":"trojan","Trojan-HUpgrade":"trojan",
             "Shadowsocks":"shadow"
         }
         for inbound in config.get("inbounds", []):
@@ -3248,7 +3253,7 @@ def show_detail_screen(mode,proto,user,**kw):
            f"   {C['YELLOW']}[1] TLS/WS{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=ws&path=/trojan&host={dom}&sni={dom}#{user}","",
            f"   {C['YELLOW']}[2] NTLS/WS{C['RST']}",f"%FREE%   trojan://{p}@{dom}:8880?security=none&type=ws&path=/trojan&host={dom}#{user}","",
            f"   {C['YELLOW']}[3] TLS/XHTTP{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=xhttp&path=/trojan-xhttp&host={dom}&sni={dom}#{user}","",
-            f"   {C['GRAY']}[4] TLS/HTTPUpgrade (coming soon){C['RST']}",f"%FREE%   {C['GRAY']}Not yet available in HAProxy config{C['RST']}","",
+            f"   {C['YELLOW']}[4] TLS/HTTPUpgrade{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host={dom}&sni={dom}#{user}","",
            f"   {C['YELLOW']}[5] TLS/gRPC{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni={dom}#{user}","",
            f"   {C['YELLOW']}[6] NTLS/TCP{C['RST']}",f"%FREE%   trojan://{p}@{dom}:8880?security=none&type=tcp#{user}","",
            f"   {C['YELLOW']}[7] TLS/TCP{C['RST']}",f"%FREE%   trojan://{p}@{dom}:443?security=tls&type=tcp&sni={dom}#{user}","%SEP%"]
@@ -4323,13 +4328,14 @@ def build_trojan_details(user, pwd, exp, quota):
     qs = _detail_quota("trojan", user, quota)
     return (chr(0x1F517) + " *TROJAN USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `TROJAN`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " Password: `"+pwd+"`\n\n"
-        "*PATHS:*\n" + D + " WS: `/trojan`\n" + D + " XHTTP: `/trojan-xhttp`\n" + D + " gRPC: `/trojan-grpc`\n\n"
+        "*PATHS:*\n" + D + " WS: `/trojan`\n" + D + " XHTTP: `/trojan-xhttp`\n" + D + " HTTPUpgrade: `/trojan-hupgrade`\n" + D + " gRPC: `/trojan-grpc`\n\n"
         "*CONNECTION LINKS*\n\n1" + KE + " TLS/WS :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=ws&path=/trojan&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
         "2" + KE + " NTLS/WS :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=ws&path=/trojan&host="+dom+"#"+user+"`\n\n"
         "3" + KE + " TLS/XHTTP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=xhttp&path=/trojan-xhttp&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
-        "4" + KE + " TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
-        "5" + KE + " NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
-        "6" + KE + " TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+        "4" + KE + " TLS/HTTPUpgrade :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=httpupgrade&path=/trojan-hupgrade&host="+dom+"&sni="+dom+"#"+user+"`\n\n"
+        "5" + KE + " TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
+        "6" + KE + " NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
+        "7" + KE + " TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
 
 def build_vmess_details(user, uuid, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
