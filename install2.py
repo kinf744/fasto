@@ -423,10 +423,15 @@ def _zivpn_sync_config():
                 exp = _meta_get(f.name, "exp")
                 if exp and exp != "permanent" and exp < today: continue
                 if is_locked(f.name): continue
-                q = _meta_get(f.name, "quota")
-                if q and float(q) > 0:
+                q_str = (_meta_get(f.name, "quota") or "").strip()
+                try:
+                    q = float(q_str or "0")
+                except ValueError:
+                    print(f" {C['YELLOW']}⚠ zivpn: quota invalide pour {f.name!r} ({q_str!r}) -> ignore{C['RST']}")
+                    continue
+                if q > 0:
                     pw = _meta_get(f.name, "pass")
-                    quota[pw or f.name] = f"{int(float(q))}GB"
+                    quota[pw or f.name] = f"{int(q)}GB"
         data["quota"] = quota
         if not data.get("quotaStateFile"): data["quotaStateFile"] = "/etc/zivpn/quota-state.json"
         if not data.get("statsAPI"): data["statsAPI"] = {"listen": "127.0.0.1:10088"}
@@ -465,10 +470,14 @@ def _zivpn_expected_quota():
         exp = _meta_get(f.name, "exp")
         if exp and exp != "permanent" and exp < today: continue
         if is_locked(f.name): continue
-        q = float(_meta_get(f.name, "quota") or "0")
+        q_str = (_meta_get(f.name, "quota") or "").strip()
+        try:
+            q = float(q_str or "0")
+        except ValueError:
+            continue
         if q <= 0: continue
         pw = _meta_get(f.name, "pass")
-        out[pw or f.name] = f"{int(float(q))}GB"
+        out[pw or f.name] = f"{int(q)}GB"
     return out
 
 def _zivpn_logger_alive():
