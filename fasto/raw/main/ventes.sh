@@ -11,8 +11,12 @@ IFS=$' \t\n'
 if [[ "$(readlink -f "$0")" != "/usr/local/bin/ventes" ]]; then
     cp "$0" /usr/local/bin/ventes
     chmod 700 /usr/local/bin/ventes
+    ln -sf ventes /usr/local/bin/vetes 2>/dev/null || true
+    ln -sf ventes /usr/local/bin/vestes 2>/dev/null || true
+    ln -sf ventes /usr/local/bin/vente 2>/dev/null || true
     exec /usr/local/bin/ventes "$@"
 fi
+for _a in vetes vestes vente; do [[ -x "/usr/local/bin/$_a" ]] || ln -sf ventes "/usr/local/bin/$_a" 2>/dev/null || true; done
 
 [[ $EUID -eq 0 ]] || { echo "ERREUR : à exécuter en root." >&2; exit 1; }
 umask 077
@@ -505,6 +509,10 @@ act_install() {
     _ensure_cron
     printf ' \033[0;32m✓\033[0m\n' >&2
 
+    echo -ne "  ${YELLOW}→${RST} Alias (vetes/vestes)..." >&2
+    for _a in vetes vestes vente; do ln -sf ventes "/usr/local/bin/$_a" 2>/dev/null || true; done
+    printf ' \033[0;32m✓\033[0m\n' >&2
+
     printf '\n'
     if _watchdog_active; then
         _ok "Installation complète — watchdog actif (vérification toutes les 5 min)."
@@ -532,8 +540,8 @@ act_uninstall() {
     # 2. Fichiers
     (( keep )) || rm -rf "$DB_DIR"
 
-    # 3. Le script se retire lui-même
-    rm -f /usr/local/bin/ventes
+    # 3. Le script se retire lui-même + alias
+    rm -f /usr/local/bin/ventes /usr/local/bin/vetes /usr/local/bin/vestes /usr/local/bin/vente
     _ok "Désinstallation terminée — système propre."
     exit 0
 }
