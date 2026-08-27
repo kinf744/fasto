@@ -187,12 +187,12 @@ _show_table() {
     local filter="${1:-}" where="" row n name exp status days dot
     [[ -n "$filter" ]] && where="WHERE $filter"
 
-    printf '  %-4s %-22s %-12s %s\n' "$(printf '%b' "${GRAY}N°${RST}")" \
+    printf '  %-4s %-18s %-12s %-34s %s\n' "$(printf '%b' "${GRAY}N°${RST}")" \
         "$(printf '%b' "${GRAY}CLIENT${RST}")" "$(printf '%b' "${GRAY}EXPIRE${RST}")" \
-        "$(printf '%b' "${GRAY}STATUT${RST}")"
-    printf '  \033[0;90m──────────────────────────────────────────────\033[0m\n'
+        "$(printf '%b' "${GRAY}CLÉ${RST}")" "$(printf '%b' "${GRAY}STATUT${RST}")"
+    printf '  \033[0;90m────────────────────────────────────────────────────────────────────\033[0m\n'
 
-    while IFS='|' read -r uuid name exp status; do
+    while IFS='|' read -r uuid name exp key status; do
         [[ -z "$uuid" ]] && continue
         ROW_UUID+=("$uuid")
         n=${#ROW_UUID[@]}
@@ -210,9 +210,9 @@ _show_table() {
                     else dot="${GREEN}● ${days}j${RST}"; fi
                 fi ;;
         esac
-        printf '  \033[0;36m%-4s\033[0m \033[0;97m%-22s\033[0m \033[0;90m%-12s\033[0m %b\n' \
-            "$n" "${name:0:22}" "$exp" "$dot"
-    done < <(_sql "SELECT uuid, client_name, expires_at, status FROM licenses ${where} ORDER BY CASE status WHEN 'ACTIVE' THEN 0 WHEN 'SUSPENDED' THEN 1 ELSE 2 END, expires_at ASC;")
+        printf '  \033[0;36m%-4s\033[0m \033[0;97m%-18s\033[0m \033[0;90m%-12s\033[0m \033[0;32m%-34s\033[0m %b\n' \
+            "$n" "${name:0:18}" "$exp" "${key:0:34}" "$dot"
+    done < <(_sql "SELECT uuid, client_name, expires_at, license_key, status FROM licenses ${where} ORDER BY CASE status WHEN 'ACTIVE' THEN 0 WHEN 'SUSPENDED' THEN 1 ELSE 2 END, expires_at ASC;")
 }
 
 PICKED_UUID=""
@@ -584,11 +584,10 @@ def get_ip(): return sh("curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || host
 def is_authorized(uid): return uid == ADMIN_ID
 if BOT_AVAILABLE:
     def build_menu(btns, n=2): return [btns[i:i+n] for i in range(0, len(btns), n)]
-    def main_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 Dashboard", callback_data="dash"),InlineKeyboardButton("📋 Licences", callback_data="lic_lic"),InlineKeyboardButton("👥 VPS Users", callback_data="vps_users"),InlineKeyboardButton("🖥 Serveur", callback_data="server"),InlineKeyboardButton("❓ Aide", callback_data="help")]))
+    def main_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 Dashboard", callback_data="dash"),InlineKeyboardButton("📋 Licences", callback_data="lic_lic"),InlineKeyboardButton("🖥 Serveur", callback_data="server"),InlineKeyboardButton("❓ Aide", callback_data="help")]))
     def lic_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("➕ Nouvelle", callback_data="lic_create"),InlineKeyboardButton("🧪 Test (h)", callback_data="lic_create_test"),InlineKeyboardButton("📋 Liste", callback_data="lic_list"),InlineKeyboardButton("🔍 Rechercher", callback_data="lic_search"),InlineKeyboardButton("🔄 Prolonger", callback_data="lic_renew"),InlineKeyboardButton("⏸ Suspendre", callback_data="lic_toggle"),InlineKeyboardButton("🗑 Supprimer", callback_data="lic_delete"),InlineKeyboardButton("📊 Stats", callback_data="lic_stats"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
-    def vps_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 VPS Dashboard", callback_data="vps_dash"),InlineKeyboardButton("📋 VPS Liste", callback_data="vps_list"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Retour", callback_data=t)]])
-    HELP_TEXT = ("🤖 *VENTES Bot* — Panneau VPS via Telegram\n━━━━━━━━━━━━━━\n*/start* — Menu\n*/help* — Aide\n\n📊 *Dashboard* — Licences + VPS\n📋 *Licences* — Créer/🧪 Test(h)/Lister/Rechercher/Prolonger/Suspendre/Supprimer/Stats\n👥 *VPS Users* — Compteurs SSH/XRAY/V2RAY/ZIVPN/Hysteria\n🖥 *Serveur* — OS, arch, uptime, IP\n")
+    HELP_TEXT = ("🤖 *VENTES Bot* — Gestion Licences\n━━━━━━━━━━━━━━\n*/start* — Menu\n*/help* — Aide\n\n📊 *Dashboard* — Licences\n📋 *Licences* — Créer/🧪 Test(h)/Lister/Rechercher/Prolonger/Suspendre/Supprimer/Stats\n🖥 *Serveur* — OS, arch, uptime, IP\n")
     async def start(update, ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Non autorisé."); return
         await show_main(update, ctx)
@@ -598,8 +597,7 @@ if BOT_AVAILABLE:
     async def show_main(update, ctx, edit=False):
         lic_total = _count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';")
         lic_active = _count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
-        vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
-        t = f"🤖 *VENTES — Panneau VPS*\n━━━━━━━━━━━━━━\n📋 Licences: `{lic_active}/{lic_total}` actives\n👥 VPS Users: `{vps_users}`\n🌐 IP: `{get_ip()}`\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        t = f"🤖 *VENTES — Licences*\n━━━━━━━━━━━━━━\n📋 Licences: `{lic_active}/{lic_total}` actives\n🌐 IP: `{get_ip()}`\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         if edit: await update.callback_query.edit_message_text(t, reply_markup=main_kb(), parse_mode="Markdown")
         else: await update.message.reply_text(t, reply_markup=main_kb(), parse_mode="Markdown")
     async def callback_handler(update, ctx):
@@ -610,27 +608,25 @@ if BOT_AVAILABLE:
         elif d == "dash":
             lic_total = _count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';"); lic_active = _count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
             lic_exp = _count(f"SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at<'{date.today().isoformat()}' AND expires_at!='9999-12-31';")
-            vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
-            t = f"📊 *Dashboard*\n━━━━━━━━━━━━━━\n*Licences*\n• Total: `{lic_total}`\n• Actives: `{lic_active}`\n• Expirées: `{lic_exp}`\n\n*VPS*\n• Users: `{vps_users}`\n• IP: `{get_ip()}`"
+            t = f"📊 *Dashboard*\n━━━━━━━━━━━━━━\n*Licences*\n• Total: `{lic_total}`\n• Actives: `{lic_active}`\n• Expirées: `{lic_exp}`\n\n🌐 IP: `{get_ip()}`"
             await q.edit_message_text(t, reply_markup=back_kb("main"), parse_mode="Markdown")
         elif d == "lic_lic": await q.edit_message_text("📋 *Licences* — Choisissez :", reply_markup=lic_kb(), parse_mode="Markdown")
         elif d == "lic_list":
-            rows = subprocess.run(["sqlite3", str(DB), "SELECT client_name,expires_at,status FROM licenses WHERE status!='DELETED' ORDER BY expires_at LIMIT 20;"], capture_output=True, text=True).stdout.strip().splitlines()
-            t = "📋 Aucune licence." if not rows or rows==[''] else "📋 *Licences (20)*\n```\n" + "\n".join([f"{r.split('|')[0][:18]:18} {r.split('|')[1]:12} {r.split('|')[2]}" for r in rows if "|" in r]) + "\n```"
+            rows = subprocess.run(["sqlite3", str(DB), "SELECT client_name,expires_at,license_key,status FROM licenses WHERE status!='DELETED' ORDER BY expires_at LIMIT 20;"], capture_output=True, text=True).stdout.strip().splitlines()
+            t = "📋 Aucune licence." if not rows or rows==[''] else "📋 *Licences (20)*\n```\n" + "\n".join([f"{r.split('|')[0][:14]:14} {r.split('|')[1]:12} {r.split('|')[2][:12]:12} {r.split('|')[3]}" for r in rows if r.count('|')==3]) + "\n```"
             await q.edit_message_text(t, reply_markup=back_kb("lic_lic"), parse_mode="Markdown")
         elif d == "lic_stats":
             total=_count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';"); active=_count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
             susp=_count("SELECT COUNT(*) FROM licenses WHERE status='SUSPENDED';"); exp=_count(f"SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at<'{date.today().isoformat()}' AND expires_at!='9999-12-31';")
             await q.edit_message_text(f"📊 *Stats*\n• Total: `{total}`\n• Actives: `{active}`\n• Suspendues: `{susp}`\n• Expirées: `{exp}`", reply_markup=back_kb("lic_lic"), parse_mode="Markdown")
         elif d in ("lic_create","lic_create_test","lic_search","lic_renew","lic_toggle","lic_delete"):
-            ctx.user_data["step"]=d; await q.edit_message_text({"lic_create":"✏️ Nom du client :","lic_create_test":"🧪 Nom du client test :","lic_search":"🔍 Terme :","lic_renew":"🔄 N°/nom à prolonger :","lic_toggle":"⏸ N°/nom à suspendre :","lic_delete":"🗑 N°/nom à supprimer :"}[d])
-        elif d == "vps_users": await q.edit_message_text("👥 *VPS Users*", reply_markup=vps_kb(), parse_mode="Markdown")
-        elif d == "vps_dash":
-            vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
-            await q.edit_message_text(f"👥 *VPS Dashboard*\n• Users: `{vps_users}`\n• IP: `{get_ip()}`", reply_markup=back_kb("vps_users"), parse_mode="Markdown")
-        elif d == "vps_list":
-            users=[f.name for f in Path("/etc/kighmu/users").iterdir() if f.is_file()] if Path("/etc/kighmu/users").exists() else []
-            await q.edit_message_text("📋 *VPS Users* (`{}`)\n".format(len(users)) + ("\n".join(f"• `{u}`" for u in users[:30]) if users else "Aucun"), reply_markup=back_kb("vps_users"), parse_mode="Markdown")
+            if d in ("lic_renew","lic_toggle","lic_delete"):
+                rows = subprocess.run(["sqlite3", str(DB), "SELECT client_name,expires_at,license_key,status FROM licenses WHERE status!='DELETED' ORDER BY expires_at LIMIT 20;"], capture_output=True, text=True).stdout.strip()
+                prompt = {"lic_renew":"🔄 N°/nom à prolonger :","lic_toggle":"⏸ N°/nom à suspendre :","lic_delete":"🗑 N°/nom à supprimer :"}[d]
+                txt = f"```\n{rows}\n```\n{prompt}" if rows else prompt
+                ctx.user_data["step"]=d; await q.edit_message_text(txt, parse_mode="Markdown")
+            else:
+                ctx.user_data["step"]=d; await q.edit_message_text({"lic_create":"✏️ Nom du client :","lic_create_test":"🧪 Nom du client test :","lic_search":"🔍 Terme :"}[d])
         elif d == "server":
             await q.edit_message_text(f"🖥 *Serveur*\n• OS: `{get_os()}`\n• Arch: `{sh('uname -m')}`\n• Uptime: `{sh('uptime -p 2>/dev/null')}`\n• IP: `{get_ip()}`", reply_markup=back_kb("main"), parse_mode="Markdown")
         elif d == "help": await q.edit_message_text(HELP_TEXT, reply_markup=back_kb("main"), parse_mode="Markdown")
@@ -664,7 +660,7 @@ if BOT_AVAILABLE:
             except Exception as e: await update.message.reply_text(f"❌ {e}")
             ctx.user_data.clear()
         elif step=="lic_search":
-            term=text; rows=subprocess.run(["sqlite3",str(DB),f"SELECT client_name,expires_at,status FROM licenses WHERE client_name LIKE '%{term.replace(chr(39),chr(39)+chr(39))}%' LIMIT 20;"], capture_output=True, text=True).stdout.strip()
+            term=text; rows=subprocess.run(["sqlite3",str(DB),f"SELECT client_name,expires_at,license_key,status FROM licenses WHERE client_name LIKE '%{term.replace(chr(39),chr(39)+chr(39))}%' LIMIT 20;"], capture_output=True, text=True).stdout.strip()
             await update.message.reply_text(f"🔍 `{term}`:\n```\n{rows}\n```" if rows else "Aucun.", parse_mode="Markdown"); ctx.user_data.clear()
         elif step in ("lic_renew","lic_toggle","lic_delete"):
             name=text; cur=subprocess.run(["sqlite3",str(DB),f"SELECT uuid,expires_at,status FROM licenses WHERE client_name='{name.replace(chr(39),chr(39)+chr(39))}' LIMIT 1;"], capture_output=True, text=True).stdout.strip()
