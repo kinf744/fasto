@@ -3004,7 +3004,13 @@ def menu_protocol_installer():
         elif CH in ("10",): proto_action("ZIVPN (5667 / 6000-19999)", install_zivpn, uninstall_zivpn)
         elif CH in ("11","12"): (install_all_missing if CH=="11" else uninstall_all_active)();press_enter()
         elif CH=="13": install_telegram_bot()
-        elif CH=="14": uninstall_telegram_bot()
+        elif CH=="14":
+            print(f" {C['YELLOW']}⚠{C['RST']} {C['WHITE']}Cette action va supprimer :{C['RST']}")
+            print(f" {C['GRAY']}  • Le service kighmu-bot{C['RST']}")
+            print(f" {C['GRAY']}  • Le binaire et la config (token Telegram){C['RST']}")
+            print(f" {C['GRAY']}  • Les crontabs et le package python-telegram-bot{C['RST']}")
+            if input(f" {C['RED']}► Tapez 'yes' pour confirmer :{C['RST']} ").strip().lower() == "yes":
+                uninstall_telegram_bot()
         elif CH=="0": return
 
 def menu_update_remove():
@@ -4402,8 +4408,8 @@ def build_v2raydns_details(user, uuid, exp, quota):
     return (chr(0x1F310) + " *V2RAY DNS USER DETAILS*\n" + B*20 + "\n"
         + D + " User: `"+user+"`\n" + D + " Server IP: `"+ip+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " UUID / Password: `"+uuid+"`\n\n"
         "*SLOWDNS TUNNEL*\nConfigure your SlowDNS app with:\n" + D + " NameServer: `"+nv4+"`\n" + D + " Public Key: `"+pub+"`\n\n"
-        "*VLESS DIRECT (NO TUNNEL - PORT 5401)*\n`vless://"+uuid+"@"+ip+":5401?security=none&type=tcp&encryption=none#"+user+"-V2RAY-DNS-VLESS`\n\n"
-        "*TROJAN DIRECT (NO TUNNEL - PORT 5401)*\n`trojan://"+uuid+"@"+ip+":5401?security=none&type=tcp#"+user+"-V2RAY-DNS-TROJAN`\n\n"
+        "*VLESS DIRECT (NO TUNNEL - PORT 5401)*\n`vless://"+uuid+"@"+dom+":5401?security=none&type=tcp&encryption=none&host="+dom+"#"+user+"-V2RAY-DNS-VLESS`\n\n"
+        "*TROJAN DIRECT (NO TUNNEL - PORT 5401)*\n`trojan://"+uuid+"@"+dom+":5401?security=none&type=tcp&host="+dom+"#"+user+"-V2RAY-DNS-TROJAN`\n\n"
         "Apps: Dark tunnel, http custom, zivpn")
 
 if BOT_AVAILABLE:
