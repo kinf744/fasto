@@ -5479,3 +5479,4 @@ if __name__ == "__main__":
         self_install()
         _verify_license()
         main_menu()
+
