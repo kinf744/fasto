@@ -2356,10 +2356,15 @@ def _auto_uninstall_all():
     uninstall_all_active(silent=True)
     uninstall_telegram_bot(silent=True)
     for r in reseller_list(): reseller_remove_service(r["id"])
+    # 1) Suppression EXPLICITE des fichiers sensibles AVANT le rm -rf global
+    for f in ["/etc/kighmu/.license_key","/etc/kighmu/.client_name","/etc/kighmu/.bot_token","/etc/ventes/ventes.db","/etc/kighmu/bot/config.json","/etc/kighmu/bot/resellers.db"]:
+        Path(f).unlink(missing_ok=True)
+    # 2) Forcer kill des services récalcitrants avant disable
     pats = "kighmu|xray|v2ray|slowdns|dnsdist|haproxy|hysteria|zivpn|sshws|ssl_tls|udp-custom|badvpn|dropbear-custom|ws-dropbear|nftables-nat|nftables-restore|nftables-tunnel"
     units = sh(f"systemctl list-unit-files 2>/dev/null | awk '{{print $1}}' | grep -E '^({pats})[-@]?[^.]*\\.(service|timer)$' | sort -u")
     for u in units.splitlines():
         sh(f"systemctl disable --now {u} 2>/dev/null || true")
+        sh(f"systemctl kill {u} 2>/dev/null || true")
     for pat in ["kighmu-*","kighmu@*","xray*","v2ray*","slowdns*","dnsdist*","haproxy*","hysteria*","zivpn*","sshws*","ssl_tls*","udp-custom*","badvpn-*","badvpn@*","dropbear-custom*","ws-dropbear*","nftables-nat*","nftables-restore*","nftables-tunnel@*"]:
         for f in Path("/etc/systemd/system").glob(pat):
             sh(f"rm -rf {f} 2>/dev/null || true")
@@ -2385,18 +2390,28 @@ def _auto_uninstall_all():
     Path("/etc/resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
     sh("crontab -l > /root/crontab.backup 2>/dev/null || true")
     sh("crontab -r 2>/dev/null || true")
+    # 3) Re-vidage cron APRES kill des services (rattrape les ajouts tardifs via timers)
+    sh("crontab -r 2>/dev/null || true")
+    sh("systemctl restart rsyslog 2>/dev/null || systemctl restart syslog-ng 2>/dev/null || true")
     sh("nft flush ruleset 2>/dev/null || true")
     if Path("/etc/nftables.conf").exists():
         sh("nft -f /etc/nftables.conf 2>/dev/null || true")
     sh("apt-get remove -y -qq haproxy dnsdist 2>/dev/null || true")
+    sh("rm -rf /root/.acme.sh 2>/dev/null || true")
     sh("rm -rf /root/Kighmu /root/fasto /root/backup /tmp/nuitka-build /root/backup-* /root/backup_users*.json 2>/dev/null || true")
     sh("rm -f /root/install2.py /root/install2.bin /root/install.sh /root/ventes.sh /root/apply_and_check.sh /root/apply_xray.py /root/check_xray.py /root/check_tunnels.sh /root/auto_install.py 2>/dev/null || true")
+    # 4) Désactiver le swap créé par le panel (s'il existe)
+    sh("swapoff /swapfile 2>/dev/null || true; sed -i '/^\\/swapfile /d' /etc/fstab 2>/dev/null || true; rm -f /swapfile 2>/dev/null || true")
     sh("sysctl --system 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
     sh("rm -f /etc/systemd/system/kighmu-reseller-*.service /etc/systemd/system/slowdns-router.service /etc/systemd/system/xray-watchdog.* /etc/systemd/system/kighmu-watchdog.* /etc/systemd/system/slowdns-watchdog.* 2>/dev/null || true")
     sh("systemctl daemon-reload && systemctl reset-failed 2>/dev/null || true")
-    print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement.{C['RST']}")
+    print(f"\n {C['RED']}✔ Kighmu Panel — désinstallé complètement. Redémarrage du VPS dans 5s...{C['RST']}")
     sh("pkill -f kighmu 2>/dev/null || true; pkill -f install2 2>/dev/null || true; pkill -f ventes 2>/dev/null || true")
+    # 5) Nettoyage final puis reboot automatique (sync + 5s de grâce pour les descripteurs)
+    sh("sync 2>/dev/null || true")
+    sh("(sleep 5 && reboot 2>/dev/null) >/dev/null 2>&1 &")
+    sh("(sleep 5 && shutdown -r now 2>/dev/null) >/dev/null 2>&1 &")
     os._exit(0)
 
 def delete_user(user):
@@ -5485,5 +5500,6 @@ if __name__ == "__main__":
         self_install()
         _verify_license()
         main_menu()
+
 
 
