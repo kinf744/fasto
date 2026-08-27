@@ -4465,7 +4465,7 @@ if BOT_AVAILABLE:
         InlineKeyboardButton("Hysteria",callback_data=f"{pfx}_hyst"),
         InlineKeyboardButton("⬅️ Back",callback_data="users"),
     ]))
-    def del_proto_kb(): return proto_sel_kb()
+    def del_proto_kb(): return proto_sel_kb("del_proto")
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data=t)]])
     def yesno_kb(a,d): return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes",callback_data=f"{a}_y:{d}"),InlineKeyboardButton("❌ No",callback_data=f"{a}_n:{d}")]])
 
