@@ -287,6 +287,35 @@ act_create() {
     _pause
 }
 
+act_create_test() {
+    printf '\n  \033[0;97m\033[1m🧪 LICENCE TEST (HEURES)\033[0m\n\n' >&2
+    ASK "Nom du client test"; local name="$REPLY_VAL"
+    [[ -z "$name" ]] && { _info "Annulé."; return; }
+    ASK "Durée en heures (1-720)" "2"; local hours="$REPLY_VAL"
+    [[ "$hours" =~ ^[0-9]+$ ]] || hours=2
+    (( hours >= 1 && hours <= 720 )) || hours=2
+    local uuid key exp exp_fr
+    uuid=$(_gen_uuid); key=$(_gen_key); exp=$(date -d "+${hours} hours" '+%Y-%m-%d %H:%M:%S')
+    exp_fr=$(date -d "$exp" '+%d/%m/%Y %H:%M' 2>/dev/null || echo "$exp")
+    _sql "INSERT INTO licenses (uuid, license_key, client_name, status, created_at, expires_at)
+          VALUES ('$uuid', '$key', '$(_esc "$name")', 'ACTIVE', '$(_now)', '$exp');" \
+        && _sql "INSERT INTO audit (timestamp, action, license_uuid, details) VALUES ('$(_now)','CREATE_TEST','$uuid','$(_esc "$name") +${hours}h');"
+    printf '\n'
+    printf '  \033[0;97m• \033[0;33m🧪 TEST - \033[0;36m%s\033[0;33m •\033[0m \033[0;97m%s heures\033[0m\n' "${name^^}" "$hours"
+    printf '  👤 Client : \033[0;36m%s\033[0m\n' "$name"
+    printf '  ⏱ Expire : \033[0;33m%s\033[0m \033[0;90m(%s h)\033[0m\n' "$exp_fr" "$hours"
+    printf '\n'
+    printf '  🔑 Clé licence :\n'
+    printf '  \033[0;32m\033[1m%s\033[0m\n' "$key"
+    printf '\n'
+    printf '  📥 Instalador :\n'
+    printf '  \033[0;97mbash <(curl -sL https://frav.kingom.ggff.net/fasto/raw/main/install.sh)\033[0m\n'
+    printf '\n'
+    printf '  🔗 Token    : \033[0;2m%s\033[0m\n' "$(_pack_token "$key" "$(date -d "$exp" '+%Y-%m-%d' 2>/dev/null || echo "$exp" | cut -d' ' -f1)")"
+    printf '\n'
+    _pause
+}
+
 act_list() {
     printf '\n  \033[0;97m\033[1m📋 LICENCES\033[0m\n'
     _show_table "status != 'DELETED'"
@@ -404,8 +433,8 @@ act_stats() {
     total=$(_sql "SELECT COUNT(*) FROM licenses WHERE status!='DELETED';")
     active=$(_sql "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
     susp=$(_sql "SELECT COUNT(*) FROM licenses WHERE status='SUSPENDED';")
-    expired=$(_sql "SELECT COUNT(*) FROM licenses WHERE status!='DELETED' AND expires_at!='9999-12-31' AND expires_at<'$(_today)' AND status='ACTIVE';")
-    soon=$(_sql "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at>='$(_today)' AND expires_at<=date('now','+7 days');")
+    expired=$(_sql "SELECT COUNT(*) FROM licenses WHERE status!='DELETED' AND expires_at!='9999-12-31' AND (CASE WHEN instr(expires_at,' ') THEN datetime(expires_at) < datetime('now') ELSE date(expires_at) < date('now') END) AND status='ACTIVE';")
+    soon=$(_sql "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND (CASE WHEN instr(expires_at,' ') THEN datetime(expires_at) >= datetime('now') ELSE date(expires_at) >= date('now') END) AND expires_at<=datetime('now','+7 days');")
 
     printf '  Total : \033[0;97m\033[1m%s\033[0m   Active : \033[0;32m%s\033[0m   Suspendue : \033[0;33m%s\033[0m   Expirée : \033[0;31m%s\033[0m\n' "$total" "$active" "$susp" "$expired"
     if (( soon > 0 )); then _warn "$soon licence(s) expirent dans les 7 prochains jours"; fi
@@ -433,12 +462,12 @@ trap 'exit 0' TERM INT
 DB="/etc/ventes/ventes.db"
 while true; do
     if [[ -f "$DB" ]]; then
-        expired=$(sqlite3 "$DB" "SELECT uuid||'|'||client_name FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at<date('now');" 2>/dev/null)
+        expired=$(sqlite3 "$DB" "SELECT uuid||'|'||client_name FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND (CASE WHEN instr(expires_at,' ') THEN datetime(expires_at) < datetime('now') ELSE date(expires_at) < date('now') END);" 2>/dev/null)
         if [[ -n "$expired" ]]; then
             while IFS='|' read -r u n; do
                 sqlite3 "$DB" "INSERT INTO audit (timestamp, action, license_uuid, details) VALUES (datetime('now'),'AUTO_EXPIRE','$u','$n');" 2>/dev/null
             done <<< "$expired"
-            sqlite3 "$DB" "UPDATE licenses SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at<date('now');" 2>/dev/null
+            sqlite3 "$DB" "UPDATE licenses SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND (CASE WHEN instr(expires_at,' ') THEN datetime(expires_at) < datetime('now') ELSE date(expires_at) < date('now') END);" 2>/dev/null
         fi
     fi
     sleep 300 &
@@ -555,11 +584,11 @@ def get_ip(): return sh("curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || host
 def is_authorized(uid): return uid == ADMIN_ID
 if BOT_AVAILABLE:
     def build_menu(btns, n=2): return [btns[i:i+n] for i in range(0, len(btns), n)]
-    def main_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 Dashboard", callback_data="dash"),InlineKeyboardButton("📋 Licences", callback_data="lic_lic"),InlineKeyboardButton("👥 VPS Users", callback_data="vps_users"),InlineKeyboardButton("🔧 Services", callback_data="services"),InlineKeyboardButton("🖥 Serveur", callback_data="server"),InlineKeyboardButton("❓ Aide", callback_data="help")]))
-    def lic_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("➕ Nouvelle", callback_data="lic_create"),InlineKeyboardButton("📋 Liste", callback_data="lic_list"),InlineKeyboardButton("🔍 Rechercher", callback_data="lic_search"),InlineKeyboardButton("🔄 Prolonger", callback_data="lic_renew"),InlineKeyboardButton("⏸ Suspendre", callback_data="lic_toggle"),InlineKeyboardButton("🗑 Supprimer", callback_data="lic_delete"),InlineKeyboardButton("📊 Stats", callback_data="lic_stats"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
+    def main_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 Dashboard", callback_data="dash"),InlineKeyboardButton("📋 Licences", callback_data="lic_lic"),InlineKeyboardButton("👥 VPS Users", callback_data="vps_users"),InlineKeyboardButton("🖥 Serveur", callback_data="server"),InlineKeyboardButton("❓ Aide", callback_data="help")]))
+    def lic_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("➕ Nouvelle", callback_data="lic_create"),InlineKeyboardButton("🧪 Test (h)", callback_data="lic_create_test"),InlineKeyboardButton("📋 Liste", callback_data="lic_list"),InlineKeyboardButton("🔍 Rechercher", callback_data="lic_search"),InlineKeyboardButton("🔄 Prolonger", callback_data="lic_renew"),InlineKeyboardButton("⏸ Suspendre", callback_data="lic_toggle"),InlineKeyboardButton("🗑 Supprimer", callback_data="lic_delete"),InlineKeyboardButton("📊 Stats", callback_data="lic_stats"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
     def vps_kb(): return InlineKeyboardMarkup(build_menu([InlineKeyboardButton("📊 VPS Dashboard", callback_data="vps_dash"),InlineKeyboardButton("📋 VPS Liste", callback_data="vps_list"),InlineKeyboardButton("⬅ Retour", callback_data="main")]))
     def back_kb(t="main"): return InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Retour", callback_data=t)]])
-    HELP_TEXT = ("🤖 *VENTES Bot* — Panneau VPS via Telegram\n━━━━━━━━━━━━━━\n*/start* — Menu\n*/help* — Aide\n\n📊 *Dashboard* — Licences + VPS\n📋 *Licences* — Créer/Lister/Rechercher/Prolonger/Suspendre/Supprimer/Stats\n👥 *VPS Users* — Compteurs SSH/XRAY/V2RAY/ZIVPN/Hysteria\n🔧 *Services* — haproxy/xray/v2ray/zivpn/hysteria/ssh\n🖥 *Serveur* — OS, arch, uptime, IP\n")
+    HELP_TEXT = ("🤖 *VENTES Bot* — Panneau VPS via Telegram\n━━━━━━━━━━━━━━\n*/start* — Menu\n*/help* — Aide\n\n📊 *Dashboard* — Licences + VPS\n📋 *Licences* — Créer/🧪 Test(h)/Lister/Rechercher/Prolonger/Suspendre/Supprimer/Stats\n👥 *VPS Users* — Compteurs SSH/XRAY/V2RAY/ZIVPN/Hysteria\n🖥 *Serveur* — OS, arch, uptime, IP\n")
     async def start(update, ctx):
         if not is_authorized(update.effective_user.id): await update.message.reply_text("⛔ Non autorisé."); return
         await show_main(update, ctx)
@@ -593,8 +622,8 @@ if BOT_AVAILABLE:
             total=_count("SELECT COUNT(*) FROM licenses WHERE status!='DELETED';"); active=_count("SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
             susp=_count("SELECT COUNT(*) FROM licenses WHERE status='SUSPENDED';"); exp=_count(f"SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at<'{date.today().isoformat()}' AND expires_at!='9999-12-31';")
             await q.edit_message_text(f"📊 *Stats*\n• Total: `{total}`\n• Actives: `{active}`\n• Suspendues: `{susp}`\n• Expirées: `{exp}`", reply_markup=back_kb("lic_lic"), parse_mode="Markdown")
-        elif d in ("lic_create","lic_search","lic_renew","lic_toggle","lic_delete"):
-            ctx.user_data["step"]=d; await q.edit_message_text({"lic_create":"✏️ Nom du client :","lic_search":"🔍 Terme :","lic_renew":"🔄 N°/nom à prolonger :","lic_toggle":"⏸ N°/nom à suspendre :","lic_delete":"🗑 N°/nom à supprimer :"}[d])
+        elif d in ("lic_create","lic_create_test","lic_search","lic_renew","lic_toggle","lic_delete"):
+            ctx.user_data["step"]=d; await q.edit_message_text({"lic_create":"✏️ Nom du client :","lic_create_test":"🧪 Nom du client test :","lic_search":"🔍 Terme :","lic_renew":"🔄 N°/nom à prolonger :","lic_toggle":"⏸ N°/nom à suspendre :","lic_delete":"🗑 N°/nom à supprimer :"}[d])
         elif d == "vps_users": await q.edit_message_text("👥 *VPS Users*", reply_markup=vps_kb(), parse_mode="Markdown")
         elif d == "vps_dash":
             vps_users = len([f for f in Path("/etc/kighmu/users").iterdir() if f.is_file()]) if Path("/etc/kighmu/users").exists() else 0
@@ -602,10 +631,6 @@ if BOT_AVAILABLE:
         elif d == "vps_list":
             users=[f.name for f in Path("/etc/kighmu/users").iterdir() if f.is_file()] if Path("/etc/kighmu/users").exists() else []
             await q.edit_message_text("📋 *VPS Users* (`{}`)\n".format(len(users)) + ("\n".join(f"• `{u}`" for u in users[:30]) if users else "Aucun"), reply_markup=back_kb("vps_users"), parse_mode="Markdown")
-        elif d == "services":
-            svcs={"haproxy":"haproxy","xray":"xray","v2ray":"v2ray","zivpn":"zivpn","hysteria":"hysteria","ssh":"ssh"}
-            lines=["🔧 *Services*"]+ [f"{'🟢' if sh(f'systemctl is-active {s} 2>/dev/null')=='active' else '🔴'} {n}" for n,s in svcs.items()]
-            await q.edit_message_text("\n".join(lines), reply_markup=back_kb("main"), parse_mode="Markdown")
         elif d == "server":
             await q.edit_message_text(f"🖥 *Serveur*\n• OS: `{get_os()}`\n• Arch: `{sh('uname -m')}`\n• Uptime: `{sh('uptime -p 2>/dev/null')}`\n• IP: `{get_ip()}`", reply_markup=back_kb("main"), parse_mode="Markdown")
         elif d == "help": await q.edit_message_text(HELP_TEXT, reply_markup=back_kb("main"), parse_mode="Markdown")
@@ -614,6 +639,19 @@ if BOT_AVAILABLE:
         text=update.message.text.strip(); step=ctx.user_data.get("step","")
         if step=="lic_create":
             ctx.user_data["tmp_name"]=text; ctx.user_data["step"]="lic_create_days"; await update.message.reply_text("📅 Durée jours (0=illimité, 30) :")
+        elif step=="lic_create_test":
+            ctx.user_data["tmp_name"]=text; ctx.user_data["step"]="lic_create_test_hours"; await update.message.reply_text("⏱ Durée en heures (1-720, ex: 2) :")
+        elif step=="lic_create_test_hours":
+            hours=text.strip() or "2"
+            if not hours.isdigit() or not (1 <= int(hours) <= 720): await update.message.reply_text("❌ Heures invalides (1-720)."); return
+            h=subprocess.run(["od","-An","-N16","-tx1","/dev/urandom"], capture_output=True, text=True).stdout.replace(" ","").replace("\n","")
+            uuid=f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"; key=subprocess.run(["openssl","rand","-hex","16"], capture_output=True, text=True).stdout.strip() or h[:32]
+            exp=subprocess.run(["date","-d",f"+{hours} hours","+%Y-%m-%d %H:%M:%S"], capture_output=True, text=True).stdout.strip()
+            try:
+                conn=sqlite3.connect(str(DB)); conn.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at) VALUES (?,?,?,?,datetime('now'),?)", (uuid,key,ctx.user_data["tmp_name"],"ACTIVE",exp)); conn.commit(); conn.close()
+                await update.message.reply_text(f"✅ Test `{ctx.user_data['tmp_name']}`\n🔑 `{key}`\n⏱ `{exp}` ({hours}h)", parse_mode="Markdown")
+            except Exception as e: await update.message.reply_text(f"❌ {e}")
+            ctx.user_data.clear()
         elif step=="lic_create_days":
             days=text.strip() or "30"
             if not days.isdigit(): await update.message.reply_text("❌ Nombre invalide."); return
@@ -665,16 +703,26 @@ After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
 StartLimitBurst=0
+
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 ${BOT_PY}
 Restart=always
-RestartSec=5
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload 2>/dev/null || true
     systemctl enable --now "${BOT_SVC}.service" 2>/dev/null || true
+    # Fallback cron @reboot pour redémarrages fréquents / systemd indisponible
+    if ! crontab -l 2>/dev/null | grep -q "ventes-bot"; then
+        (crontab -l 2>/dev/null; echo "@reboot sleep 15; systemctl is-active --quiet ${BOT_SVC}.service || systemctl start ${BOT_SVC}.service >/dev/null 2>&1") | crontab - 2>/dev/null || true
+    fi
     if _bot_active; then _ok "Bot installé et actif."; else _err "Échec démarrage — vérifiez le token."; fi
     _pause
 }
@@ -685,6 +733,7 @@ act_bot_uninstall(){
     CONFIRM "Désinstaller le bot Telegram ?" || { _info "Annulé."; return; }
     systemctl disable --now "${BOT_SVC}.service" 2>/dev/null || true
     rm -f "/etc/systemd/system/${BOT_SVC}.service" "$BOT_PY" "$BOT_CFG"
+    crontab -l 2>/dev/null | grep -v "ventes-bot" | crontab - 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
     _ok "Bot désinstallé."
     _pause
@@ -766,7 +815,7 @@ _header() {
     total=$(_count "SELECT COUNT(*) FROM licenses WHERE status!='DELETED';")
     active=$(_count "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE';")
     local soon
-    soon=$(_count "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND expires_at>='$(_today)' AND expires_at<=date('now','+7 days');")
+    soon=$(_count "SELECT COUNT(*) FROM licenses WHERE status='ACTIVE' AND expires_at!='9999-12-31' AND (CASE WHEN instr(expires_at,' ') THEN datetime(expires_at) >= datetime('now') ELSE date(expires_at) >= date('now') END) AND expires_at<=datetime('now','+7 days');")
     if (( soon > 0 )); then
         warn_line=$(printf '   \033[0;33m⚠ %s expirent sous 7 jours\033[0m' "$soon")
     fi
@@ -806,6 +855,7 @@ _header() {
     local bot_ico bot_txt; if _bot_installed; then if _bot_active; then bot_ico="${GREEN}●${RST}"; bot_txt="ACTIF"; else bot_ico="${YELLOW}●${RST}"; bot_txt="ARRÊTÉ"; fi; else bot_ico="${GRAY}○${RST}"; bot_txt="—"; fi
     printf '   \033[0;31m10\033[0m)  💣  Désinstallation (nettoie VENTES)\n'
     printf '   \033[0;36m11\033[0m)  🤖  Bot Telegram  \033[0;90m[%b %s]\033[0m\n' "$bot_ico" "$bot_txt"
+    printf '   \033[0;36m12\033[0m)  🧪  Licence test (heures)\n'
     printf '   \033[0;33m q\033[0m)  Quitter\n\n'
 }
 
@@ -828,6 +878,7 @@ _main_menu() {
             9) act_stats ;;
             10) act_uninstall ;;
             11) act_bot_menu ;;
+            12) act_create_test ;;
             q|Q|0) clear; exit 0 ;;
             *) ;;
         esac
