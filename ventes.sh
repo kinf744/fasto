@@ -276,7 +276,7 @@ act_create() {
     printf '  \033[0;32m\033[1m%s\033[0m\n' "$key"
     printf '\n'
     printf '  📥 Instalador :\n'
-    printf '  \033[0;97mbash <(curl -sL https://frav.kingom.ggff.net/fasto/raw/main/install.sh)\033[0m\n'
+    printf '  \033[0;97mbash <(curl -fsSL https://raw.githubusercontent.com/adriop-45/Huop/main/install.sh)\033[0m\n'
     printf '\n'
     printf '  🐧 Ubuntu Recomender : \033[0;97m20.04, 22.04, 24.04\033[0m\n'
     printf '  🌀 Debian recommander : \033[0;97m11, 12\033[0m\n'
