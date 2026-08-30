@@ -4078,6 +4078,7 @@ def _ssh_quota_migrate():
     sh(f"nft delete table inet {SSH_QUOTA_TABLE} 2>/dev/null || true")
 
 def _ssh_quota_apply():
+    _install_ssh_banner_shell()
     _install_ssh_tracker()
     _ssh_tracker_table_ensure()
     _ssh_quota_migrate()
@@ -4128,7 +4129,7 @@ if [ "$1" = "-c" ] || [ -n "$SSH_ORIGINAL_COMMAND" ]; then
     CMD="${SSH_ORIGINAL_COMMAND:-$2}"
     if [ -x /bin/bash ]; then exec /bin/bash -c "$CMD"; else exec /bin/sh -c "$CMD"; fi
 fi
-/usr/local/bin/kighmu --ssh-banner "$U" 2>/dev/null || true
+    /usr/local/bin/kighmu --ssh-banner "$U" || true
 if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi
 """
     SSH_SHELL.write_text(shell)
@@ -4201,6 +4202,7 @@ def _banner_text(user, plain=False):
 
 def _ssh_banner(user):
     sys.stdout.write(_banner_text(user))
+    sys.stdout.flush()
 
 def _fmt_fr(b):
     for u in ["o", "Ko", "Mo", "Go", "To"]:
