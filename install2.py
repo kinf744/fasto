@@ -4161,21 +4161,30 @@ def _ssh_tracker_loop():
 
 def _ssh_quota_sync():
     _install_ssh_banner_shell()
+    _gen_user_banners()
     _ssh_tracker_sync_once()
     _ssh_expiry_enforce()
     return 0
 
 def _install_ssh_banner_shell():
+    """Wrapper shell par-user (utilise comme /etc/kighmu/ssh-shell.sh).
+    Affiche un mini-rappel post-login (sobre + timestamp HH:MM:SS pour
+    casser la dedup des clients HTTP Injector/HTTP Custom/SocksIP).
+    Le banner pre-auth HTML "VPS-PRO" reste envoye par sshd (Match User Banner)."""
     SSH_SHELL.parent.mkdir(parents=True, exist_ok=True)
     shell = """#!/bin/sh
-# Kighmu per-user SSH banner shell (quota + info)
+# Kighmu per-user SSH login shell
+# - Mini-rappel post-login (timestamp) pour forcer le client a reafficher
+# - Le banner pre-auth HTML "VPS-PRO" reste envoye par sshd (Match User Banner)
 U="$(id -un 2>/dev/null)"; [ -z "$U" ] && U="${USER:-$LOGNAME}"
 [ "$U" = "root" ] && [ -f /etc/kighmu/users/tuo2 ] && U="tuo2"
 if [ "$1" = "-c" ] || [ -n "$SSH_ORIGINAL_COMMAND" ]; then
     CMD="${SSH_ORIGINAL_COMMAND:-$2}"
     if [ -x /bin/bash ]; then exec /bin/bash -c "$CMD"; else exec /bin/sh -c "$CMD"; fi
 fi
-/usr/local/bin/kighmu --ssh-banner "$U" 2>/dev/null || true
+if [ -t 0 ] || [ -t 1 ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
+    /usr/local/bin/kighmu --ssh-banner-compact "$U" 2>/dev/null || true
+fi
 if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi
 """
     SSH_SHELL.write_text(shell)
@@ -4259,6 +4268,41 @@ def _ssh_banner(user):
         sys.stderr.write(f"[kighmu] banner error: {e}\n")
         sys.stderr.flush()
 
+def _ssh_banner_compact(user):
+    """Mini-rappel post-login (sans box ANSI) avec timestamp HH:MM:SS.
+    Le suffixe change a chaque appel -> le client (HTTP Injector,
+    HTTP Custom, SocksIP) ne peut pas dedupliquer en cache et reaffichera.
+    Format: [VPS-PRO] user=X | exp YYYY-MM-DD (Nj) | data X.X/YGB | HH:MM:SS"""
+    try:
+        if not user or not (USERDIR / user).is_file():
+            sys.stderr.write(f"[kighmu] banner-compact: user inconnu '{user}'\n")
+            sys.stderr.flush()
+            return
+        exp = _meta_get(user, "exp")
+        q = float(_meta_get(user, "quota") or "0")
+        used = get_ssh_traffic(user)
+        try:
+            dleft = (datetime.strptime(exp, "%Y-%m-%d").date() - date.today()).days
+        except Exception:
+            dleft = 0
+        expv = f"{exp} ({dleft}j)" if exp else "permanent"
+        if q > 0 and used >= 1024**3:
+            used_gb = used / 1024**3
+            trv = f"{used_gb:.1f}/{q:.0f}GB"
+        elif q > 0:
+            used_mb = used / 1024**2
+            trv = f"{used_mb:.0f}MB/{q:.0f}GB"
+        else:
+            used_mb = used / 1024**2
+            trv = f"{used_mb:.0f}MB/∞"
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[VPS-PRO] user={user} | exp {expv} | data {trv} | {ts}\n"
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    except Exception as e:
+        sys.stderr.write(f"[kighmu] banner-compact error: {e}\n")
+        sys.stderr.flush()
+
 def _fmt_fr(b):
     for u in ["o", "Ko", "Mo", "Go", "To"]:
         if b < 1024:
@@ -4300,7 +4344,13 @@ def _banner_html(user):
         trv = _fmt_fr(used)
     else:
         trv, maxv = "Illimité", ""
+    # Timestamp injecte -> le contenu change a chaque regeneration du banner
+    # (toutes les 60s via --ssh-quota-sync), ce qui force les clients
+    # (HTTP Injector, HTTP Custom, SocksIP) a reafficher le contenu a
+    # chaque nouvelle session TCP reellement ouverte.
+    ts = datetime.now().strftime("%Y%m%d%H%M")
     out = ['<p style="text-align:center">']
+    out.append(f"<!-- kighmu-ts:{ts} -->\n")
     out.append("<font color='#00FFCC'><b><big><big><big>VPS-PRO</big></big></big></b></font><br>")
     out.append(grad + "<br>")
     out.append(f"<font color='#4FA8FF'>👤 <b>Utilisateur</b></font> : <font color='white'>{user}</font><br>")
@@ -4312,6 +4362,7 @@ def _banner_html(user):
     if is_locked(user):
         out.append("<font color='#FF5555'>🔒 <b>Compte verrouillé</b></font><br>")
     out.append(grad + "<br>")
+    out.append(f"<font color='#444444' size='1'>ref:{ts}</font><br>")
     out.append("</p>")
     return "\n".join(out) + "\n"
 
@@ -5543,6 +5594,9 @@ if __name__ == "__main__":
             sys.exit(0)
         elif arg == "--ssh-banner":
             if len(sys.argv)>2: _ssh_banner(sys.argv[2])
+            sys.exit(0)
+        elif arg == "--ssh-banner-compact":
+            if len(sys.argv)>2: _ssh_banner_compact(sys.argv[2])
             sys.exit(0)
         elif arg == "--render":
             renders = {"main": scr_main, "manage": scr_manage_users, "optimize": scr_optimize,
