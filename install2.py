@@ -4201,8 +4201,17 @@ def _banner_text(user, plain=False):
     return "\n\n" + "\n".join(ind + x for x in out) + "\n\n"
 
 def _ssh_banner(user):
-    sys.stdout.write(_banner_text(user))
-    sys.stdout.flush()
+    try:
+        text = _banner_text(user)
+        if text:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        else:
+            sys.stderr.write(f"[kighmu] banner vide pour user: {user}\n")
+            sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"[kighmu] banner error: {e}\n")
+        sys.stderr.flush()
 
 def _fmt_fr(b):
     for u in ["o", "Ko", "Mo", "Go", "To"]:
