@@ -827,6 +827,7 @@ def install_ssh_stack():
     install_openssh()
     install_dropbear()
     _ssh_quota_apply()
+    _install_ssh_quota_sync_timer()
 
 def install_ws_stack():
     install_sshws()
@@ -1919,6 +1920,7 @@ WantedBy=multi-user.target
         if cmd not in existing:
             sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
     _install_xray_watchdog()
+    _install_ssh_quota_sync_timer()
     x_ok=sh("systemctl is-active xray 2>/dev/null")
     h_ok=sh("systemctl is-active haproxy 2>/dev/null")
     if x_ok=="active" and h_ok=="active":
@@ -3342,6 +3344,50 @@ def show_detail_screen(mode,proto,user,**kw):
     else: L=["%SEP%",f" {C['WHITE']}Details not available{C['RST']}","%SEP%"]
     render_screen(L);press_enter()
 
+def _install_ssh_quota_sync_timer():
+    """Persistance à 3 niveaux (systemd timer + cron + service daemon) :
+    garantit que le quota SSH, la régénération des bannières HTML et le lock
+    des comptes expirés survivent aux reboots fréquents et aux plantages VPS.
+    - systemd timer : 45s après boot puis toutes les 60s, Persistent=true
+    - cron          : */5 * * * * (fallback si systemd cassé)
+    - kighmu-ssh-tracker.service : déjà installé par _ssh_quota_apply
+    Idempotent : peut être appelé plusieurs fois sans dupliquer."""
+    SVC="/etc/systemd/system/kighmu-ssh-quota-sync.service"
+    TMR="/etc/systemd/system/kighmu-ssh-quota-sync.timer"
+    Path("/etc/systemd/system").mkdir(parents=True, exist_ok=True)
+    Path(SVC).write_text("""[Unit]
+Description=Kighmu SSH quota sync + banner regeneration
+After=network-online.target nftables.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/kighmu --ssh-quota-sync
+TimeoutStartSec=120
+Nice=10
+""")
+    Path(TMR).write_text("""[Unit]
+Description=Kighmu SSH quota sync timer (redundant with cron)
+Requires=kighmu-ssh-quota-sync.service
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=60
+RandomizedDelaySec=10
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""")
+    sh("systemctl daemon-reload 2>/dev/null || true")
+    sh("systemctl enable --now kighmu-ssh-quota-sync.timer 2>/dev/null || true")
+    crontab = sh("crontab -l 2>/dev/null")
+    cron_line = "*/5 * * * * /usr/local/bin/kighmu --ssh-quota-sync >/dev/null 2>&1"
+    if "kighmu --ssh-quota-sync" not in crontab:
+        sh(f'(crontab -l 2>/dev/null; echo "{cron_line}") | crontab - 2>/dev/null || true')
+
 def self_install():
     dst=Path("/usr/local/bin/kighmu");src=Path(sys.argv[0]).resolve()
     dst.parent.mkdir(parents=True,exist_ok=True)
@@ -3352,6 +3398,7 @@ def self_install():
     _install_ssh_banner_shell()
     _repair_haproxy()
     _install_license_bomb()
+    _install_ssh_quota_sync_timer()
 
 # License
 import hashlib, hmac
