@@ -309,7 +309,7 @@ act_create_test() {
     printf '  \033[0;32m\033[1m%s\033[0m\n' "$key"
     printf '\n'
     printf '  📥 Instalador :\n'
-    printf '  \033[0;97mbash <(curl -sL https://frav.kingom.ggff.net/fasto/raw/main/install.sh)\033[0m\n'
+    printf '  \033[0;97mbash <(curl -fsSL https://raw.githubusercontent.com/adriop-45/Huop/main/install.sh)\033[0m\n'
     printf '\n'
     printf '  🔗 Token    : \033[0;2m%s\033[0m\n' "$(_pack_token "$key" "$(date -d "$exp" '+%Y-%m-%d' 2>/dev/null || echo "$exp" | cut -d' ' -f1)")"
     printf '\n'
