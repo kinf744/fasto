@@ -4362,7 +4362,6 @@ def _banner_html(user):
     if is_locked(user):
         out.append("<font color='#FF5555'>🔒 <b>Compte verrouillé</b></font><br>")
     out.append(grad + "<br>")
-    out.append(f"<font color='#444444' size='1'>ref:{ts}</font><br>")
     out.append("</p>")
     return "\n".join(out) + "\n"
 
