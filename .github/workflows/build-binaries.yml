@@ -12,17 +12,16 @@ permissions:
 
 jobs:
   build-x86_64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    container: python:3.12-bookworm
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Install deps
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file upx-ucl
-          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
-      - name: Build (Nuitka)
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends patchelf ccache file upx-ucl binutils
+          pip install --no-cache-dir --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
+      - name: Build (Nuitka, glibc 2.36 bookworm)
         run: |
           python3 -m nuitka \
             --standalone --onefile \
@@ -35,27 +34,30 @@ jobs:
             --assume-yes-for-downloads \
             --jobs=4 \
             install2.py
-      - name: Check size
+      - name: Check size & glibc
         run: |
           ls -lh install2.bin
           file install2.bin | grep -q ELF && echo "ELF OK"
+          # Verifie que le binaire n'embarque pas de symbole GLIBC superieur a 2.36
+          objdump -T install2.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1
       - uses: actions/upload-artifact@v4
         with:
           name: install2-x86_64
           path: install2.bin
 
   build-arm64:
-    runs-on: ubuntu-24.04-arm
+    # Bookworm ARM64 = Debian 12, glibc 2.36 (meme base que x86_64 pour
+    # garantir la meme portabilite minimale)
+    runs-on: ubuntu-22.04-arm
+    container: python:3.12-bookworm
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Install deps
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file upx-ucl
-          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
-      - name: Build (Nuitka natif ARM64)
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends patchelf ccache file upx-ucl binutils
+          pip install --no-cache-dir --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
+      - name: Build (Nuitka natif ARM64, glibc 2.36 bookworm)
         run: |
           python3 -m nuitka \
             --standalone --onefile \
@@ -68,10 +70,11 @@ jobs:
             --assume-yes-for-downloads \
             --jobs=4 \
             install2.py
-      - name: Check size & arch
+      - name: Check size & arch & glibc
         run: |
           ls -lh install2-arm64.bin
           file install2-arm64.bin | grep -q "ARM aarch64" && echo "ARCH OK"
+          objdump -T install2-arm64.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1
       - uses: actions/upload-artifact@v4
         with:
           name: install2-arm64
@@ -79,7 +82,7 @@ jobs:
 
   release:
     needs: [build-x86_64, build-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -95,5 +98,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add install2.bin install2-arm64.bin
-          git commit -m "chore: update binaries (nuitka) [skip ci]" || echo "No changes"
+          git commit -m "chore: update binaries (nuitka, glibc<=2.36) [skip ci]" || echo "No changes"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git HEAD:main || true
