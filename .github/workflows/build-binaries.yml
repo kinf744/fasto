@@ -12,16 +12,18 @@ permissions:
 
 jobs:
   build-x86_64:
+    # Ubuntu 22.04 = glibc 2.35, compatible avec Debian 11+ / Ubuntu 20.04+
     runs-on: ubuntu-22.04
-    container: python:3.12-bookworm
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install deps
         run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends patchelf ccache file upx-ucl binutils
-          pip install --no-cache-dir --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
-      - name: Build (Nuitka, glibc 2.36 bookworm)
+          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file upx-ucl binutils
+          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
+      - name: Build (Nuitka, Ubuntu 22.04 = glibc 2.35)
         run: |
           python3 -m nuitka \
             --standalone --onefile \
@@ -34,30 +36,33 @@ jobs:
             --assume-yes-for-downloads \
             --jobs=4 \
             install2.py
-      - name: Check size & glibc
+      - name: Check size & glibc max
         run: |
           ls -lh install2.bin
           file install2.bin | grep -q ELF && echo "ELF OK"
-          # Verifie que le binaire n'embarque pas de symbole GLIBC superieur a 2.36
-          objdump -T install2.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1
+          # Verifie que la glibc max requise est <= 2.35
+          MAX=$(objdump -T install2.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1 | sed 's/GLIBC_//')
+          echo "glibc max requise: $MAX"
+          awk -v v="$MAX" 'BEGIN{exit !(v <= 2.35)}' || { echo "glibc $MAX > 2.35, FAIL"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: install2-x86_64
           path: install2.bin
 
   build-arm64:
-    # Bookworm ARM64 = Debian 12, glibc 2.36 (meme base que x86_64 pour
-    # garantir la meme portabilite minimale)
-    runs-on: ubuntu-22.04-arm
-    container: python:3.12-bookworm
+    # ubuntu-24.04-arm (runner ARM64 natif officiel GitHub, glibc 2.39)
+    # Limite : necessite glibc >= 2.39 (Debian 12+ / Ubuntu 24.04+)
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install deps
         run: |
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends patchelf ccache file upx-ucl binutils
-          pip install --no-cache-dir --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
-      - name: Build (Nuitka natif ARM64, glibc 2.36 bookworm)
+          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file upx-ucl binutils
+          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
+      - name: Build (Nuitka natif ARM64)
         run: |
           python3 -m nuitka \
             --standalone --onefile \
@@ -98,5 +103,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add install2.bin install2-arm64.bin
-          git commit -m "chore: update binaries (nuitka, glibc<=2.36) [skip ci]" || echo "No changes"
+          git commit -m "chore: update binaries (nuitka, glibc<=2.35 x86 / <=2.39 arm64) [skip ci]" || echo "No changes"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git HEAD:main || true
