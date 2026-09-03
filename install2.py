@@ -81,7 +81,11 @@ def dot(lbl, w=18):
 def _client_name():
     try: n = Path('/etc/kighmu/.client_name').read_text().strip()
     except: n = ""
-    if not n or n == "Verified": n = "Kighmu"
+    if not n:
+        n = "Kighmu"
+    # Le fichier est rempli par _verify_license/_license_watchdog depuis
+    # la DB ventes (client_name). On affiche le vrai nom sans fallback
+    # vers Kighmu si le client a été nommé "Verified" par legacy.
     return f"Verified - {n} tech tutorials oficial ©"
 
 def _detail_title(mode, proto, variant=""):
@@ -1910,7 +1914,6 @@ WantedBy=multi-user.target
         "*/3 * * * * systemctl is-active --quiet sshws || systemctl restart sshws >> /var/log/sshws-watchdog.log 2>&1",
         "*/3 * * * * systemctl is-active --quiet ssl_tls || systemctl restart ssl_tls >> /var/log/ssl_tls-watchdog.log 2>&1",
         "*/3 * * * * systemctl is-active --quiet dropbear-custom || systemctl restart dropbear-custom >> /var/log/dropbear-watchdog.log 2>&1",
-        "0 0 1 * * vnstat --reset 2>/dev/null || true",
         "0 6 * * * /usr/local/bin/kighmu-bot --reseller-cleanup 2>/dev/null || true",
         "*/5 * * * * /usr/local/bin/kighmu-bot --ssh-quota-sync 2>/dev/null || true",
         "*/5 * * * * /usr/local/bin/kighmu-bot --quota-enforce 2>/dev/null || true"
@@ -1919,6 +1922,11 @@ WantedBy=multi-user.target
     for cmd in crontab_cmds:
         if cmd not in existing:
             sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
+    # Nettoyage : l'ancien cron mensuel vnstat --reset remettait à 0 le trafic
+    # D/W/M et pouvait être confondu avec une remise à 0 du quota commercial.
+    # Le quota est désormais cumulatif (lifetime), on supprime ce cron.
+    if "vnstat --reset" in existing:
+        sh(r"crontab -l 2>/dev/null | grep -v 'vnstat --reset' | crontab - 2>/dev/null || true")
     _install_xray_watchdog()
     _install_ssh_quota_sync_timer()
     x_ok=sh("systemctl is-active xray 2>/dev/null")
@@ -2611,11 +2619,28 @@ def quota_enforce():
             elif is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired and (q <= 0 or get_v2ray_traffic(user) < q * 1024**3):
                 _meta_set(user, "locked", "0"); _meta_set(user, "quota_hit", "0"); v2ray_changed = True; restored += 1
         elif proto in ("zivpn","hysteria"):
-            if expired and not is_locked(user):
-                _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
-                if proto == "zivpn": zivpn_apply()
-                else: hysteria_apply()
-                blocked += 1
+            if expired:
+                if not is_locked(user):
+                    _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
+                    if proto == "zivpn": zivpn_apply()
+                    else: hysteria_apply()
+                    blocked += 1
+            elif q > 0:
+                used = get_zivpn_traffic(user) if proto == "zivpn" else get_hysteria_traffic(user)
+                if used >= q * 1024**3:
+                    if not is_locked(user):
+                        _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
+                        if proto == "zivpn": zivpn_apply()
+                        else: hysteria_apply()
+                        blocked += 1
+            # Restauration automatique si quota augmenté ou trafic < limite et non expiré
+            if is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired:
+                used_now = get_zivpn_traffic(user) if proto == "zivpn" else get_hysteria_traffic(user)
+                if q <= 0 or used_now < q * 1024**3:
+                    _meta_set(user, "quota_hit", "0"); _meta_set(user, "locked", "0")
+                    if proto == "zivpn": zivpn_apply()
+                    else: hysteria_apply()
+                    restored += 1
     if xray_changed: xray_build_config()
     if v2ray_changed: v2raydns_apply()
     return (blocked, restored)
@@ -3837,22 +3862,82 @@ def is_authorized(uid): return uid == ADMIN_ID
 def sh_bot(c): return sh(c)
 def get_slowdns_info():
     return sh_bot("cat /etc/slowdns/server.pub 2>/dev/null")or"N/A",sh_bot("cat /etc/slowdns/ns.conf 2>/dev/null")or"N/A",sh_bot("cat /etc/slowdns/nv4/ns.conf 2>/dev/null")or"N/A"
-def get_xray_traffic(email):
+def _get_xray_raw(email):
     try:
         r=subprocess.run(["/usr/local/bin/xray","api","statsquery","--server=127.0.0.1:10085","-pattern=user>>>"+email+">>>"],capture_output=True,text=True,timeout=10)
         d=json.loads(r.stdout)if r.stdout.strip()else{}
         up=sum(s.get("value",0)for s in d.get("stat",[])if"uplink"in s.get("name",""))
         down=sum(s.get("value",0)for s in d.get("stat",[])if"downlink"in s.get("name",""))
-        return up+down
+        return int(up+down)
     except: return 0
-def get_v2ray_traffic(email):
+def _get_v2ray_raw(email):
     try:
         r=subprocess.run(["/usr/local/bin/v2ray","api","stats","--server=127.0.0.1:10086","-json",f"user>>>{email}>>>"],capture_output=True,text=True,timeout=10)
         d=json.loads(r.stdout)if r.stdout.strip()else{}
         up=sum(int(s.get("value",0))for s in d.get("stat",[])if"uplink"in s.get("name",""))
         down=sum(int(s.get("value",0))for s in d.get("stat",[])if"downlink"in s.get("name",""))
-        return up+down
+        return int(up+down)
     except: return 0
+def get_xray_traffic(email):
+    """Retourne le trafic cumulé lifetime (persisté) pour usage commercial.
+    Le compteur Xray/V2Ray est éphémère (reset au restart) : on stocke
+    le cumul dans USERDIR/{user} champs used_total/last_api_xray pour
+    ne jamais perdre la conso déjà effectuée, même après reboot ou
+    changement de mois. Si pas de quota, on retourne le brut."""
+    raw = _get_xray_raw(email)
+    # Si l'utilisateur n'a pas de quota (0) on évite la persistance inutile
+    try:
+        meta_q = float(_meta_get(email, "quota") or "0")
+    except: meta_q = 0
+    # Même sans quota on persiste pour affichage cohérent, mais on peut
+    # short-circuit si fichier meta absent (optimisation)
+    if not (USERDIR / email).is_file():
+        return raw
+    try:
+        stored = float(_meta_get(email, "used_total") or "0")
+        last = float(_meta_get(email, "last_api_xray") or "0")
+        if raw >= last:
+            delta = raw - last
+            if delta > 0:
+                stored += delta
+                _meta_set(email, "used_total", str(int(stored)))
+        else:
+            # Reset détecté (restart Xray) : on cumule le nouveau raw
+            if raw > 0:
+                stored += raw
+                _meta_set(email, "used_total", str(int(stored)))
+        _meta_set(email, "last_api_xray", str(int(raw)))
+        # Si stored est 0 mais raw >0 (première mesure), stored doit valoir raw
+        if stored == 0 and raw > 0 and not _meta_get(email, "used_total"):
+            stored = raw
+            _meta_set(email, "used_total", str(int(stored)))
+        return int(stored if stored > 0 else raw)
+    except Exception:
+        return raw
+def get_v2ray_traffic(email):
+    """Idem get_xray_traffic mais pour V2Ray-DNS (port 5401)."""
+    raw = _get_v2ray_raw(email)
+    if not (USERDIR / email).is_file():
+        return raw
+    try:
+        stored = float(_meta_get(email, "used_total_v2ray") or "0")
+        last = float(_meta_get(email, "last_api_v2ray") or "0")
+        if raw >= last:
+            delta = raw - last
+            if delta > 0:
+                stored += delta
+                _meta_set(email, "used_total_v2ray", str(int(stored)))
+        else:
+            if raw > 0:
+                stored += raw
+                _meta_set(email, "used_total_v2ray", str(int(stored)))
+        _meta_set(email, "last_api_v2ray", str(int(raw)))
+        if stored == 0 and raw > 0 and not _meta_get(email, "used_total_v2ray"):
+            stored = raw
+            _meta_set(email, "used_total_v2ray", str(int(stored)))
+        return int(stored if stored > 0 else raw)
+    except Exception:
+        return raw
 def fmt_bytes(b):
     for u in["B","KB","MB","GB","TB"]:
         if b<1024:return "{:.1f} {}".format(b,u)
@@ -4038,15 +4123,68 @@ def get_ssh_traffic(user):
     except Exception: pass
     return used
 
-def get_zivpn_traffic(user):
-    """Conso zivpn depuis /etc/zivpn/quota-state.json.
-    L'etat est indexe par PASSWORD (comme auth.config/quota) ; on resout
-    le meta -> pass, avec repli sur le nom brut si besoin."""
+def _get_zivpn_raw(user):
     try:
         st = json.loads(Path("/etc/zivpn/quota-state.json").read_text())
         used = st.get("used", {})
         pw = _meta_get(user, "pass")
         return int(used.get(pw, used.get(user, 0)))
+    except Exception:
+        return 0
+def get_zivpn_traffic(user):
+    """Conso zivpn cumulative lifetime (usage commercial).
+    Le binaire zivpn remet à 0 au 1er du mois (quota mensuel) via
+    quota.go rolloverLocked(). Pour un usage commercial au quota total
+    lifetime, on persiste le cumul dans USERDIR used_total_zivpn /
+    last_api_zivpn et on ne remet jamais à 0."""
+    raw = _get_zivpn_raw(user)
+    if not (USERDIR / user).is_file():
+        return raw
+    try:
+        stored = float(_meta_get(user, "used_total_zivpn") or "0")
+        last = float(_meta_get(user, "last_api_zivpn") or "0")
+        # Si raw a baissé (reset mensuel ou restart), on cumule
+        if raw >= last:
+            delta = raw - last
+            if delta > 0:
+                stored += delta
+                _meta_set(user, "used_total_zivpn", str(int(stored)))
+        else:
+            # Reset mensuel détecté : le binaire a remis used à 0
+            # On garde le cumul et on ajoute le nouveau raw
+            if raw > 0:
+                stored += raw
+                _meta_set(user, "used_total_zivpn", str(int(stored)))
+            elif last > 0 and raw == 0:
+                # Mois changé mais pas encore de trafic ce mois : on garde stored
+                pass
+        _meta_set(user, "last_api_zivpn", str(int(raw)))
+        if stored == 0 and raw > 0 and not _meta_get(user, "used_total_zivpn"):
+            stored = raw
+            _meta_set(user, "used_total_zivpn", str(int(stored)))
+        # Retourne le max entre cumulé et brut pour ne jamais sous-estimer
+        return int(max(stored, raw) if stored>0 else raw)
+    except Exception:
+        return raw
+
+def get_hysteria_traffic(user):
+    """Conso hysteria : tente quota-state hysteria, sinon fallback meta 'used'.
+    Hysteria n'a pas de compteur natif quota-state par défaut, on lit
+    d'abord /etc/hysteria/quota-state.json (si patch futur), sinon le
+    champ 'used' cumulé stocké par le panel (même mécanisme que SSH)."""
+    try:
+        h = Path("/etc/hysteria/quota-state.json")
+        if h.exists():
+            st = json.loads(h.read_text())
+            used = st.get("used", {})
+            pw = _meta_get(user, "pass")
+            v = used.get(pw, used.get(user, None))
+            if v is not None:
+                return int(v)
+    except Exception:
+        pass
+    try:
+        return int(float(_meta_get(user, "used") or "0"))
     except Exception:
         return 0
 

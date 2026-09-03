@@ -15,8 +15,12 @@ type QuotaState struct {
 }
 
 // QuotaTrafficLogger implements server.TrafficLogger to track per-password
-// data usage against a monthly quota. Counters are persisted to a state file so
-// they survive restarts, and reset automatically on the first day of each month.
+// data usage against a lifetime quota (usage commercial). Counters are
+// persisted to a state file so they survive restarts. Le reset mensuel
+// automatique a été DÉSACTIVÉ le 2026-09-03 : le quota est désormais
+// cumulatif lifetime, pas mensuel — il ne se remet pas à 0 au 1er du mois.
+// Le panel install2.py gère aussi le cumul côté Python pour compatibilité
+// avec les anciens binaires.
 //
 // The Log method returns false once a password has consumed its quota, which
 // causes the server to disconnect the client.
@@ -119,15 +123,16 @@ func (q *QuotaTrafficLogger) IDs() []string {
 	return ids
 }
 
-// rolloverLocked resets all counters when the calendar month has changed.
+// rolloverLocked historiquement remettait à 0 au changement de mois.
+// Désactivé : quota lifetime. On conserve la méthode no-op pour compatibilité
+// binaire (évite de casser les appels existants) mais on ne supprime plus rien.
 // Callers must hold q.Mutex.
 func (q *QuotaTrafficLogger) rolloverLocked() {
+	// No-op : quota lifetime, pas de reset mensuel
+	// On met à jour Month pour la persistance mais on garde Used intact
 	now := time.Now().Format("2006-01")
 	if now != q.Month {
 		q.Month = now
-		for k := range q.Used {
-			delete(q.Used, k)
-		}
 		_ = q.saveLocked()
 	}
 }
@@ -160,9 +165,18 @@ func (q *QuotaTrafficLogger) load() {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return
 	}
-	if st.Month == q.Month {
+	// Quota lifetime : on charge Used même si le mois a changé
+	if st.Used != nil {
 		q.Used = st.Used
 	}
-	// If the persisted month differs from the current one, counters are
-	// discarded (monthly reset).
+	// Si le fichier vient d'un ancien binaire mensuel, on garde le mois
+	// courant en mémoire mais on ne jette plus Used
+	if st.Month != "" {
+		q.Month = st.Month
+		// On force la sauvegarde avec le mois courant pour migrer le fichier
+		now := time.Now().Format("2006-01")
+		if q.Month != now {
+			q.Month = now
+		}
+	}
 }
