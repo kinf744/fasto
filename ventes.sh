@@ -658,7 +658,18 @@ if BOT_AVAILABLE:
             exp=subprocess.run(["date","-d",f"+{hours} hours","+%Y-%m-%d %H:%M:%S"], capture_output=True, text=True).stdout.strip()
             try:
                 conn=sqlite3.connect(str(DB)); conn.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at) VALUES (?,?,?,?,datetime('now'),?)", (uuid,key,ctx.user_data["tmp_name"],"ACTIVE",exp)); conn.commit(); conn.close()
-                await update.message.reply_text(f"✅ Test `{ctx.user_data['tmp_name']}`\n🔑 `{key}`\n⏱ `{exp}` ({hours}h)", parse_mode="Markdown")
+                exp_fr=subprocess.run(["date","-d",exp,"+%d/%m/%Y %H:%M"], capture_output=True, text=True).stdout.strip() or exp
+                msg=(f"• 🧪 TEST - {ctx.user_data['tmp_name'].upper()} • {hours} heures\n"
+                     f"👤 Client : {ctx.user_data['tmp_name']}\n"
+                     f"⏱ Expire : {exp_fr} ({hours}h)\n"
+                     f"🔑 Clé licence :\n`{key}`\n"
+                     f"📥 Instalador :\n`bash <(curl -fsSL https://raw.githubusercontent.com/adriop-45/Huop/main/install.sh)`\n"
+                     f"🐧 Ubuntu Recomender : 20.04, 22.04, 24.04\n"
+                     f"🌀 Debian recommander : 11, 12\n"
+                     f"──────────────────────\n"
+                     f"🔗 API : SCRIPT D'AUTOMATION\n"
+                     f"🔢 N'OUBLIER PAS D'AVOIR DEUX NS-DOMAIN ET UN SOUS DOMAINE QUI POINT VERS VOTRE VPS")
+                await update.message.reply_text(msg, parse_mode="Markdown")
             except Exception as e: await update.message.reply_text(f"❌ {e}")
             ctx.user_data.clear()
         elif step=="lic_create_days":
@@ -669,7 +680,18 @@ if BOT_AVAILABLE:
             exp="9999-12-31" if days=="0" else subprocess.run(["date","-d",f"+{days} days","+%Y-%m-%d"], capture_output=True, text=True).stdout.strip()
             try:
                 conn=sqlite3.connect(str(DB)); conn.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at) VALUES (?,?,?,?,datetime('now'),?)", (uuid,key,ctx.user_data["tmp_name"],"ACTIVE",exp)); conn.commit(); conn.close()
-                await update.message.reply_text(f"✅ Licence `{ctx.user_data['tmp_name']}`\n🔑 `{key}`\n📅 `{exp}`", parse_mode="Markdown")
+                exp_fr="∞ Illimité" if exp=="9999-12-31" else subprocess.run(["date","-d",exp,"+%d/%m/%Y"], capture_output=True, text=True).stdout.strip() or exp
+                msg=(f"• 💥 ━─━─ KEY - {ctx.user_data['tmp_name'].upper()} ━─━─ 💥 •\n"
+                     f"👤 Nom d'utilisateur : {ctx.user_data['tmp_name']}\n"
+                     f"📅 Durée : {exp_fr}\n"
+                     f"🔑 Clé licence :\n`{key}`\n"
+                     f"📥 Instalador :\n`bash <(curl -fsSL https://raw.githubusercontent.com/adriop-45/Huop/main/install.sh)`\n"
+                     f"🐧 Ubuntu Recomender : 20.04, 22.04, 24.04\n"
+                     f"🌀 Debian recommander : 11, 12\n"
+                     f"──────────────────────\n"
+                     f"🔗 API : SCRIPT D'AUTOMATION\n"
+                     f"🔢 N'OUBLIER PAS D'AVOIR DEUX NS-DOMAIN ET UN SOUS DOMAINE QUI POINT VERS VOTRE VPS")
+                await update.message.reply_text(msg, parse_mode="Markdown")
             except Exception as e: await update.message.reply_text(f"❌ {e}")
             ctx.user_data.clear()
         elif step=="lic_search":
