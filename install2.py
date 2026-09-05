@@ -3013,7 +3013,7 @@ def menu_manage_users():
         scr_manage_users()
         CH=input().strip()
         if CH in("1","01"): submenu_family("SSH",["ssh"])
-        elif CH in("2","02"): submenu_family("XRAY",["vmess","vless","trojan"])
+        elif CH in("2","02"): submenu_family("XRAY",["vmess","vless","trojan","shadow"])
         elif CH in("3","03"): submenu_family("V2RAY-DNS",["v2raydns"])
         elif CH in("4","04"): submenu_family("ZIVPN",["zivpn"])
         elif CH in("5","05"): submenu_family("HYSTERIA",["hysteria"])
@@ -3138,7 +3138,7 @@ def ui_create_wizard(protos):
     limit="1"
     if proto=="ssh": l=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Limit (def 1): {C['RST']}").strip();limit=l if l.isdigit() else "1"
     quota="0"
-    if proto in("vmess","vless","trojan","v2raydns","ssh","zivpn","hysteria"):
+    if proto in("vmess","vless","trojan","v2raydns","ssh","zivpn","hysteria","shadow","ss","shadowsocks"):
         q=input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Quota GB (0=unlimited): {C['RST']}").strip()
         quota=q if re.match(r'^[0-9]+\.?[0-9]*$',q) else "0"
     rc=create_user(proto,user,days,passwd,limit,quota)
@@ -3278,7 +3278,7 @@ def ui_info_wizard():
     if not user or not (USERDIR/user).is_file(): print(f" {C['RED']}✗ Not found{C['RST']}");press_enter();return
     proto=_meta_get(user,"proto");exp=_meta_get(user,"exp");passwd=_meta_get(user,"pass");uuid=_meta_get(user,"uuid");quota=_meta_get(user,"quota") or"0"
     if proto=="ssh": show_ssh_details_screen("details",user,passwd,exp,quota)
-    elif proto in("vless","trojan","vmess","v2raydns"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
+    elif proto in("vless","trojan","vmess","v2raydns","shadow","ss","shadowsocks"): show_detail_screen("details",proto.upper(),user,uuid=uuid,exp=exp,quota=quota,passwd=passwd)
     elif proto=="hysteria": show_hysteria_details_screen("details",user,passwd,exp,quota)
     else: clear_screen();print(f" {C['YELLOW']}○{C['RST']} {C['WHITE']}User: {user}  Proto: {proto}  Exp: {exp}{C['RST']}");press_enter()
 
@@ -3301,10 +3301,11 @@ def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',19)}{C['RST']} expires {exp_color(exp)}",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',19)}{C['RST']} {C['WHITE']}{quota} GB{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%",
-       f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
-       f"   {C['YELLOW']}[1] SSH WS ..............{C['RST']}",f"%FREE%   {dom}:80@{user}:{passwd}","",
-       f"   {C['YELLOW']}[2] SSL/TLS .............{C['RST']}",f"%FREE%   {dom}:444@{user}:{passwd}","",
-       f"   {C['YELLOW']}[3] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
+        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
+        f"   {C['YELLOW']}[1] SSH WS ..............{C['RST']}",f"%FREE%   {dom}:80@{user}:{passwd}","",
+        f"   {C['YELLOW']}[2] SSH WSS (TLS) .......{C['RST']}",f"%FREE%   {dom}:443@{user}:{passwd}  (path /ssh-wss)","",
+        f"   {C['YELLOW']}[3] SSL/TLS .............{C['RST']}",f"%FREE%   {dom}:444@{user}:{passwd}","",
+        f"   {C['YELLOW']}[4] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}WS PAYLOAD{C['RST']}",
        f"%FREE%   {C['GRAY']}GET / HTTP/1.1[crlf]Host: {dom}[crlf]Connection: Upgrade[crlf]User-Agent: {ua}[crlf]Upgrade: websocket[crlf][crlf]{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}SLOWDNS (PORT 53){C['RST']}",
@@ -3398,6 +3399,19 @@ def show_detail_screen(mode,proto,user,**kw):
            f"   {C['YELLOW']}[1] NTLS/WS{C['RST']}",f"%FREE%   {l1}","",
            f"   {C['YELLOW']}[2] TLS/WS{C['RST']}",f"%FREE%   {l2}","",
            f"   {C['YELLOW']}[3] TLS/gRPC{C['RST']}",f"%FREE%   {l3}","%SEP%"]
+    elif proto in ("SHADOW","SHADOWSOCKS","SS"):
+         p=kw.get("passwd","");e=kw.get("exp","");q=kw.get("quota","0");m="aes-128-gcm"
+         L=["%SEP%",_detail_title(mode,"XRAY","SHADOWSOCKS"),"%SEP%",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('USER',18)}{C['RST']} {C['WHITE']}{user}{C['RST']}",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('DOMAIN',18)}{C['RST']} {C['WHITE']}{dom}{C['RST']}",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('PROTOCOL',18)}{C['RST']} {C['WHITE']}SHADOWSOCKS{C['RST']}",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('VALIDITY',18)}{C['RST']} expires {exp_color(e)}",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',18)}{C['RST']} {C['WHITE']}{q} GB{C['RST']}","%SEP%",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{p}{C['RST']}",f"   {C['GRAY']}Method: {m}{C['RST']}","%SEP%",
+            f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
+            f"   {C['YELLOW']}[1] WS  :8880{C['RST']}",f"%FREE%   ss://{m}:{p}@{dom}:8880#SS-WS-8880-{user}","",
+            f"   {C['YELLOW']}[2] WS/TLS:443{C['RST']}",f"%FREE%   ss://{m}:{p}@{dom}:443#SS-WS-443-{user} (path /ss-ws)","",
+            f"   {C['YELLOW']}[3] gRPC/TLS:443{C['RST']}",f"%FREE%   ss://{m}:{p}@{dom}:443#SS-gRPC-{user} (service ss-grpc)","%SEP%"]
     elif proto=="V2RAYDNS":
         u=kw.get("uuid","");e=kw.get("exp","");q=kw.get("quota","0");pub=sh("cat /etc/slowdns/server.pub 2>/dev/null")or"N/A";nv4=sh("cat /etc/slowdns/nv4/ns.conf 2>/dev/null")or"N/A"
         pwd=u
@@ -4711,9 +4725,11 @@ def build_ssh_details(user, pwd, exp, quota):
     return ("🔑 *SSH USER DETAILS*\n" + chr(0x2501)*20 + "\n"
         + chr(0x2022) + " User: `"+user+"`\n" + chr(0x2022) + " Domain: `"+dom+"`\n" + chr(0x2022) + " IP: `"+ip+"`\n" + chr(0x2022) + " Expires: `"+exp+"`\n" + chr(0x2022) + " Quota: `"+qs+"`\n" + chr(0x2022) + " Password: `"+pwd+"`\n\n"
         "*CONNECTION LINKS*\n\n1" + chr(0xFE0F) + chr(0x20E3) + " SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
-        "2" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
-        "3" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
-        "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
+        "2" + chr(0xFE0F) + chr(0x20E3) + " SSH WSS (TLS)\n`"+dom+":443@"+user+":"+pwd+"` (path `/ssh-wss`)\n\n"
+        "3" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
+        "4" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
+        "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n"
+        "*WSS PAYLOAD*\n`GET /ssh-wss HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
         "*SLOWDNS (FASTDNS)*\nConfigure your SlowDNS app with:\n" + chr(0x2022) + " DNS IP: `"+ip+"` (port 53)\n" + chr(0x2022) + " NameServer: `"+ns+"`\n" + chr(0x2022) + " Public Key: `"+pub+"`\n\n"
         "*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN")
 
@@ -4744,6 +4760,22 @@ def build_trojan_details(user, pwd, exp, quota):
         "5" + KE + " TLS/gRPC :443\n`trojan://"+pwd+"@"+dom+":443?mode=grpc&security=tls&type=grpc&serviceName=trojan-grpc&sni="+dom+"#"+user+"`\n\n"
         "6" + KE + " NTLS/TCP :8880\n`trojan://"+pwd+"@"+dom+":8880?security=none&type=tcp#"+user+"`\n\n"
         "7" + KE + " TLS/TCP :443\n`trojan://"+pwd+"@"+dom+":443?security=tls&type=tcp&sni="+dom+"#"+user+"`")
+
+def build_shadow_details(user, pwd, exp, quota):
+    dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
+    qs = _detail_quota("shadow", user, quota)
+    method = "aes-128-gcm"
+    # Shadowsocks WS 8880/443 + gRPC 443
+    ss_ws_8880 = f"ss://{method}:{pwd}@{dom}:8880#SS-WS-8880-{user}"
+    ss_ws_443 = f"ss://{method}:{pwd}@{dom}:443#SS-WS-443-{user}"
+    ss_grpc = f"ss://{method}:{pwd}@{dom}:443#SS-gRPC-{user}"
+    return (chr(0x1F512) + " *SHADOWSOCKS USER DETAILS*\n" + B*20 + "\n"
+        + D + " User: `"+user+"`\n" + D + " Domain: `"+dom+"`\n" + D + " Protocol: `SHADOWSOCKS`\n" + D + " Method: `"+method+"`\n" + D + " Expires: `"+exp+"`\n" + D + " Quota: `"+qs+"`\n" + D + " Password: `"+pwd+"`\n\n"
+        "*PATHS:*\n" + D + " WS: `/ss-ws` (8880/443)\n" + D + " gRPC: `ss-grpc` (443)\n\n"
+        "*CONNECTION LINKS*\n\n1" + KE + " WS :8880\n`"+ss_ws_8880+"`\n\n"
+        "2" + KE + " WS/TLS :443\n`"+ss_ws_443+"`\n\n"
+        "3" + KE + " gRPC/TLS :443\n`"+ss_grpc+"`\n\n"
+        "*HAPROXY*\n" + D + " 8880 -> 10020 (WS) 443 -> 10020/10021")
 
 def build_vmess_details(user, uuid, exp, quota):
     dom = get_domain(); B = chr(0x2501); D = chr(0x2022); KE = chr(0xFE0F) + chr(0x20E3)
@@ -5164,10 +5196,11 @@ Expired resellers auto-deactivated daily by cron.
             user=text
             if not (USERDIR/user).exists():await reply_cls(update,ctx,f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear();return
             p=_meta_get(user,"proto");e=_meta_get(user,"exp");pw=_meta_get(user,"pass");u=_meta_get(user,"uuid");q=_meta_get(user,"quota")or"0"
-            bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
+            bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"shadow":build_shadow_details,"ss":build_shadow_details,"shadowsocks":build_shadow_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
             fn=bd.get(p)
             if fn:
                 if p in("vless","vmess","v2raydns"):txt=fn(user,u or "?",e,q)
+                elif p in("shadow","ss","shadowsocks"):txt=fn(user,pw or user,e,q)
                 else:txt=fn(user,pw or user,e,q)
             else:txt=f"👤 *User: {user}*\nProto: `{p}`\nExp: `{e}`"
             await reply_cls(update,ctx,txt,reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
@@ -5390,10 +5423,11 @@ Expired resellers auto-deactivated daily by cron.
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=back_kb("users"),parse_mode="Markdown")
             ctx.user_data.clear();return
         apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or ""
-        bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
+        bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"shadow":build_shadow_details,"ss":build_shadow_details,"shadowsocks":build_shadow_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
         fn=bd.get(rp)
         if fn:
             if rp in("vless","vmess","v2raydns"):txt=fn(user,uuid or "?",exp,quota)
+            elif rp in("shadow","ss","shadowsocks"):txt=fn(user,apw or user,exp,quota)
             else:txt=fn(user,apw or user,exp,quota)
         else:txt=f"✅ *{pn} created!*\nUser: `{user}`\nExp: `{exp}`"
         await reply_cls(update,ctx,txt,reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
@@ -5752,10 +5786,11 @@ if BOT_AVAILABLE:
             ctx.user_data.clear();return
         _meta_set(user,"reseller",str(rid))
         apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or""
-        bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
+        bd={"ssh":build_ssh_details,"vless":build_vless_details,"trojan":build_trojan_details,"vmess":build_vmess_details,"shadow":build_shadow_details,"ss":build_shadow_details,"shadowsocks":build_shadow_details,"zivpn":build_zivpn_details,"hysteria":build_hysteria_details,"v2raydns":build_v2raydns_details}
         fn=bd.get(rp)
         if fn:
             if rp in("vless","vmess","v2raydns"):txt=fn(user,uuid or "?",exp,quota)
+            elif rp in("shadow","ss","shadowsocks"):txt=fn(user,apw or user,exp,quota)
             else:txt=fn(user,apw or user,exp,quota)
         else:txt=f"✅ *{nm.get(proto,rp.upper())} created!*\nUser: `{user}`\nExp: `{exp}`"
         await update.message.reply_text(txt,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
