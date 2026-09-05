@@ -388,7 +388,8 @@ def _reload_passwords(config_path, service, proto):
     config = Path(config_path)
     if not config.exists(): return
     pws = _active_passwords(proto)
-    if not pws: pws = ["zi"]
+    if not pws:
+        pws = []
     tmp = config.with_suffix(".json.tmp")
     try:
         data = json.loads(config.read_text())
@@ -413,7 +414,9 @@ def _zivpn_sync_config():
     cfg = Path("/etc/zivpn/config.json")
     if not cfg.exists(): return
     pws = _active_passwords("zivpn")
-    if not pws: pws = ["zi"]
+    if not pws:
+        log.warning("zivpn: aucun user actif - auth vide (pas de fallback zi)")
+        pws = []
     tmp = cfg.with_suffix(".json.tmp")
     try:
         data = json.loads(cfg.read_text())
@@ -428,22 +431,28 @@ def _zivpn_sync_config():
                 if exp and exp != "permanent" and exp < today: continue
                 if is_locked(f.name): continue
                 q_str = (_meta_get(f.name, "quota") or "").strip()
+                # extrait nombre même si "10GB" ou " 10 "
+                m = re.match(r"^\s*(\d+(?:\.\d+)?)", q_str) if q_str else None
+                if not m:
+                    if q_str:
+                        print(f" {C['YELLOW']}⚠ zivpn: quota invalide pour {f.name!r} ({q_str!r}) -> ignore{C['RST']}")
+                    continue
                 try:
-                    q = float(q_str or "0")
+                    q = float(m.group(1))
                 except ValueError:
-                    print(f" {C['YELLOW']}⚠ zivpn: quota invalide pour {f.name!r} ({q_str!r}) -> ignore{C['RST']}")
                     continue
                 if q > 0:
-                    pw = _meta_get(f.name, "pass")
-                    quota[pw or f.name] = f"{int(q)}GB"
+                    quota[f.name] = f"{int(q)}GB"
         data["quota"] = quota
         if not data.get("quotaStateFile"): data["quotaStateFile"] = "/etc/zivpn/quota-state.json"
         if not data.get("statsAPI"): data["statsAPI"] = {"listen": "127.0.0.1:10088"}
         tmp.write_text(json.dumps(data, indent=2))
+        sh(f"chmod 600 {tmp} 2>/dev/null || true")
         ok = sh(f"python3 -c 'import json; json.load(open(\"{tmp}\"))' 2>/dev/null && echo OK")
         if ok:
             before = cfg.read_bytes() if cfg.exists() else b""
             tmp.replace(cfg)
+            sh("chmod 600 /etc/zivpn/config.json 2>/dev/null || true")
             if cfg.read_bytes() != before:
                 sh("systemctl restart zivpn 2>/dev/null || true")
                 time.sleep(1)
@@ -464,7 +473,7 @@ ZIVPN_STATE = Path("/etc/zivpn/quota-state.json")
 _ZIVPN_GUARD_MARK = STATEDIR / "zivpn_guard_last"
 
 def _zivpn_expected_quota():
-    """Map password -> 'XGB' attendue, d'apres les users zivpn actifs."""
+    """Map user -> 'XGB' attendue, d'apres les users zivpn actifs."""
     out = {}
     today = date.today().isoformat()
     if not USERDIR.exists(): return out
@@ -475,13 +484,14 @@ def _zivpn_expected_quota():
         if exp and exp != "permanent" and exp < today: continue
         if is_locked(f.name): continue
         q_str = (_meta_get(f.name, "quota") or "").strip()
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)", q_str) if q_str else None
+        if not m: continue
         try:
-            q = float(q_str or "0")
+            q = float(m.group(1))
         except ValueError:
             continue
         if q <= 0: continue
-        pw = _meta_get(f.name, "pass")
-        out[pw or f.name] = f"{int(q)}GB"
+        out[f.name] = f"{int(q)}GB"
     return out
 
 def _zivpn_logger_alive():
@@ -2141,8 +2151,9 @@ def install_zivpn():
     DOMAIN = _ensure_domain() or "zivpn.local"
     sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/zivpn/zivpn.key -out /etc/zivpn/zivpn.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
     sh("chmod 600 /etc/zivpn/zivpn.key 2>/dev/null; chmod 644 /etc/zivpn/zivpn.crt 2>/dev/null || true")
-    zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"quotaStateFile\":\"/etc/zivpn/quota-state.json\",\"statsAPI\":{\"listen\":\"127.0.0.1:10088\"},\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
+    zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"quotaStateFile\":\"/etc/zivpn/quota-state.json\",\"statsAPI\":{\"listen\":\"127.0.0.1:10088\"},\"auth\":{\"mode\":\"passwords\",\"config\":[]}}'
     Path("/etc/zivpn/config.json").write_text(zi_cfg)
+    sh("chmod 600 /etc/zivpn/config.json 2>/dev/null || true")
     svc = """[Unit]
 Description=ZIVPN UDP Server (High-Speed)
 After=network-online.target
@@ -2166,7 +2177,9 @@ WantedBy=multi-user.target
 """
     Path("/etc/systemd/system/zivpn.service").write_text(svc)
     iface = get_main_iface()
-    _deploy_nft("zivpn", f'table inet zivpn {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }}; chain prerouting {{ type nat hook prerouting priority -100; iifname "{iface}" udp dport 6000-19999 dnat to :5667; }}; }}')
+    _deploy_nft("zivpn", f'table inet zivpn {{ chain input {{ type filter hook input priority 0; policy accept; udp dport 5667 accept; udp dport 6000-19999 accept; }}; chain prerouting {{ type nat hook prerouting priority -150; iifname "{iface}" udp dport 6000-19999 dnat to :5667; }}; }}')
+    # Recalcule le catchall udp-custom avec exclusion zivpn (6000-19999)
+    _ensure_nat_catchall()
     # Appliquer la config finale (auth passwords + quotas des users existants)
     # AVANT le premier demarrage : evite un process lance sans section quota
     # (le compteur de trafic n'existe pas si 'quota' etait vide au boot)
