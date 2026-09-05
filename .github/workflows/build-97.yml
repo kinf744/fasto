@@ -22,7 +22,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang lld binutils
-          pip install --quiet nuitka zstandard ordered-set pynacl
+          pip install --quiet --break-system-packages nuitka zstandard ordered-set pynacl
+          sudo pip install --quiet --break-system-packages pynacl 2>/dev/null || sudo -H pip install --quiet --break-system-packages pynacl 2>/dev/null || true
 
       - name: Restore or Generate Ed25519 keys
         run: |
