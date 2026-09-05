@@ -34,7 +34,7 @@ jobs:
             sudo chmod 600 /etc/ventes/ed25519.sk
           else
             sudo mkdir -p /etc/ventes
-            python3 ./01_gen_keys.py
+            sudo python3 ./01_gen_keys.py
             echo "VK_PUB_HEX=$(python3 -c "import pathlib; print(pathlib.Path('/etc/ventes/ed25519.vk').read_bytes().hex())")" >> $GITHUB_ENV
             echo "::warning::Nouvelle paire générée - ajoute ED25519_SK_B64 dans Secrets"
           fi
