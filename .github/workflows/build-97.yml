@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04  # 4 vCPU / 16GB - évite OOM du VPS 2GB
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
@@ -21,14 +21,12 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang lld strip binutils
+          sudo apt-get install -y -qq clang lld binutils
           pip install --quiet nuitka zstandard ordered-set pynacl
 
       - name: Restore or Generate Ed25519 keys
         run: |
-          mkdir -p /tmp/kighmu-97
-          cp /tmp/kighmu-97/01_gen_keys.py /tmp/ 2>/dev/null || true
-          # Si secret ED25519_SK_B64 existe, restaure, sinon génère
+          if [[ -f "./01_gen_keys.py" ]]; then cp ./01_gen_keys.py /tmp/; fi
           if [[ -n "${{ secrets.ED25519_SK_B64 }}" ]]; then
             echo "${{ secrets.ED25519_SK_B64 }}" | base64 -d > /tmp/ed25519.sk
             python3 -c "import nacl.signing; sk=nacl.signing.SigningKey(open('/tmp/ed25519.sk','rb').read()); open('/tmp/ed25519.vk','wb').write(sk.verify_key.encode())"
@@ -36,38 +34,42 @@ jobs:
             sudo chmod 600 /etc/ventes/ed25519.sk
           else
             sudo mkdir -p /etc/ventes
-            python3 /tmp/kighmu-97/01_gen_keys.py
+            python3 ./01_gen_keys.py
             echo "VK_PUB_HEX=$(python3 -c "import pathlib; print(pathlib.Path('/etc/ventes/ed25519.vk').read_bytes().hex())")" >> $GITHUB_ENV
-            echo "::warning::Génère nouvelle paire - sauvegarde ED25519_SK_B64 dans Secrets"
-            base64 -w0 /etc/ventes/ed25519.sk | head -c 20; echo "..."
+            echo "::warning::Nouvelle paire générée - ajoute ED25519_SK_B64 dans Secrets"
           fi
           python3 -c "import pathlib; print('VK:', pathlib.Path('/etc/ventes/ed25519.vk').read_bytes().hex()[:16]+'...')"
 
       - name: Patch sources V3 (Ed25519)
         run: |
-          cp /tmp/kighmu-97/install2.py.orig /tmp/kighmu-97/install2_v3.py 2>/dev/null || cp install2.py /tmp/kighmu-97/install2_v3.py
+          mkdir -p /tmp/kighmu-97/dist
+          cp install2.py /tmp/kighmu-97/install2_v3.py
           python3 << 'PY'
           import pathlib
           p="/tmp/kighmu-97/install2_v3.py"
           t=pathlib.Path(p).read_text()
           old='_LICENSE_SECRET = hashlib.sha256(b"KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2").hexdigest()'
-          new=pathlib.Path("/tmp/kighmu-97/kighmu_license_v3.py").read_text()
-          # injecte VK réel
-          import pathlib as pl
-          vk=pl.Path("/etc/ventes/ed25519.vk").read_bytes().hex()
+          new=pathlib.Path("./kighmu_license_v3.py").read_text()
+          vk=pathlib.Path("/etc/ventes/ed25519.vk").read_bytes().hex()
+          # remplace le placeholder dans le module
           new=new.replace("06d24678802bb97565406d7301db48a5968118bc18c768fcfd447bfca48b430f", vk)
-          # patch en 2 passes pour éviter le placeholder
-          vk2=pl.Path("/tmp/kighmu-97/kighmu_license_v3.py").read_text().split('VK_PUB_HEX = "')[1].split('"')[0]
-          if vk2 != vk:
-              new=new.replace(vk2, vk)
-          t=t.replace(old, new)
-          pl.Path(p).write_text(t)
-          print(f"Patch OK VK={vk[:16]}... len={len(t)}")
+          # patch en 2 passes si déjà patché localement
+          try:
+              vk2=pathlib.Path("./kighmu_license_v3.py").read_text().split('VK_PUB_HEX = "')[1].split('"')[0]
+              if vk2 != vk and vk2 != "REPLACE_ME_WITH_OUTPUT_OF_01_gen_keys.py":
+                  new=new.replace(vk2, vk)
+          except: pass
+          if old in t:
+              t=t.replace(old, new)
+              pathlib.Path(p).write_text(t)
+              print(f"Patch OK VK={vk[:16]}... len={len(t)}")
+          else:
+              print("old secret not found - déjà patché ?")
+              print(t[3400:3600][:200])
           PY
 
       - name: Nuitka Build --onefile
         run: |
-          mkdir -p /tmp/kighmu-97/dist
           python3 -m nuitka --onefile --lto=yes --clang --remove-output --assume-yes-for-downloads --include-package=nacl --output-dir=/tmp/kighmu-97/dist --output-filename=install2.bin /tmp/kighmu-97/install2_v3.py
           ls -lh /tmp/kighmu-97/dist/install2.bin
           strip --strip-all /tmp/kighmu-97/dist/install2.bin 2>/dev/null || true
@@ -77,23 +79,15 @@ jobs:
       - name: Sign Ed25519
         run: |
           python3 -c "
-          import nacl.signing, pathlib
+          import nacl.signing, pathlib, hashlib
           sk=nacl.signing.SigningKey(open('/etc/ventes/ed25519.sk','rb').read())
           data=pathlib.Path('/tmp/kighmu-97/dist/install2.bin').read_bytes()
           sig=sk.sign(data).signature.hex()
           open('/tmp/kighmu-97/dist/install2.bin.sig','w').write(sig)
-          print(f'SHA256: {__import__(\"hashlib\").sha256(data).hexdigest()}')
+          print(f'SHA256: {hashlib.sha256(data).hexdigest()}')
           print(f'SIG: {sig[:16]}... len={len(sig)}')
           "
           ls -lh /tmp/kighmu-97/dist/
-
-      - name: Cosign (optionnel)
-        if: env.COSIGN_KEY != ''
-        env:
-          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
-        run: |
-          go install github.com/sigstore/cosign/cmd/cosign@latest
-          cosign sign-blob --key env://COSIGN_KEY --output-signature /tmp/kighmu-97/dist/install2.bin.cosig /tmp/kighmu-97/dist/install2.bin
 
       - name: Smoke test
         run: |
