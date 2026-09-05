@@ -3514,21 +3514,20 @@ def _unpack_legacy(raw: str):
 
 
 def _pack_license_token(key, expiry):
-    msg = f"{key}|{expiry}"
-    sig = hmac.new(_LICENSE_SECRET.encode(), msg.encode(), hashlib.sha256).hexdigest()
-    return f"{msg}|{sig}"
+    # V3: tente Ed25519 d'abord (côté ventes), fallback legacy
+    try:
+        return _pack_license_token_v3(key, expiry)
+    except Exception:
+        msg = f"{key}|{expiry}"
+        sig = hmac.new(_LICENSE_SECRET_OLD.encode(), msg.encode(), hashlib.sha256).hexdigest()
+        return f"{msg}|{sig}"
 
 def _unpack_license_token(raw):
-    parts = raw.strip().split("|")
-    if len(parts) < 3:
-        return None, None
-    sig = parts[-1]
-    msg = "|".join(parts[:-1])
-    expected = hmac.new(_LICENSE_SECRET.encode(), msg.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected):
-        return None, None
-    key, expiry = parts[0], parts[1]
-    return key, expiry
+    # V3: Ed25519 d'abord, sinon legacy 30j
+    k,e = _unpack_license_token_v3(raw)
+    if k is not None and e is not None:
+        return k,e
+    return _unpack_legacy(raw)
 
 def _sign_key(key):
     fp=_machine_fingerprint()
