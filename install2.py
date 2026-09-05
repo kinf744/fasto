@@ -3147,7 +3147,7 @@ def ui_create_wizard(protos):
         if proto=="ssh":
             clear_screen()
             show_ssh_details_screen("created",user,p or passwd,exp,q)
-        elif proto in("vmess","vless","trojan","v2raydns"):
+        elif proto in("vmess","vless","trojan","v2raydns","shadow","ss","shadowsocks"):
             clear_screen()
             show_detail_screen("created",proto.upper(),user,uuid=uuid,exp=exp,quota=q,passwd=p or passwd)
         elif proto=="zivpn":
