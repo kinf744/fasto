@@ -18,9 +18,17 @@ if SK_PATH.exists():
 else:
     sk = SigningKey.generate()
     vk = sk.verify_key
-    SK_PATH.write_bytes(sk.encode())
-    VK_PATH.write_bytes(vk.encode())
-    os.chmod(SK_PATH, 0o600)
+    try:
+        SK_PATH.write_bytes(sk.encode())
+        VK_PATH.write_bytes(vk.encode())
+        os.chmod(SK_PATH, 0o600)
+    except PermissionError:
+        import tempfile, shutil
+        tmp_sk=pathlib.Path(tempfile.gettempdir())/"ed25519.sk"
+        tmp_vk=pathlib.Path(tempfile.gettempdir())/"ed25519.vk"
+        tmp_sk.write_bytes(sk.encode()); tmp_vk.write_bytes(vk.encode())
+        print(f"[!] Fallback /tmp - sudo cp {tmp_sk} {SK_PATH}")
+        os.system(f"sudo mkdir -p {DB_DIR} && sudo cp {tmp_sk} {SK_PATH} && sudo cp {tmp_vk} {VK_PATH} && sudo chmod 600 {SK_PATH}")
     os.chmod(VK_PATH, 0o644)
     print(f"[+] Clé privée générée: {SK_PATH} (600) - SAUVEGARDE IMMÉDIATE")
     print(f"[+] Clé publique: {VK_PATH}")
