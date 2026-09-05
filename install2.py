@@ -366,6 +366,14 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         passwd = passwd or gen_pass()
         write_meta(user, "hysteria", exp, "", passwd, "", quota)
         hysteria_apply()
+    elif proto in ("ss","shadowsocks","shadow"):
+        passwd = passwd or gen_pass(16)
+        if not XRAY_USERS.exists(): XRAY_USERS.write_text('{"vmess":[],"vless":[],"trojan":[],"shadow":[]}')
+        # shadowsocks: password + method aes-128-gcm
+        method = "aes-128-gcm"
+        sh(f"jq '.shadow += [{{\"password\":\"{passwd}\",\"method\":\"{method}\",\"email\":\"{user}\",\"level\":0,\"expire\":\"{exp}\",\"quota\":{float(quota) or 0}}}]' {XRAY_USERS} > /tmp/xu.json 2>/dev/null && mv /tmp/xu.json {XRAY_USERS} 2>/dev/null")
+        write_meta(user, "shadow", exp, "", passwd, "", quota)
+        xray_build_config()
     else: return 1
     return 0
 
@@ -1498,6 +1506,8 @@ def xray_gen_config():
         {"tag":"Trojan-TCP","port":10009,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"none"}},
         {"tag":"Trojan-WS","port":10010,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan"}}},
         {"tag":"Shadowsocks","port":10011,"listen":"127.0.0.1","protocol":"shadowsocks","settings":{"clients":[],"network":"tcp,udp"},"streamSettings":{"network":"tcp","security":"none"}},
+        {"tag":"Shadowsocks-WS","port":10020,"listen":"127.0.0.1","protocol":"shadowsocks","settings":{"clients":[],"network":"tcp,udp"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/ss-ws"}}},
+        {"tag":"Shadowsocks-gRPC","port":10021,"listen":"127.0.0.1","protocol":"shadowsocks","settings":{"clients":[],"network":"tcp,udp"},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"ss-grpc"}}},
         {"tag":"VLESS-XHTTP","port":10012,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/vless-xhttp"}}},
         {"tag":"VLESS-gRPC","port":10013,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"grpc","security":"none","grpcSettings":{"serviceName":"vless-grpc"}}},
         {"tag":"VMess-XHTTP","port":10014,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[]},"streamSettings":{"network":"xhttp","security":"none","xhttpSettings":{"path":"/vmess-xhttp"}}},
@@ -1654,10 +1664,14 @@ frontend xray-ntls
     acl is_trojan_ws  req.payload(0,12) -m bin 474554202f74726f6a616e20
     acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
     acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
+    acl is_ss_ws      req.payload(0,11) -m bin 474554202f73732d7773
+    acl is_ssh_wss    req.payload(0,12) -m bin 474554202f7373682d777373
+    use_backend ssh-wss            if is_ssh_wss
     use_backend grpc_router        if is_h2
     use_backend xray-vless-ws      if is_vless_ws
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
+    use_backend xray-ss-ws         if is_ss_ws
     use_backend grpc_router        if is_http or is_post
     use_backend xray-vmess-tcp     if is_vmess
     use_backend xray-trojan-tcp    if !is_vless
@@ -1678,10 +1692,14 @@ frontend xray-tls
     acl is_trojan_ws  req.payload(0,12) -m bin 474554202f74726f6a616e20
     acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
     acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
+    acl is_ss_ws      req.payload(0,11) -m bin 474554202f73732d7773
+    acl is_ssh_wss    req.payload(0,12) -m bin 474554202f7373682d777373
+    use_backend ssh-wss            if is_ssh_wss
     use_backend grpc_router        if is_h2
     use_backend xray-vless-ws      if is_vless_ws
     use_backend xray-vmess-ws      if is_vmess_ws
     use_backend xray-trojan-ws     if is_trojan_ws
+    use_backend xray-ss-ws         if is_ss_ws
     use_backend grpc_router        if is_http or is_post
     use_backend xray-vmess-tcp     if is_vmess
     use_backend xray-trojan-tcp    if !is_vless
@@ -1695,6 +1713,7 @@ frontend grpc_router
     use_backend xray-vmess-grpc   if {{ path_beg /vmess-grpc }}
     use_backend xray-vless-grpc   if {{ path_beg /vless-grpc }}
     use_backend xray-trojan-grpc  if {{ path_beg /trojan-grpc }}
+    use_backend xray-ss-grpc      if {{ path_beg /ss-grpc }}
     use_backend xray-vmess-grpc   if {{ path_beg /vmess-h2 }}
     use_backend xray-vless-grpc   if {{ path_beg /vless-h2 }}
     use_backend xray-trojan-grpc  if {{ path_beg /trojan-h2 }}
@@ -1723,6 +1742,13 @@ backend xray-trojan-ws
     server s1 127.0.0.1:10010
 backend xray-ss
     server s1 127.0.0.1:10011
+backend xray-ss-ws
+    server s1 127.0.0.1:10020
+backend xray-ss-grpc
+    mode http
+    server s1 127.0.0.1:10021
+backend ssh-wss
+    server s1 127.0.0.1:80
 backend xray-vless-xhttp
     mode http
     server s1 127.0.0.1:10012
@@ -1764,7 +1790,7 @@ def xray_build_config():
             for f in USERDIR.iterdir():
                 if not f.is_file(): continue
                 p = _meta_get(f.name, "proto")
-                if p not in ("vmess", "vless", "trojan"): continue
+                if p not in ("vmess", "vless", "trojan", "shadow"): continue
                 exp = _meta_get(f.name, "exp")
                 if exp and exp < today: continue
                 if is_locked(f.name): continue
@@ -1784,7 +1810,7 @@ def xray_build_config():
             "VMess-TCP":"vmess","VMess-WS":"vmess","VMess-TLS":"vmess","VMess-WSS":"vmess","VMess-XHTTP":"vmess","VMess-gRPC":"vmess",
             "VLESS-TCP":"vless","VLESS-WS":"vless","VLESS-TLS":"vless","VLESS-WSS":"vless","VLESS-XHTTP":"vless","VLESS-gRPC":"vless","VLESS-HUpgrade":"vless",
             "Trojan-TCP":"trojan","Trojan-WS":"trojan","Trojan-XHTTP":"trojan","Trojan-gRPC":"trojan","Trojan-HUpgrade":"trojan",
-            "Shadowsocks":"shadow"
+            "Shadowsocks":"shadow","Shadowsocks-WS":"shadow","Shadowsocks-gRPC":"shadow"
         }
         for inbound in config.get("inbounds", []):
             tag = inbound.get("tag","")
@@ -1795,8 +1821,16 @@ def xray_build_config():
             if not ulist:
                 inbound["settings"]["clients"] = []
                 continue
-            if p == "shadow" and "method" in ulist[0]:
-                inbound["settings"] = {"method":ulist[0]["method"],"password":ulist[0]["password"],"network":"tcp,udp","level":0}
+            if p == "shadow":
+                clients = []
+                for u in ulist:
+                    clients.append({"password":u["password"],"method":u.get("method","aes-128-gcm"),"email":u.get("email",""),"level":0})
+                # Xray shadowsocks multi-user via clients array, keep top-level for single for compat
+                inbound["settings"]["clients"] = clients
+                if clients:
+                    inbound["settings"]["method"] = clients[0]["method"]
+                    inbound["settings"]["password"] = clients[0]["password"]
+                    inbound["settings"]["network"] = "tcp,udp"
             else:
                 clients = []
                 for u in ulist:
