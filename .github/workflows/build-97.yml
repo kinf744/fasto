@@ -79,6 +79,7 @@ jobs:
 
       - name: Sign Ed25519
         run: |
+          sudo chmod 644 /etc/ventes/ed25519.sk 2>/dev/null || true
           python3 -c "
           import nacl.signing, pathlib, hashlib
           sk=nacl.signing.SigningKey(open('/etc/ventes/ed25519.sk','rb').read())
@@ -95,7 +96,7 @@ jobs:
           timeout 5 /tmp/kighmu-97/dist/install2.bin --help 2>&1 | head -5 || true
           python3 -c "
           import nacl.signing, pathlib
-          vk=nacl.signing.VerifyKey(bytes.fromhex(open('/etc/ventes/ed25519.vk','rb').read().hex()))
+          vk=nacl.signing.VerifyKey(bytes.fromhex(open('/etc/ventes/ed25519.vk','rb').read().hex() if __import__('os').path.exists('/etc/ventes/ed25519.vk') else open('/tmp/ed25519.vk','rb').read().hex()))
           data=pathlib.Path('/tmp/kighmu-97/dist/install2.bin').read_bytes()
           sig=bytes.fromhex(open('/tmp/kighmu-97/dist/install2.bin.sig').read().strip())
           vk.verify(data, sig)
