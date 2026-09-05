@@ -85,10 +85,23 @@ _gen_key() {
     dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum | cut -d' ' -f1   # 32 car. hex aléatoires
 }
 
-LICENSE_SECRET="$(printf '%s' 'KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2' | sha256sum | cut -d' ' -f1)"
+# V3 Ed25519 - clé privée JAMAIS dans install2.bin
+readonly VK_SK="/etc/ventes/ed25519.sk"
+readonly VK_PUB="/etc/ventes/ed25519.vk"
+_ensure_keys() {
+    if [[ ! -f "$VK_SK" ]]; then
+        python3 /tmp/kighmu-97/01_gen_keys.py 2>/dev/null || python3 -c "import nacl.signing; sk=nacl.signing.SigningKey.generate(); open('$VK_SK','wb').write(sk.encode()); open('$VK_PUB','wb').write(sk.verify_key.encode())"
+        chmod 600 "$VK_SK"; chmod 644 "$VK_PUB"
+    fi
+}
+LICENSE_SECRET_OLD="$(printf '%s' 'KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2' | sha256sum | cut -d' ' -f1)" 
 _pack_token() {
+    _ensure_keys
+    python3 -c "import nacl.signing; sk=nacl.signing.SigningKey(open('$VK_SK','rb').read()); import sys; msg=sys.argv[1].encode(); print(msg.decode()+'|'+sk.sign(msg).signature.hex())" "$1|$2"
+}
+_pack_token_legacy() {
     local msg="$1|$2" sig
-    sig=$(printf '%s' "$msg" | openssl dgst -sha256 -hmac "$LICENSE_SECRET" 2>/dev/null | cut -d' ' -f2)
+    sig=$(printf '%s' "$msg" | openssl dgst -sha256 -hmac "$LICENSE_SECRET_OLD" 2>/dev/null | cut -d' ' -f2)
     printf '%s|%s' "$msg" "$sig"
 }
 
