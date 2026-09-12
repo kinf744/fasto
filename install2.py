@@ -327,6 +327,13 @@ def is_locked(user): return _meta_get(user, "locked") == "1"
 def create_user(proto, user, days, passwd="", limit="1", quota="0"):
     if not valid_name(user): return 1
     if (USERDIR / user).exists(): return 2
+    # Anti-doublon username insensible à la casse (BARNET vs Barnet) :
+    # le binaire et l'affichage confondraient deux logins proches.
+    if USERDIR.exists():
+        low = user.lower()
+        for f in USERDIR.iterdir():
+            if f.is_file() and f.name.lower() == low:
+                return 2
     exp = exp_in_days(days); uuid = ""; proto = proto.lower()
     if proto == "ssh":
         if sh(f"id {user} 2>/dev/null"): return 2
@@ -608,6 +615,141 @@ def _ensure_zivpn_crons(bin_path=""):
         return changed
     except Exception:
         return False
+
+
+ZIVPN_QUARANTINE = Path("/etc/zivpn/quarantine.json")
+
+
+def _zivpn_login_in_use(user):
+    """Login déjà utilisé (exact ou insensible casse) ? Retourne le login existant ou ''."""
+    if not user or not USERDIR.exists():
+        return ""
+    if (USERDIR / user).exists():
+        return user
+    low = user.lower()
+    for f in USERDIR.iterdir():
+        if f.is_file() and f.name.lower() == low:
+            return f.name
+    return ""
+
+
+def _zivpn_quarantine_load():
+    try:
+        if ZIVPN_QUARANTINE.exists():
+            d = json.loads(ZIVPN_QUARANTINE.read_text())
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _zivpn_quarantine_save(data):
+    try:
+        ZIVPN_QUARANTINE.parent.mkdir(parents=True, exist_ok=True)
+        ZIVPN_QUARANTINE.write_text(json.dumps(data, indent=2))
+        sh("chmod 600 /etc/zivpn/quarantine.json 2>/dev/null || true")
+    except Exception:
+        pass
+
+
+def _zivpn_quarantine_add(user, reason):
+    """Stocke le password/user bloqué (quota/exp/manuel) en quarantaine :
+    retiré de config.json (via zivpn_apply) mais conservé ici en attente
+    de suppression définitive ou déblocage. Le quota peut être identique
+    entre users : la clé de quarantaine est le password (bucket binaire)."""
+    try:
+        proto = _meta_get(user, "proto")
+        if proto != "zivpn":
+            return False
+        pw = (_meta_get(user, "pass") or "").strip()
+        if not pw:
+            return False
+        q = _zivpn_quarantine_load()
+        q[pw] = {
+            "login": user,
+            "quota": _meta_get(user, "quota") or "0",
+            "exp": _meta_get(user, "exp") or "",
+            "reason": reason,
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _zivpn_quarantine_save(q)
+        return True
+    except Exception:
+        return False
+
+
+def _zivpn_quarantine_remove(user_or_pw):
+    try:
+        q = _zivpn_quarantine_load()
+        changed = False
+        if user_or_pw in q:
+            del q[user_or_pw]
+            changed = True
+        else:
+            for pw, e in list(q.items()):
+                if isinstance(e, dict) and e.get("login") == user_or_pw:
+                    del q[pw]
+                    changed = True
+        if changed:
+            _zivpn_quarantine_save(q)
+        return changed
+    except Exception:
+        return False
+
+
+def zivpn_block_users(users, reason="manual"):
+    """Blocage puissant (un ou plusieurs) : lock + retrait config.json
+    + mise en quarantaine. Retourne (blocked, already)."""
+    if isinstance(users, str):
+        users = [users]
+    blocked = already = 0
+    for user in users:
+        if not (USERDIR / user).is_file():
+            continue
+        if _meta_get(user, "proto") != "zivpn":
+            continue
+        if is_locked(user):
+            _zivpn_quarantine_add(user, _meta_get(user, "quota_hit") == "1" and "quota" or reason)
+            already += 1
+            continue
+        if reason == "quota":
+            _meta_set(user, "quota_hit", "1")
+        elif reason == "expired":
+            _meta_set(user, "exp_lock", "1")
+        _meta_set(user, "locked", "1")
+        _zivpn_quarantine_add(user, reason)
+        blocked += 1
+    if blocked:
+        zivpn_apply()
+    return blocked, already
+
+
+def zivpn_unblock_users(users, purge_quarantine=True):
+    """Déblocage (un ou plusieurs) : unlock + sortie quarantaine + retour config."""
+    if isinstance(users, str):
+        users = [users]
+    restored = 0
+    for user in users:
+        if not (USERDIR / user).is_file():
+            # Login supprimé mais password encore en quarantaine : purge l'entrée
+            _zivpn_quarantine_remove(user)
+            continue
+        if _meta_get(user, "proto") != "zivpn":
+            continue
+        _meta_set(user, "locked", "0")
+        _meta_set(user, "quota_hit", "0")
+        _meta_set(user, "exp_lock", "0")
+        if purge_quarantine:
+            _zivpn_quarantine_remove(user)
+        restored += 1
+    if restored:
+        zivpn_apply()
+    return restored
+
+
+def zivpn_quarantine_list():
+    """Liste quarantaine {password: {...}} pour panel/bot/CLI."""
+    return _zivpn_quarantine_load()
 
 
 def zivpn_quota_guard():
@@ -2621,6 +2763,8 @@ def delete_user(user):
             return 2  # User not found anywhere
     
     # Retirer le meta AVANT de régénérer les configs
+    # (capture le password AVANT unlink pour purger la quarantaine)
+    _del_pw = (_meta_get(user, "pass") or "").strip() if had_file else ""
     f.unlink(missing_ok=True)
     
     if proto == "ssh" or (not had_file and user in panel_system_accounts()):
@@ -2634,6 +2778,10 @@ def delete_user(user):
     elif proto == "v2raydns":
         v2raydns_apply()
     elif proto == "zivpn":
+        # Suppression définitive : purge la quarantaine (login + password)
+        _zivpn_quarantine_remove(user)
+        if _del_pw:
+            _zivpn_quarantine_remove(_del_pw)
         zivpn_apply()
     elif proto == "hysteria":
         hysteria_apply()
@@ -2701,7 +2849,9 @@ def lock_user(user):
     if proto == "ssh": sh(f"passwd -l {user} &>/dev/null")
     _meta_set(user, "locked", "1")
     if proto == "v2raydns": v2raydns_apply()
-    elif proto == "zivpn": zivpn_apply()
+    elif proto == "zivpn":
+        _zivpn_quarantine_add(user, "manual")
+        zivpn_apply()
     elif proto == "hysteria": hysteria_apply()
     return 0
 def unlock_user(user):
@@ -2710,7 +2860,9 @@ def unlock_user(user):
     if proto == "ssh": sh(f"passwd -u {user} &>/dev/null")
     _meta_set(user, "locked", "0")
     if proto == "v2raydns": v2raydns_apply()
-    elif proto == "zivpn": zivpn_apply()
+    elif proto == "zivpn":
+        _zivpn_quarantine_remove(user)
+        zivpn_apply()
     elif proto == "hysteria": hysteria_apply()
     return 0
 
@@ -2787,7 +2939,9 @@ def quota_enforce():
             if expired:
                 if not is_locked(user):
                     _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
-                    if proto == "zivpn": zivpn_apply()
+                    if proto == "zivpn":
+                        _zivpn_quarantine_add(user, "expired")
+                        zivpn_apply()
                     else: hysteria_apply()
                     blocked += 1
             elif q > 0:
@@ -2795,7 +2949,9 @@ def quota_enforce():
                 if used >= q * 1024**3:
                     if not is_locked(user):
                         _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
-                        if proto == "zivpn": zivpn_apply()
+                        if proto == "zivpn":
+                            _zivpn_quarantine_add(user, "quota")
+                            zivpn_apply()
                         else: hysteria_apply()
                         blocked += 1
             # Restauration automatique si quota augmenté ou trafic < limite et non expiré
@@ -2803,7 +2959,9 @@ def quota_enforce():
                 used_now = get_zivpn_traffic(user) if proto == "zivpn" else get_hysteria_traffic(user)
                 if q <= 0 or used_now < q * 1024**3:
                     _meta_set(user, "quota_hit", "0"); _meta_set(user, "locked", "0")
-                    if proto == "zivpn": zivpn_apply()
+                    if proto == "zivpn":
+                        _zivpn_quarantine_remove(user)
+                        zivpn_apply()
                     else: hysteria_apply()
                     restored += 1
     if xray_changed: xray_build_config()
@@ -4967,6 +5125,7 @@ if BOT_AVAILABLE:
         InlineKeyboardButton("🔄 Renew Bulk",callback_data="renew_bulk"),
         InlineKeyboardButton("💾 Set Quota",callback_data="set_quota"),
         InlineKeyboardButton("🔒 Lock",callback_data="lock_user"),
+        InlineKeyboardButton("🚫 Quarantaine",callback_data="q_zivpn"),
         InlineKeyboardButton("⬅️ Back",callback_data="main"),
     ]))
     def reseller_main_kb(): return InlineKeyboardMarkup(build_menu([
@@ -5169,6 +5328,21 @@ if BOT_AVAILABLE:
             await q.edit_message_text("\n".join(l),reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data["sq_users"]=users;ctx.user_data["step"]="set_quota_val"
         elif d=="renew_user": ctx.user_data["step"]="renew_user";await q.edit_message_text("🔄 Username:",reply_markup=back_kb("users"))
         elif d=="lock_user": ctx.user_data["step"]="lock_user";await q.edit_message_text("🔒 Username:",reply_markup=back_kb("users"))
+        elif d=="q_zivpn":
+            qq = zivpn_quarantine_list()
+            if not qq:
+                await q.edit_message_text("🚫 *Quarantaine ZIVPN vide.*\nLes passwords bloqués (quota/exp/manuel) apparaîtront ici en attente de suppression ou déblocage.", reply_markup=back_kb("users"), parse_mode="Markdown")
+            else:
+                lines = ["🚫 *QUARANTAINE ZIVPN* (`password` → login / motif) :"]
+                for pw, e in list(qq.items())[:30]:
+                    if isinstance(e, dict):
+                        lines.append(f"`{pw}` → `{e.get('login','?')}` ({e.get('reason','?')}, quota {e.get('quota','?')}G)")
+                    else:
+                        lines.append(f"`{pw}`")
+                if len(qq) > 30:
+                    lines.append(f"… +{len(qq)-30} autres")
+                lines.append("\nDébloquer via 🔒 Lock/Unlock, supprimer via 🗑 Delete.")
+                await q.edit_message_text("\n".join(lines), reply_markup=back_kb("users"), parse_mode="Markdown")
         elif d.startswith("confirm_del_"):
             user=d[12:]
             rc=delete_user(user)
@@ -5179,8 +5353,12 @@ if BOT_AVAILABLE:
         elif d.startswith("confirm_lock_"):
             user=d[13:]
             if (USERDIR/user).exists():
-                if is_locked(user): unlock_user(user);t=f"🔓 `{user}` unlocked."
-                else: lock_user(user);t=f"🔒 `{user}` locked."
+                if is_locked(user):
+                    unlock_user(user);t=f"🔓 `{user}` unlocked."
+                    if _meta_get(user, "proto") == "zivpn": t += " (sorti de quarantaine, password réintégré à config.json)"
+                else:
+                    lock_user(user);t=f"🔒 `{user}` locked."
+                    if _meta_get(user, "proto") == "zivpn": t += " (password retiré de config.json → quarantaine)"
                 await q.edit_message_text(t,reply_markup=back_kb("users"),parse_mode="Markdown")
             else: await q.edit_message_text(f"❌ `{user}` not found.",reply_markup=back_kb("users"),parse_mode="Markdown")
         elif d=="help":
@@ -5298,6 +5476,11 @@ Expired resellers auto-deactivated daily by cron.
         except: pass
         if step=="cr_user":
             if not re.match(r'^[a-zA-Z0-9._-]+$',text): await update.message.reply_text("❌ Invalid username.");return
+            dup = _zivpn_login_in_use(text)
+            if dup and proto in ("zivpn", "hyst"):
+                await update.message.reply_text(f"❌ Username déjà utilisé (`{dup}`). Même quota possible, mais nom unique requis.");return
+            elif (USERDIR/text).exists():
+                await update.message.reply_text("❌ Username déjà utilisé.");return
             ctx.user_data["cr_username"]=text;ctx.user_data["step"]="cr_days";await reply_cls(update,ctx,"✏️ Expiry in *days*:",parse_mode="Markdown")
         elif step=="cr_days":
             if not text.isdigit()or int(text)<1: await update.message.reply_text("❌ >=1");return
@@ -5306,6 +5489,10 @@ Expired resellers auto-deactivated daily by cron.
             else:ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="cr_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["cr_pass"]=p
+            if proto in ("zivpn", "hyst") and p != "auto":
+                dup = _zivpn_password_in_use(p)
+                if dup:
+                    await update.message.reply_text(f"❌ Password déjà utilisé par `{dup}`. Même quota possible, mais password unique requis (compteur binaire par password).");return
             if proto in("trojan","ssh","zivpn","hyst"):ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["cr_quota"]="0";await do_create(update,ctx)
         elif step=="cr_quota":
@@ -5538,7 +5725,7 @@ Expired resellers auto-deactivated daily by cron.
         rp=pm.get(proto,proto);pn=nm.get(proto,rp.upper());exp=exp_in_days(int(days))
         rc=create_user(rp,user,int(days),pwd,"1",quota)
         if rc!=0:
-            msgs={1:"Invalid username",2:"Already exists"}
+            msgs={1:"Invalid username",2:"Username déjà utilisé (nom unique requis, même quota possible)",4:"Password déjà utilisé (password unique requis, même quota possible)"}
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=back_kb("users"),parse_mode="Markdown")
             ctx.user_data.clear();return
         apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or ""
@@ -5795,6 +5982,11 @@ if BOT_AVAILABLE:
         except:pass
         if step=="r_user":
             if not re.match(r'^[a-zA-Z0-9._-]+$',text):await update.message.reply_text("❌ Invalid username.");return
+            dup = _zivpn_login_in_use(text)
+            if dup and proto in ("zivpn", "hyst"):
+                await update.message.reply_text(f"❌ Username déjà utilisé (`{dup}`).");return
+            elif (USERDIR/text).exists():
+                await update.message.reply_text("❌ Username déjà utilisé.");return
             ctx.user_data["r_username"]=text;ctx.user_data["r_step"]="r_days"
             await update.message.reply_text("✏️ Expiry in *days*:",parse_mode="Markdown")
         elif step=="r_days":
@@ -5804,6 +5996,10 @@ if BOT_AVAILABLE:
             else:ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
         elif step=="r_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["r_pass"]=p
+            if proto in ("zivpn", "hyst") and p != "auto":
+                dup = _zivpn_password_in_use(p)
+                if dup:
+                    await update.message.reply_text(f"❌ Password déjà utilisé par `{dup}`.");return
             if proto in("trojan","ssh","zivpn","hyst","v2ray"):ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["r_quota"]="0";await do_create_reseller(update,ctx,rid2)
         elif step=="r_quota":
@@ -5900,7 +6096,7 @@ if BOT_AVAILABLE:
         exp=exp_in_days(int(days))
         rc=create_user(rp,user,int(days),pwd,"1",quota)
         if rc!=0:
-            msgs={1:"Invalid username",2:"Already exists"}
+            msgs={1:"Invalid username",2:"Username déjà utilisé",4:"Password déjà utilisé"}
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
             ctx.user_data.clear();return
         _meta_set(user,"reseller",str(rid))
@@ -5993,6 +6189,21 @@ if __name__ == "__main__":
             n, d = zivpn_quota_guard()
             b, r = quota_enforce()
             log.info(f"zivpn-repair: guard={d}, enforce={b} blocked/{r} restored")
+            sys.exit(0)
+        elif arg == "--zivpn-block":
+            users = sys.argv[2].split(",") if len(sys.argv) > 2 else []
+            reason = sys.argv[3] if len(sys.argv) > 3 else "manual"
+            b, a = zivpn_block_users([u.strip() for u in users if u.strip()], reason)
+            log.info(f"zivpn-block: {b} blocked, {a} already ({reason})")
+            sys.exit(0)
+        elif arg == "--zivpn-unblock":
+            users = sys.argv[2].split(",") if len(sys.argv) > 2 else []
+            r = zivpn_unblock_users([u.strip() for u in users if u.strip()])
+            log.info(f"zivpn-unblock: {r} restored")
+            sys.exit(0)
+        elif arg == "--zivpn-quarantine-list":
+            import json as _j
+            print(_j.dumps(zivpn_quarantine_list(), indent=2))
             sys.exit(0)
         elif arg == "--ssh-quota-sync":
             _install_ssh_banner_shell()
