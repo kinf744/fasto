@@ -1236,34 +1236,11 @@ def uninstall_ssl_tls():
     sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
     print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
 
-def _ensure_sshws_haproxy_backend():
-    """Garantit backend ssh-wss -> 127.0.0.1:80 (WSS 443 déchiffré par HAProxy).
-    Utilisé par install_sshws même sans xray : si haproxy existe mais sans
-    backend, on l'ajoute + reload. Sinon rien (WS 80 direct reste actif)."""
-    try:
-        if sh("command -v haproxy 2>/dev/null") == "":
-            return False
-        cfg = Path("/etc/haproxy/haproxy.cfg")
-        if not cfg.exists():
-            return False
-        t = cfg.read_text()
-        if "backend ssh-wss" in t:
-            return False
-        t += "\nbackend ssh-wss\n    server s1 127.0.0.1:80\n"
-        cfg.write_text(t)
-        ok = sh("haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo OK")
-        if ok:
-            sh("systemctl reload haproxy 2>/dev/null || systemctl restart haproxy 2>/dev/null || true")
-            return True
-        return False
-    except Exception:
-        return False
-
-
 def install_sshws():
-    # sshws v2 : handshake strict, mode auto (raw legacy + vrai WS),
-    # paths /ssh-wss (HAProxy 443/8880 -> :80), timeouts, anti-DDoS.
-    # L'unité est réécrite même si existante (migration v1 -> v2).
+    # sshws d'origine : WS + TCP RAW port 80 direct (binaire v1).
+    # Le WSS via HAProxy (backend ssh-wss, path /ssh-wss) est supprime :
+    # l'unite est reecrite en version d'origine (migration v2 -> v1),
+    # car le binaire v1 ne connait pas les flags -mode/-paths.
     sh("apt-get install -y -qq curl python3-websockets 2>/dev/null || true")
     if sh("python3 -c 'import websockets' 2>/dev/null && echo OK") != "OK":
         sh("pip3 install websockets --quiet --break-system-packages 2>/dev/null || true")
@@ -1288,7 +1265,7 @@ def install_sshws():
         except Exception as e:
             print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws impossible ({e}, skip).{C['RST']}")
     svc = """[Unit]
-Description=SSHWS WS + TCP RAW Tunnel (v2)
+Description=SSHWS Slipstream Tunnel
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -1296,7 +1273,7 @@ StartLimitBurst=0
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 1092 -mode auto -paths /ssh-wss,/ssh-ws,/ws -max-conns 2048 -handshake-timeout 5s -idle-timeout 5m
+ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 1092
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -1304,12 +1281,12 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 """
     svc_path = Path("/etc/systemd/system/sshws.service")
-    # Migration v1->v2 : réécrit l'unité si ExecStart obsolète (RestartSec=0, sans -mode)
+    # Migration v2->v1 : reecrit l'unite si flags v2 presents (-mode/-paths/-tls-)
     need_write = True
     if svc_path.exists():
         try:
             cur = svc_path.read_text()
-            need_write = ("-mode" not in cur) or ("RestartSec=0" in cur)
+            need_write = ("-mode" in cur) or ("-paths" in cur) or ("-tls-" in cur) or ("(v2)" in cur)
         except Exception:
             need_write = True
     if need_write:
@@ -1319,7 +1296,6 @@ WantedBy=multi-user.target
         sh("systemctl restart sshws.service 2>/dev/null || true")
     else:
         sh("systemctl enable --now sshws.service 2>/dev/null || true")
-    _ensure_sshws_haproxy_backend()
     sh("systemctl reset-failed sshws.service 2>/dev/null || true")
     _deploy_nft("sshws", 'table inet sshws { chain input { type filter hook input priority 0; policy accept; tcp dport 80 accept; }; }')
     _install_ws_proxies()
@@ -1967,8 +1943,6 @@ frontend xray-ntls
     acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
     acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
     acl is_ss_ws      req.payload(0,11) -m bin 474554202f73732d7773
-    acl is_ssh_wss    req.payload(0,12) -m bin 474554202f7373682d777373
-    use_backend ssh-wss            if is_ssh_wss
     use_backend grpc_router        if is_h2
     use_backend xray-vless-ws      if is_vless_ws
     use_backend xray-vmess-ws      if is_vmess_ws
@@ -1995,8 +1969,6 @@ frontend xray-tls
     acl is_v2ray_ukj  req.payload(1,16) -m bin f4521f537e4640cfb84986a87f05cadf
     acl is_v2ray_opl  req.payload(1,16) -m bin ee0e0e9c928b40f2a9830299f38ad9b5
     acl is_ss_ws      req.payload(0,11) -m bin 474554202f73732d7773
-    acl is_ssh_wss    req.payload(0,12) -m bin 474554202f7373682d777373
-    use_backend ssh-wss            if is_ssh_wss
     use_backend grpc_router        if is_h2
     use_backend xray-vless-ws      if is_vless_ws
     use_backend xray-vmess-ws      if is_vmess_ws
@@ -2049,8 +2021,6 @@ backend xray-ss-ws
 backend xray-ss-grpc
     mode http
     server s1 127.0.0.1:10021
-backend ssh-wss
-    server s1 127.0.0.1:80
 backend xray-vless-xhttp
     mode http
     server s1 127.0.0.1:10012
@@ -3628,10 +3598,9 @@ def show_ssh_details_screen(mode,user,passwd,exp,quota="0"):
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}{dot('QUOTA',19)}{C['RST']} {C['WHITE']}{quota} GB{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}PASSWORD{C['RST']}",f"   {C['GREEN']}{passwd}{C['RST']}","%SEP%",
         f" {C['YELLOW']}○{C['RST']} {C['WHITE']}CONNECTION LINKS{C['RST']}","",
-        f"   {C['YELLOW']}[1] SSH WS ..............{C['RST']}",f"%FREE%   {dom}:80@{user}:{passwd}","",
-        f"   {C['YELLOW']}[2] SSH WSS (TLS) .......{C['RST']}",f"%FREE%   {dom}:443@{user}:{passwd}  (path /ssh-wss)","",
-        f"   {C['YELLOW']}[3] SSL/TLS .............{C['RST']}",f"%FREE%   {dom}:444@{user}:{passwd}","",
-        f"   {C['YELLOW']}[4] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
+         f"   {C['YELLOW']}[1] SSH WS ..............{C['RST']}",f"%FREE%   {dom}:80@{user}:{passwd}","",
+         f"   {C['YELLOW']}[2] SSL/TLS .............{C['RST']}",f"%FREE%   {dom}:444@{user}:{passwd}","",
+         f"   {C['YELLOW']}[3] SSH UDP .............{C['RST']}",f"%FREE%   {dom}:1-65535@{user}:{passwd}","%SEP%",
        f" {C['YELLOW']}○{C['RST']} {C['WHITE']}WS PAYLOAD{C['RST']}",
        f"%FREE%   {C['GRAY']}GET / HTTP/1.1[crlf]Host: {dom}[crlf]Connection: Upgrade[crlf]User-Agent: {ua}[crlf]Upgrade: websocket[crlf][crlf]{C['RST']}",
        "%SEP%",f" {C['YELLOW']}○{C['RST']} {C['WHITE']}SLOWDNS (PORT 53){C['RST']}",
@@ -5051,11 +5020,9 @@ def build_ssh_details(user, pwd, exp, quota):
     return ("🔑 *SSH USER DETAILS*\n" + chr(0x2501)*20 + "\n"
         + chr(0x2022) + " User: `"+user+"`\n" + chr(0x2022) + " Domain: `"+dom+"`\n" + chr(0x2022) + " IP: `"+ip+"`\n" + chr(0x2022) + " Expires: `"+exp+"`\n" + chr(0x2022) + " Quota: `"+qs+"`\n" + chr(0x2022) + " Password: `"+pwd+"`\n\n"
         "*CONNECTION LINKS*\n\n1" + chr(0xFE0F) + chr(0x20E3) + " SSH WS\n`"+dom+":80@"+user+":"+pwd+"`\n\n"
-        "2" + chr(0xFE0F) + chr(0x20E3) + " SSH WSS (TLS)\n`"+dom+":443@"+user+":"+pwd+"` (path `/ssh-wss`)\n\n"
-        "3" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
-        "4" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
-        "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n"
-        "*WSS PAYLOAD*\n`GET /ssh-wss HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
+        "2" + chr(0xFE0F) + chr(0x20E3) + " SSL/TLS\n`"+dom+":444@"+user+":"+pwd+"`\n\n"
+        "3" + chr(0xFE0F) + chr(0x20E3) + " SSH UDP\n`"+dom+":1-65535@"+user+":"+pwd+"`\n\n"
+        "*WS PAYLOAD*\n`GET / HTTP/1.1[crlf]Host: "+dom+"[crlf]Connection: Upgrade[crlf]User-Agent: Mozilla/5.0[crlf]Upgrade: websocket[crlf][crlf]`\n\n"
         "*SLOWDNS (FASTDNS)*\nConfigure your SlowDNS app with:\n" + chr(0x2022) + " DNS IP: `"+ip+"` (port 53)\n" + chr(0x2022) + " NameServer: `"+ns+"`\n" + chr(0x2022) + " Public Key: `"+pub+"`\n\n"
         "*Apps:* HTTP Injector, CUSTOM, SocksIP, SSC ZIVPN")
 
