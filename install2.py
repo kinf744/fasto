@@ -1271,8 +1271,22 @@ def install_sshws():
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement sshws.{C['RST']}");return
     if "ELF" not in sh("file /usr/local/bin/sshws 2>/dev/null"):
         print(f" {C['RED']}✗ Binaire sshws invalide (pas un ELF).{C['RST']}");return
-    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && sha256sum -c /tmp/sshws.sha256 2>/dev/null && echo OK")
-    if "OK" not in r: print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
+    r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && echo OK")
+    if "OK" not in r:
+        print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
+    else:
+        # Le fichier .sha256 contient "<hash>  sshws" (nom relatif) : sha256sum -c
+        # echoue selon le cwd. On compare donc le hash en Python directement
+        # avec le binaire telecharge.
+        try:
+            expected = Path("/tmp/sshws.sha256").read_text().split()[0].strip().lower()
+            actual = hashlib.sha256(Path("/usr/local/bin/sshws").read_bytes()).hexdigest().lower()
+            if expected == actual:
+                print(f" {C['GREEN']}✔ SHA-256 sshws vérifié.{C['RST']}")
+            else:
+                print(f" {C['RED']}✗ SHA-256 sshws mismatch (attendu {expected[:12]}…, obtenu {actual[:12]}…).{C['RST']}")
+        except Exception as e:
+            print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws impossible ({e}, skip).{C['RST']}")
     svc = """[Unit]
 Description=SSHWS WS + TCP RAW Tunnel (v2)
 After=network-online.target
