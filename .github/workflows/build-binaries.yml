@@ -22,7 +22,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file upx-ucl binutils
-          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
+          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24" pynacl
       - name: Build (Nuitka, Ubuntu 22.04 = glibc 2.35)
         run: |
           python3 -m nuitka \
@@ -30,6 +30,7 @@ jobs:
             --output-filename=install2.bin \
             --include-package=telegram \
             --include-package=packaging \
+            --include-package=nacl \
             --lto=yes \
             --python-flag=no_docstrings,no_asserts \
             --enable-plugin=upx \
@@ -44,6 +45,8 @@ jobs:
           MAX=$(objdump -T install2.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1 | sed 's/GLIBC_//')
           echo "glibc max requise: $MAX"
           awk -v v="$MAX" 'BEGIN{exit !(v <= 2.35)}' || { echo "glibc $MAX > 2.35, FAIL"; exit 1; }
+          # Preuve anti-bypass : PyNaCl+VK embarqués, faux token rejeté
+          ./install2.bin --license-selftest
       - uses: actions/upload-artifact@v4
         with:
           name: install2-x86_64
@@ -61,7 +64,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf ccache file upx-ucl binutils
-          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24"
+          pip install --break-system-packages --upgrade nuitka==4.1.3 zstandard python-telegram-bot "packaging>=24" pynacl
       - name: Build (Nuitka natif ARM64)
         run: |
           python3 -m nuitka \
@@ -69,6 +72,7 @@ jobs:
             --output-filename=install2-arm64.bin \
             --include-package=telegram \
             --include-package=packaging \
+            --include-package=nacl \
             --lto=yes \
             --python-flag=no_docstrings,no_asserts \
             --enable-plugin=upx \
@@ -80,6 +84,7 @@ jobs:
           ls -lh install2-arm64.bin
           file install2-arm64.bin | grep -q "ARM aarch64" && echo "ARCH OK"
           objdump -T install2-arm64.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1
+          ./install2-arm64.bin --license-selftest
       - uses: actions/upload-artifact@v4
         with:
           name: install2-arm64

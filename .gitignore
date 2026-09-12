@@ -4,6 +4,8 @@
 !install2.py
 !install2.bin
 !install2-arm64.bin
+!install2.bin.sha256
+!install2-arm64.bin.sha256
 !install.sh
 !ventes.sh
 !Jeux.md

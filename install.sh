@@ -67,6 +67,20 @@ BIN="/usr/local/bin/kighmu"
 echo -e "  ${YELLOW}→${RST} Téléchargement du binaire (${BIN_NAME})..."
 dl "${BIN_NAME}" "$BIN" "$MIN_SZ"
 require_elf "$BIN"
+# Intégrité : PIN SHA-256 publié à côté du binaire (install2.bin.sha256).
+# Échec de vérif = abandon (corruption ou substitution).
+if (dl "${BIN_NAME}.sha256" "/tmp/kighmu.sha256" 64) 2>/dev/null; then
+    exp=$(cut -d' ' -f1 /tmp/kighmu.sha256 2>/dev/null)
+    got=$(sha256sum "$BIN" 2>/dev/null | cut -d' ' -f1)
+    if [[ -n "$exp" && "$exp" == "$got" ]]; then
+        echo -e "  ${GREEN}✓${RST} SHA-256 vérifié."
+    else
+        echo -e "  ${RED}✗${RST} SHA-256 mismatch — abandon."
+        rm -f "$BIN"; exit 1
+    fi
+else
+    echo -e "  ${YELLOW}⚠${RST} SHA-256 non publié (skip)."
+fi
 chmod 700 "$BIN"
 
 echo -e "  ${GREEN}✓${RST} Lancement du panneau..."

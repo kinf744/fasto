@@ -35,6 +35,31 @@ def sh(cmd, timeout=300):
     try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
     except: return ""
 
+def _run(argv, timeout=120):
+    """Exécute sans shell (pas d'injection) : retourne stdout strip ou ''."""
+    try:
+        r = subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+def _run_ok(argv, timeout=120):
+    """Exécute sans shell : True si exit 0."""
+    try:
+        return subprocess.run([str(a) for a in argv], capture_output=True, timeout=timeout).returncode == 0
+    except Exception:
+        return False
+
+def _openssl_selfsigned(key_path, crt_path, domain):
+    """Cert auto-signé sans shell (CN validé, pas d'injection via le domaine)."""
+    cn = domain if _valid_domain(domain) else "localhost"
+    ok = _run_ok(["openssl", "req", "-x509", "-newkey", "rsa:2048",
+                  "-keyout", key_path, "-out", crt_path, "-nodes",
+                  "-days", "3650", "-subj", f"/CN={cn}"])
+    if ok:
+        sh(f"chmod 600 {key_path} 2>/dev/null; chmod 644 {crt_path} 2>/dev/null || true")
+    return ok
+
 def strip_ansi(s): return re.sub(r'\x1b\[[0-9;]*m', '', s)
 def vislen(s): return len(strip_ansi(s))
 
@@ -336,12 +361,17 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
                 return 2
     exp = exp_in_days(days); uuid = ""; proto = proto.lower()
     if proto == "ssh":
-        if sh(f"id {user} 2>/dev/null"): return 2
-        sh(f"userdel -r {user} 2>/dev/null || true")
-        sh(f"useradd -m -s /bin/bash -e {exp} {user} 2>/dev/null")
-        if not sh(f"id {user} 2>/dev/null"): return 3
+        if _run(["id", user]): return 2
+        _run(["userdel", "-r", user])
+        if not _run_ok(["useradd", "-m", "-s", "/bin/bash", "-e", exp, user]):
+            if not _run(["id", user]): return 3
+        if not _run(["id", user]): return 3
         passwd = passwd or gen_pass()
-        sh(f"echo '{user}:{passwd}' | chpasswd 2>/dev/null")
+        try:
+            subprocess.run(["chpasswd"], input=f"{user}:{passwd}",
+                           capture_output=True, text=True, timeout=30)
+        except Exception:
+            return 3
         write_meta(user, "ssh", exp, limit, passwd, "", quota)
         _install_ssh_banner_shell()
         sh(f"usermod -s {SSH_SHELL} {user} 2>/dev/null || true")
@@ -1168,10 +1198,13 @@ def _ensure_domain():
     df = Path("/etc/kighmu/domain.txt")
     if not df.parent.exists(): df.parent.mkdir(parents=True)
     cur = df.read_text().strip() if df.exists() else ""
+    if cur and not _valid_domain(cur):
+        cur = ""
     if not cur:
         print(f"\n {C['YELLOW']}⚠ No domain configured yet.{C['RST']}")
         dom = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Enter domain (e.g. vpn.example.com): {C['RST']}").strip()
-        while not dom: dom = input(f" {C['RED']}✗{C['RST']} Domain required: ").strip()
+        while not dom or not _valid_domain(dom):
+            dom = input(f" {C['RED']}✗{C['RST']} Valid domain required: ").strip()
         df.write_text(dom + "\n")
         print(f" {C['GREEN']}✔ Domain saved: {dom}{C['RST']}\n")
         return dom
@@ -1181,11 +1214,14 @@ def _force_domain():
     df = Path("/etc/kighmu/domain.txt")
     if not df.parent.exists(): df.parent.mkdir(parents=True)
     cur = df.read_text().strip() if df.exists() else ""
+    if cur and not _valid_domain(cur):
+        cur = ""
     if cur:
         return cur
     print(f"\n {C['YELLOW']}╔═══ CONFIGURATION DOMAINE POUR XRAY ═══╗{C['RST']}")
     dom = input(f" {C['YELLOW']}►{C['RST']} {C['WHITE']}Domain (e.g. vpn.example.com){C['RST']} [{C['GREEN']}{cur}{C['RST']}]: ").strip() or cur
-    while not dom: dom = input(f" {C['RED']}✗{C['RST']} Domain required: ").strip()
+    while not dom or not _valid_domain(dom):
+        dom = input(f" {C['RED']}✗{C['RST']} Valid domain required: ").strip()
     df.write_text(dom + "\n")
     print(f" {C['GREEN']}✔ Domain: {dom}{C['RST']}\n")
     return dom
@@ -2183,7 +2219,7 @@ def install_xray():
     ok=_acme_cert(DOMAIN, "/etc/xray")
     if not ok:
         print(f" {C['YELLOW']}⚠ ACME failed for {DOMAIN}, generating self-signed cert...{C['RST']}")
-        sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/xray/privkey.pem -out /etc/xray/fullchain.pem -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+        _openssl_selfsigned("/etc/xray/privkey.pem", "/etc/xray/fullchain.pem", DOMAIN)
     if not Path("/etc/xray/xray.pem").exists() or Path("/etc/xray/xray.pem").stat().st_mtime < Path("/etc/xray/fullchain.pem").stat().st_mtime:
         crt=Path("/etc/xray/fullchain.pem")
         key=Path("/etc/xray/privkey.pem")
@@ -2404,7 +2440,7 @@ def install_hysteria():
     Path("/etc/hysteria").mkdir(parents=True, exist_ok=True)
     DOMAIN = _ensure_domain() or "hysteria.local"
     if not Path("/etc/hysteria/hysteria.crt").exists():
-        sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/hysteria/hysteria.key -out /etc/hysteria/hysteria.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+        _openssl_selfsigned("/etc/hysteria/hysteria.key", "/etc/hysteria/hysteria.crt", DOMAIN)
     sh("chmod 600 /etc/hysteria/hysteria.key 2>/dev/null; chmod 644 /etc/hysteria/hysteria.crt 2>/dev/null || true")
     hy_cfg = '{\"listen\":\":20000\",\"cert\":\"/etc/hysteria/hysteria.crt\",\"key\":\"/etc/hysteria/hysteria.key\",\"obfs\":\"hysteria\",\"up_mbps\":150,\"down_mbps\":150,\"recv_window_conn\":33554432,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,5667,20000],\"auth\":{\"mode\":\"passwords\",\"config\":[\"zi\"]}}'
     Path("/etc/hysteria/config.json").write_text(hy_cfg)
@@ -2455,7 +2491,7 @@ def install_zivpn():
     if "OK" not in r: print(f" {C['RED']}✗ Échec téléchargement ZIVPN.{C['RST']}");return
     Path("/etc/zivpn").mkdir(parents=True, exist_ok=True)
     DOMAIN = _ensure_domain() or "zivpn.local"
-    sh(f"openssl req -x509 -newkey rsa:2048 -keyout /etc/zivpn/zivpn.key -out /etc/zivpn/zivpn.crt -nodes -days 3650 -subj '/CN={DOMAIN}' 2>/dev/null")
+    _openssl_selfsigned("/etc/zivpn/zivpn.key", "/etc/zivpn/zivpn.crt", DOMAIN)
     sh("chmod 600 /etc/zivpn/zivpn.key 2>/dev/null; chmod 644 /etc/zivpn/zivpn.crt 2>/dev/null || true")
     zi_cfg = '{\"listen\":\":5667\",\"cert\":\"/etc/zivpn/zivpn.crt\",\"key\":\"/etc/zivpn/zivpn.key\",\"obfs\":\"zivpn\",\"recv_window_conn\":15728640,\"recv_window_client\":67108864,\"disable_mtu_discovery\":false,\"max_conn_client\":4096,\"exclude_port\":[53,5300,4466,36712,20000],\"quotaStateFile\":\"/etc/zivpn/quota-state.json\",\"statsAPI\":{\"listen\":\"127.0.0.1:10088\"},\"auth\":{\"mode\":\"passwords\",\"config\":[]}}'
     Path("/etc/zivpn/config.json").write_text(zi_cfg)
@@ -2702,12 +2738,12 @@ def _auto_uninstall_all():
         sh(f"rm -f /usr/local/bin/{b} 2>/dev/null || true")
     sh("rm -f /usr/local/bin/xray-* /usr/local/bin/dropbear* /usr/local/sbin/dropbear 2>/dev/null || true")
     for u in panel_system_accounts():
-        sh(f"userdel -f {u} 2>/dev/null || true")
+        _run(["userdel", "-f", u])
         sh(f"rm -rf /home/{u} 2>/dev/null || true")
     if USERDIR.exists():
         for uf in USERDIR.iterdir():
             if uf.is_file() and _meta_get(uf.name, "proto") == "ssh":
-                sh(f"userdel -f {uf.name} 2>/dev/null || true")
+                _run(["userdel", "-f", uf.name])
     for d in ["/etc/kighmu","/etc/xray","/etc/v2ray","/etc/slowdns","/etc/hysteria","/etc/zivpn","/etc/udp-custom","/etc/dnsdist","/etc/nftables","/etc/haproxy","/etc/sshws","/etc/ssl_tls","/etc/dropbear","/etc/logrotate.d/slowdns"]:
         sh(f"rm -rf {d} 2>/dev/null || true")
     for d in ["/var/log/xray","/var/log/slowdns","/var/log/hysteria","/var/log/v2ray","/var/log/sshws","/var/log/ssl_tls","/var/log/zivpn","/var/log/kighmu"]:
@@ -2787,7 +2823,7 @@ def delete_user(user):
     f.unlink(missing_ok=True)
     
     if proto == "ssh" or (not had_file and user in panel_system_accounts()):
-        sh(f"userdel -f {user} 2>/dev/null || true")
+        _run(["userdel", "-f", user])
         sh(f"rm -rf /home/{user} 2>/dev/null || true")
         sh(f"sed -i '/^{user}|/d' /etc/kighmu/users.list 2>/dev/null || true")
     elif proto in ("vmess", "vless", "trojan", "xray"):
@@ -2818,7 +2854,7 @@ def renew_user(user, days):
         if v: keep[k] = v
     write_meta(user, proto, exp, _meta_get(user,"limit"), _meta_get(user,"pass"), _meta_get(user,"uuid"), _meta_get(user,"quota"))
     for k, v in keep.items(): _meta_set(user, k, v)
-    if proto == "ssh": sh(f"chage -E {exp} {user} 2>/dev/null")
+    if proto == "ssh": _run(["chage", "-E", exp, user])
     elif proto == "v2raydns":
         if _meta_get(user,"locked")=="1" and (_meta_get(user,"exp_lock")=="1" or _meta_get(user,"quota_hit")=="1"):
             _meta_set(user,"exp_lock","0"); _meta_set(user,"quota_hit","0"); _meta_set(user,"locked","0")
@@ -2865,7 +2901,7 @@ def set_user_quota(user, quota):
 def lock_user(user):
     if not (USERDIR / user).exists(): return 2
     proto = _meta_get(user, "proto")
-    if proto == "ssh": sh(f"passwd -l {user} &>/dev/null")
+    if proto == "ssh": _run(["passwd", "-l", user])
     _meta_set(user, "locked", "1")
     if proto == "v2raydns": v2raydns_apply()
     elif proto == "zivpn":
@@ -2876,7 +2912,7 @@ def lock_user(user):
 def unlock_user(user):
     if not (USERDIR / user).exists(): return 2
     proto = _meta_get(user, "proto")
-    if proto == "ssh": sh(f"passwd -u {user} &>/dev/null")
+    if proto == "ssh": _run(["passwd", "-u", user])
     _meta_set(user, "locked", "0")
     if proto == "v2raydns": v2raydns_apply()
     elif proto == "zivpn":
@@ -2888,7 +2924,12 @@ def unlock_user(user):
 def change_password(user, newpass=""):
     if not (USERDIR / user).exists(): return ""
     proto = _meta_get(user, "proto"); newpass = newpass or gen_pass()
-    if proto == "ssh": sh(f"echo '{user}:{newpass}' | chpasswd 2>/dev/null")
+    if proto == "ssh":
+        try:
+            subprocess.run(["chpasswd"], input=f"{user}:{newpass}",
+                           capture_output=True, text=True, timeout=30)
+        except Exception:
+            return ""
     elif proto == "trojan":
         _meta_set(user, "pass", newpass)
         xray_build_config()
@@ -2934,11 +2975,11 @@ def quota_enforce():
             if expired:
                 if not is_locked(user):
                     _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
-                    sh(f"passwd -l {user} 2>/dev/null || true"); blocked += 1
+                    _run(["passwd", "-l", user]); blocked += 1
             elif q > 0 and get_ssh_traffic(user) >= q * 1024**3:
                 if not is_locked(user):
                     _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
-                    sh(f"passwd -l {user} 2>/dev/null || true")
+                    _run(["passwd", "-l", user])
                     _ssh_tracker_kill(user, _ssh_tracker_state()); blocked += 1
             elif is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired and (q <= 0 or get_ssh_traffic(user) < q * 1024**3):
                 _meta_set(user, "quota_hit", "0"); unlock_user(user); _ssh_quota_apply(); restored += 1
@@ -3000,7 +3041,7 @@ def _ssh_expiry_enforce():
         e = _meta_get(user, "exp")
         if not e or e == "permanent" or e >= today: continue
         if _meta_get(user, "locked") == "1": continue
-        sh(f"passwd -l {user} 2>/dev/null || true")
+        _run(["passwd", "-l", user])
         _meta_set(user, "locked", "1")
         _meta_set(user, "exp_lock", "1")
         n += 1
@@ -3009,7 +3050,7 @@ def _ssh_expiry_enforce():
 def _ssh_expiry_unlock(user):
     if not user or not (USERDIR / user).is_file(): return
     if _meta_get(user, "exp_lock") != "1": return
-    sh(f"passwd -u {user} 2>/dev/null || true")
+    _run(["passwd", "-u", user])
     _meta_set(user, "locked", "0")
     _meta_set(user, "exp_lock", "0")
 
@@ -3800,14 +3841,17 @@ def _machine_fingerprint():
     raw="|".join(parts) if parts else "unknown"
     return hashlib.sha256(raw.encode()).hexdigest()
 
-"""kighmu_license_v3.py - Remplace install2.py:3447 LICENSE_SECRET (symétrique) par Ed25519 asymétrique
-À importer dans install2.py v3. Ne contient QUE la clé publique.
+"""Licence V3 Ed25519 — vérification seule, clé PUBLIQUE intégrée.
+La clé PRIVÉE correspondante est détenue HORS LIGNE (serveur ventes,
+/etc/ventes/ed25519.sk, jamais dans ce fichier ni dans le binaire).
+AUCUN secret symétrique ici : un token ne peut être forgé sans la clé privée.
+Format token : "key|expiry|sig_hex" (sig = Ed25519(key|expiry)).
 """
 import hashlib, hmac, pathlib
 from datetime import date
 
-# === COLLE ICI LA SORTIE DE 01_gen_keys.py ===
-VK_PUB_HEX = "06d24678802bb97565406d7301db48a5968118bc18c768fcfd447bfca48b430f"  # EXEMPLE - REMPLACE
+# Clé publique Ed25519 (32 bytes hex) — sûre à distribuer.
+VK_PUB_HEX = "7bc14de8cc6b4361d84fe39fb352f543dc78b8fa8d9c81b04581effdc8804a72"
 # Ne JAMAIS coller la clé privée ici
 
 try:
@@ -3855,35 +3899,57 @@ def _verify_token_sig_v3(key: str, expiry: str, sig_hex: str) -> bool:
     except Exception:
         return False
 
-# Compat: garde l'ancien HMAC pour migration douce 30j
-_LICENSE_SECRET_OLD = hashlib.sha256(b"KighmuPanel2026!@#LicenseBombSecureKey_X7k9m2").hexdigest()
-def _unpack_legacy(raw: str):
-    parts = raw.strip().split("|")
-    if len(parts) < 3:
+# AUCUNE compat HMAC legacy : l'ancien secret symétrique a été expurgé
+# (forgeable via `strings` sur le binaire). Les clients déjà activés restent
+# valides via _legacy_activated_fallback (clé ACTIVE en db locale), mais
+# AUCUNE nouvelle activation sans signature Ed25519.
+def _legacy_activated_fallback(raw: str):
+    """Filet migration : token/non-token dont la clé est déjà ACTIVE en db
+    locale (activation antérieure légitime). Retourne (key, expiry) ou (None,None).
+    N'ACCEPTE jamais une clé inconnue : c'est ce qui fermait le trou
+    d'auto-enregistrement."""
+    try:
+        s = (raw or "").strip()
+        if not s:
+            return None, None
+        cand = s.split("|")[0].strip() if "|" in s else s
+        if not re.match(r'^[a-zA-Z0-9._-]{1,64}$', cand):
+            return None, None
+        conn, c = _ensure_license_db()
+        try:
+            r = c.execute(
+                "SELECT expires_at FROM licenses WHERE license_key=? AND status='ACTIVE'"
+                " AND (expires_at>=date('now') OR expires_at='9999-12-31')",
+                (cand,)).fetchone()
+        finally:
+            conn.close()
+        if not r:
+            return None, None
+        exp = r[0]
+        if "|" in s:
+            parts = s.split("|")
+            if len(parts) >= 2 and re.match(r'^\d{4}-\d{2}-\d{2}$', parts[1] or ""):
+                exp = parts[1]
+        try:
+            log.warning("licence: activation legacy acceptée (db locale) pour %r — régénérez un token Ed25519", cand[:8])
+        except Exception:
+            pass
+        return cand, exp
+    except Exception:
         return None, None
-    sig = parts[-1]
-    msg = "|".join(parts[:-1])
-    exp = hmac.new(_LICENSE_SECRET_OLD.encode(), msg.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, exp):
-        return None, None
-    return parts[0], parts[1]
 
 
 def _pack_license_token(key, expiry):
-    # V3: tente Ed25519 d'abord (côté ventes), fallback legacy
-    try:
-        return _pack_license_token_v3(key, expiry)
-    except Exception:
-        msg = f"{key}|{expiry}"
-        sig = hmac.new(_LICENSE_SECRET_OLD.encode(), msg.encode(), hashlib.sha256).hexdigest()
-        return f"{msg}|{sig}"
+    # Émission côté VENTES uniquement (requiert /etc/ventes/ed25519.sk).
+    # Le client ne re-emballe jamais : il stocke le token brut reçu.
+    return _pack_license_token_v3(key, expiry)
 
 def _unpack_license_token(raw):
-    # V3: Ed25519 d'abord, sinon legacy 30j
-    k,e = _unpack_license_token_v3(raw)
+    # Vérification stricte Ed25519, puis filet migration (db locale).
+    k, e = _unpack_license_token_v3(raw)
     if k is not None and e is not None:
-        return k,e
-    return _unpack_legacy(raw)
+        return k, e
+    return _legacy_activated_fallback(raw)
 
 def _sign_key(key):
     fp=_machine_fingerprint()
@@ -3910,33 +3976,32 @@ def _rebind_key(key):
     c.execute("UPDATE licenses SET hw_binding=?,last_checkin=datetime('now') WHERE license_key=?",(sig,key))
     conn.commit();conn.close()
 
-def _register_key_in_db(key,client_name="",days=365):
-    conn,c=_ensure_license_db()
-    r=c.execute("SELECT client_name,expires_at,hw_binding FROM licenses WHERE license_key=?",(key,)).fetchone()
-    if r:
-        name,exp,binding=r
-        if binding and not _verify_signature(key,binding):
-            _rebind_key(key)
-        conn.close();return name,exp
-    import uuid as _uuid
-    uid=str(_uuid.uuid4());exp=(date.today()+timedelta(days=days)).isoformat();name=client_name or "Verified"
-    sig=_sign_key(key)
+def _write_license_token_raw(raw):
+    """Stocke le token EXACT reçu (jamais re-emballé : le client ne signe pas)."""
+    kf = Path("/etc/kighmu/.license_key")
+    kf.parent.mkdir(parents=True, exist_ok=True)
+    kf.write_text(raw.strip() + "\n")
     try:
-        c.execute("INSERT INTO licenses (uuid,license_key,client_name,status,created_at,expires_at,activated_at,last_checkin,hw_binding) VALUES (?,?,?,'ACTIVE',datetime('now'),?,datetime('now'),datetime('now'),?)",(uid,key,name,exp,sig))
-        conn.commit()
-    except: conn.rollback()
-    conn.close();_write_license_token(key,exp);return name,exp
+        os.chmod(kf, 0o600)
+    except Exception:
+        pass
 
-def _write_license_token(key,expiry):
-    kf=Path("/etc/kighmu/.license_key")
-    kf.parent.mkdir(parents=True,exist_ok=True)
-    kf.write_text(_pack_license_token(key,expiry))
+
+def _write_license_token(key, expiry):
+    # Émission réservée au serveur ventes (possède /etc/ventes/ed25519.sk).
+    # Lève une erreur explicite sans clé privée au lieu de retomber sur HMAC.
+    kf = Path("/etc/kighmu/.license_key")
+    kf.parent.mkdir(parents=True, exist_ok=True)
+    kf.write_text(_pack_license_token(key, expiry) + "\n")
+    try:
+        os.chmod(kf, 0o600)
+    except Exception:
+        pass
 
 def _read_license_token():
     kf=Path("/etc/kighmu/.license_key")
     if not kf.exists(): return None,None
     raw=kf.read_text().strip()
-    if raw=="KIGHMU_MASTER_2026": return raw,"9999-12-31"
     return _unpack_license_token(raw)
 
 def _install_license_bomb():
@@ -3987,7 +4052,6 @@ def _verify_license():
     if kf.exists():
         token_key,token_exp=_read_license_token()
         if token_key and token_exp:
-            if token_key=="KIGHMU_MASTER_2026": nf.write_text("ADMIN");return
             if token_exp<date.today().isoformat():
                 _kill_install()
             try:
@@ -4017,7 +4081,6 @@ def _verify_license():
         print(f"  {C['YELLOW']}Veuillez saisir votre clé de licence :{C['RST']}")
         print(f"  {C['GRAY']}Exemple :{C['RST']} {C['GREEN']}a137726f21f7360a825fd376a3dfe9bd{C['RST']}\n")
         key=input(f"  {C['YELLOW']}►{C['RST']} {C['WHITE']}Clé de licence :{C['RST']} ").strip()
-        if key=="KIGHMU_MASTER_2026": print(f"  {C['GREEN']}✓ Mode maître.{C['RST']}");_write_license_token("KIGHMU_MASTER_2026","9999-12-31");nf.write_text("ADMIN");return
         if "|" in key:
             pkey,pexp=_unpack_license_token(key)
             if pkey and pexp:
@@ -4036,7 +4099,8 @@ def _verify_license():
                         conn.commit()
                     conn.close()
                 except: pass
-                Path("/etc/kighmu/.license_key").write_text(key);nf.write_text(name)
+                _write_license_token_raw(key)
+                nf.write_text(name)
                 print(f"\n  {C['GREEN']}✓ Licence activée (token) !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{pexp}{C['RST']}\n");return
             print(f"\n  {C['RED']}✗ Token invalide ou falsifié.{C['RST']}\n")
             if _<2: input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}")
@@ -4048,15 +4112,17 @@ def _verify_license():
                 name,exp,binding=r
                 if binding and not _verify_signature(key,binding):
                     _rebind_key(key)
-                print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();_write_license_token(key,exp);nf.write_text(name);return
+                print(f"\n  {C['GREEN']}✓ Licence valide !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(key,));conn.commit();conn.close();_write_license_token_raw(f"{key}|{exp}");nf.write_text(name);return
             exp_r=c.execute("SELECT expires_at FROM licenses WHERE license_key=?",(key,)).fetchone()
             if exp_r and exp_r[0] and exp_r[0]<date.today().isoformat():
                 conn.close();_kill_install()
             conn.close()
-            name,exp=_register_key_in_db(key)
-            if name: print(f"\n  {C['GREEN']}✓ Licence enregistrée !{C['RST']} {C['WHITE']}Client:{C['RST']} {C['GREEN']}{name}{C['RST']} {C['GRAY']}expire:{C['RST']} {C['YELLOW']}{exp}{C['RST']}\n");_write_license_token(key,exp);nf.write_text(name);return
+            # REFUSÉ : plus d'auto-enregistrement. Une clé inconnue (jamais
+            # activée avec un token signé Ed25519) ne crée plus de licence.
+            # Demandez un token "key|expiry|sig" au serveur ventes.
+        except SystemExit: raise
         except: pass
-        print(f"\n  {C['RED']}✗ Clé invalide. ({2-_} tentatives restantes){C['RST']}\n")
+        print(f"\n  {C['RED']}✗ Clé invalide ou non émise par le serveur ventes. ({2-_} tentatives restantes){C['RST']}\n")
         if _<2: input(f"  {C['GRAY']}Entrée pour réessayer...{C['RST']}")
     print(f"\n  {C['RED']}LICENCE INVALIDE — INSTALLATION BLOQUÉE{C['RST']}\n");sys.exit(1)
 
@@ -4068,7 +4134,7 @@ def _license_watchdog():
     kf=Path("/etc/kighmu/.license_key")
     if not kf.exists(): return
     token_key,token_exp=_read_license_token()
-    if not token_key or token_key=="KIGHMU_MASTER_2026": return
+    if not token_key: return
     today=date.today().isoformat()
     if token_exp and token_exp<today: _kill_install()
     try:
@@ -4083,8 +4149,82 @@ def _license_watchdog():
         Path("/etc/kighmu/.client_name").write_text(name)
         conn,c=_ensure_license_db()
         c.execute("UPDATE licenses SET last_checkin=datetime('now') WHERE license_key=?",(token_key,));conn.commit();conn.close()
+        _license_checkin(token_key)
     except SystemExit: raise
     except Exception: pass
+
+LICENSE_SERVER_FILE = Path("/etc/kighmu/license_server")
+LICENSE_ONLINE_FILE = Path("/etc/kighmu/.license_last_online")
+LICENSE_GRACE_HOURS = 72
+
+def _license_checkin(token_key):
+    """Vérification ONLINE auprès du serveur ventes (opt-in).
+    Activation : écrire l'URL HTTPS dans /etc/kighmu/license_server, ex :
+      https://ventes.example.com/api/license/check
+    Protocole (JSON POST, 10s timeout) :
+      -> {"license_key": "...", "hw": "<fingerprint>", "version": "V3.9.9", "ts": 123}
+      <- {"status": "ACTIVE|SUSPENDED|BANNED|EXPIRED|DELETED|UNKNOWN", "expires_at": "YYYY-MM-DD"}
+    Statut révoqué explicite -> _kill_install. Réseau KO -> toléré pendant
+    LICENSE_GRACE_HOURS (horloge démarrée au 1er checkin). Sans fichier
+    license_server : mode local seul (vérif Ed25519 + db locale).
+    Retourne (ok: bool, detail: str)."""
+    try:
+        server = LICENSE_SERVER_FILE.read_text().strip() if LICENSE_SERVER_FILE.exists() else ""
+    except Exception:
+        server = ""
+    if not server:
+        return True, "local-only"
+    if not (server.startswith("https://") and _valid_domain(server.split("/")[2].split(":")[0])):
+        return True, "serveur invalide (https + domaine requis), ignoré"
+    import urllib.request
+    payload = json.dumps({
+        "license_key": token_key,
+        "hw": _machine_fingerprint(),
+        "version": VERSION,
+        "ts": int(time.time()),
+    }).encode()
+    req = urllib.request.Request(server, data=payload,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode() or "{}")
+    except Exception as e:
+        # Hors-ligne : grâce limitée, horloge persistée.
+        try:
+            last = float(LICENSE_ONLINE_FILE.read_text().strip())
+        except Exception:
+            last = time.time()
+            try:
+                LICENSE_ONLINE_FILE.write_text(str(last))
+                sh("chmod 600 /etc/kighmu/.license_last_online 2>/dev/null || true")
+            except Exception:
+                pass
+        age_h = (time.time() - last) / 3600
+        if age_h <= LICENSE_GRACE_HOURS:
+            return True, f"offline-grace {age_h:.1f}h/{LICENSE_GRACE_HOURS}h ({e})"
+        _kill_install()
+        return False, "grace dépassée"
+    status = str(data.get("status", "")).upper()
+    if status == "ACTIVE":
+        try:
+            LICENSE_ONLINE_FILE.write_text(str(time.time()))
+            sh("chmod 600 /etc/kighmu/.license_last_online 2>/dev/null || true")
+        except Exception:
+            pass
+        exp = str(data.get("expires_at") or "")
+        if exp and re.match(r'^\d{4}-\d{2}-\d{2}$', exp):
+            try:
+                conn, c = _ensure_license_db()
+                c.execute("UPDATE licenses SET expires_at=?,last_checkin=datetime('now') WHERE license_key=?",
+                          (exp, token_key))
+                conn.commit(); conn.close()
+            except Exception:
+                pass
+        return True, "online-ACTIVE"
+    if status in ("SUSPENDED", "BANNED", "EXPIRED", "DELETED", "UNKNOWN", "REVOKED"):
+        _kill_install()
+        return False, f"serveur: {status}"
+    return True, f"statut inattendu ({status}), toléré"
 
 # --- Telegram Bot ---
 BOT_AVAILABLE = False
@@ -5597,7 +5737,7 @@ Expired resellers auto-deactivated daily by cron.
                 except:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
             else:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
             _meta_set(user,"exp",ne)
-            if _meta_get(user,"proto")=="ssh":sh(f"chage -E {ne} {user} 2>/dev/null")
+            if _meta_get(user,"proto")=="ssh":_run(["chage", "-E", ne, user])
             await reply_cls(update,ctx,f"✅ `{user}` → `{ne}`",reply_markup=back_kb("users"),parse_mode="Markdown");ctx.user_data.clear()
         elif step=="renew_bulk_days":
             parts=text.rsplit(None,1)
@@ -5627,7 +5767,7 @@ Expired resellers auto-deactivated daily by cron.
                     except:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
                 else:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
                 _meta_set(u,"exp",ne)
-                if _meta_get(u,"proto")=="ssh":sh(f"chage -E {ne} {u} 2>/dev/null")
+                if _meta_get(u,"proto")=="ssh":_run(["chage", "-E", ne, u])
                 renewed+=1
             msg=f"✅ Renewed `{renewed}` user(s) +{days} days."
             if failed:
@@ -6076,7 +6216,7 @@ if BOT_AVAILABLE:
                 except:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
             else:ne=sh(f"date -d '+{days}days' +%Y-%m-%d")
             _meta_set(user,"exp",ne)
-            if _meta_get(user,"proto")=="ssh":sh(f"chage -E {ne} {user} 2>/dev/null")
+            if _meta_get(user,"proto")=="ssh":_run(["chage", "-E", ne, user])
             await update.message.reply_text(f"✅ `{user}` → `{ne}`",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]),parse_mode="Markdown")
             ctx.user_data.clear()
         elif step=="r_setquota_user":
@@ -6225,6 +6365,38 @@ if __name__ == "__main__":
             install_sshws()
             log.info("sshws-upgrade: done")
             sys.exit(0)
+        elif arg == "--license-selftest":
+            # Preuve CI que PyNaCl+VK sont embarqués dans le binaire :
+            # roundtrip éphémère + parse VK + rejet forgé.
+            ok = True
+            try:
+                from nacl.signing import SigningKey
+                sk = SigningKey.generate()
+                assert sk.verify_key.verify(b"selftest", sk.sign(b"selftest").signature) == b"selftest"
+                print("selftest: nacl-roundtrip OK")
+            except Exception as e:
+                print(f"selftest: nacl FAIL ({e})"); ok = False
+            try:
+                from nacl.signing import VerifyKey
+                VerifyKey(bytes.fromhex(VK_PUB_HEX))
+                print("selftest: VK parse OK")
+            except Exception as e:
+                print(f"selftest: VK FAIL ({e})"); ok = False
+            k, e = _unpack_license_token_v3(" forged|2099-01-01|" + "00" * 64)
+            if (k, e) != (None, None):
+                print("selftest: forged-accept FAIL"); ok = False
+            else:
+                print("selftest: forged-reject OK")
+            print("selftest: " + ("PASS" if ok else "FAIL"))
+            sys.exit(0 if ok else 2)
+        elif arg == "--license-checkin":
+            kf = Path("/etc/kighmu/.license_key")
+            key, _ = _read_license_token() if kf.exists() else (None, None)
+            if not key:
+                print("license-checkin: no license"); sys.exit(2)
+            ok, detail = _license_checkin(key)
+            print(f"license-checkin: {'OK' if ok else 'FAIL'} ({detail})")
+            sys.exit(0 if ok else 2)
         elif arg == "--ssh-quota-sync":
             _install_ssh_banner_shell()
             _gen_user_banners()
