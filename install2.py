@@ -360,10 +360,18 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         v2raydns_apply()
     elif proto == "zivpn":
         passwd = passwd or gen_pass()
+        # Le binaire compte par password : deux logins avec le même password
+        # partagent le même bucket used/quota (ex: cas opnom/ip9090). Refusé.
+        dup = _zivpn_password_in_use(passwd)
+        if dup:
+            return 4
         write_meta(user, "zivpn", exp, "", passwd, "", quota)
         zivpn_apply()
     elif proto == "hysteria":
         passwd = passwd or gen_pass()
+        dup = _zivpn_password_in_use(passwd)
+        if dup:
+            return 4
         write_meta(user, "hysteria", exp, "", passwd, "", quota)
         hysteria_apply()
     elif proto in ("ss","shadowsocks","shadow"):
@@ -416,9 +424,40 @@ def _reload_passwords(config_path, service, proto):
         print(f" {C['RED']}✗ {service}: {e}{C['RST']}")
         tmp.unlink(missing_ok=True)
 
+def _zivpn_parse_quota(q_str):
+    """Parse quota GB (accepte '100', '100GB', ' 10.5 '). Retourne float ou 0."""
+    if not q_str:
+        return 0.0
+    m = re.match(r"^\s*(\d+(?:\.\d+)?)", str(q_str).strip())
+    if not m:
+        return 0.0
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return 0.0
+
+
+def _zivpn_password_in_use(passwd, exclude_user=""):
+    """Retourne le login zivpn/hysteria utilisant déjà ce password (ou '')."""
+    if not passwd or not USERDIR.exists():
+        return ""
+    for f in USERDIR.iterdir():
+        if not f.is_file() or f.name == exclude_user:
+            continue
+        if _meta_get(f.name, "proto") not in ("zivpn", "hysteria"):
+            continue
+        if _meta_get(f.name, "pass") == passwd:
+            return f.name
+    return ""
+
+
 def _zivpn_sync_config():
-    """Régénère auth.config (passwords actifs) et la map quota (user -> "XGB")
-    dans /etc/zivpn/config.json, en préservant quotaStateFile et statsAPI."""
+    """Régénère auth.config (passwords actifs) et la map quota (password -> "XGB")
+    dans /etc/zivpn/config.json, en préservant quotaStateFile et statsAPI.
+    CRITIQUE: le binaire zivpn compte le trafic par authID (= password, voir
+    QuotaTrafficLogger + logs 'id'). La map quota DOIT donc être cléée par
+    password, pas par login, sinon l'enforcement natif ne matche jamais et
+    les users dépassent leur quota sans être coupés."""
     cfg = Path("/etc/zivpn/config.json")
     if not cfg.exists(): return
     pws = _active_passwords("zivpn")
@@ -432,6 +471,7 @@ def _zivpn_sync_config():
         quota = {}
         if USERDIR.exists():
             today = date.today().isoformat()
+            seen_pw = {}
             for f in USERDIR.iterdir():
                 if not f.is_file(): continue
                 if _meta_get(f.name, "proto") != "zivpn": continue
@@ -440,17 +480,24 @@ def _zivpn_sync_config():
                 if is_locked(f.name): continue
                 q_str = (_meta_get(f.name, "quota") or "").strip()
                 # extrait nombre même si "10GB" ou " 10 "
-                m = re.match(r"^\s*(\d+(?:\.\d+)?)", q_str) if q_str else None
-                if not m:
-                    if q_str:
+                q = _zivpn_parse_quota(q_str)
+                if q <= 0:
+                    if q_str and q_str.strip() not in ("", "0", "0.0"):
                         print(f" {C['YELLOW']}⚠ zivpn: quota invalide pour {f.name!r} ({q_str!r}) -> ignore{C['RST']}")
                     continue
-                try:
-                    q = float(m.group(1))
-                except ValueError:
+                pw = (_meta_get(f.name, "pass") or "").strip()
+                if not pw:
+                    print(f" {C['YELLOW']}⚠ zivpn: password vide pour {f.name!r} -> quota ignore{C['RST']}")
                     continue
-                if q > 0:
-                    quota[f.name] = f"{int(q)}GB"
+                if pw in seen_pw:
+                    print(f" {C['YELLOW']}⚠ zivpn: password partagé {pw!r} ({seen_pw[pw]!r} + {f.name!r}) -> mutualisé, quota max retenu{C['RST']}")
+                    # Retient le max pour ne pas sous-limiter le bucket partagé
+                    prev = float(quota[pw][:-2]) if quota.get(pw, "").endswith("GB") else 0
+                    if q > prev:
+                        quota[pw] = f"{int(q)}GB"
+                    continue
+                seen_pw[pw] = f.name
+                quota[pw] = f"{int(q)}GB"
         data["quota"] = quota
         if not data.get("quotaStateFile"): data["quotaStateFile"] = "/etc/zivpn/quota-state.json"
         if not data.get("statsAPI"): data["statsAPI"] = {"listen": "127.0.0.1:10088"}
@@ -481,7 +528,8 @@ ZIVPN_STATE = Path("/etc/zivpn/quota-state.json")
 _ZIVPN_GUARD_MARK = STATEDIR / "zivpn_guard_last"
 
 def _zivpn_expected_quota():
-    """Map user -> 'XGB' attendue, d'apres les users zivpn actifs."""
+    """Map password -> 'XGB' attendue, d'apres les users zivpn actifs.
+    Doit rester strictement identique à _zivpn_sync_config (clé = password)."""
     out = {}
     today = date.today().isoformat()
     if not USERDIR.exists(): return out
@@ -491,15 +539,16 @@ def _zivpn_expected_quota():
         exp = _meta_get(f.name, "exp")
         if exp and exp != "permanent" and exp < today: continue
         if is_locked(f.name): continue
-        q_str = (_meta_get(f.name, "quota") or "").strip()
-        m = re.match(r"^\s*(\d+(?:\.\d+)?)", q_str) if q_str else None
-        if not m: continue
-        try:
-            q = float(m.group(1))
-        except ValueError:
-            continue
+        q = _zivpn_parse_quota((_meta_get(f.name, "quota") or "").strip())
         if q <= 0: continue
-        out[f.name] = f"{int(q)}GB"
+        pw = (_meta_get(f.name, "pass") or "").strip()
+        if not pw: continue
+        if pw in out:
+            prev = float(out[pw][:-2]) if out[pw].endswith("GB") else 0
+            if q > prev:
+                out[pw] = f"{int(q)}GB"
+            continue
+        out[pw] = f"{int(q)}GB"
     return out
 
 def _zivpn_logger_alive():
@@ -510,6 +559,56 @@ def _zivpn_logger_alive():
         return (time.time() - ZIVPN_STATE.stat().st_mtime) < 120
     except OSError:
         return False
+
+def _zivpn_sync_usage():
+    """Rafraîchit used_total_zivpn/last_api_zivpn pour tous les users zivpn
+    en relisant quota-state.json. Appelé par quota_enforce + guard + cron
+    pour que l'affichage n'apparaisse plus 'gelé' entre deux ouvertures menu."""
+    if not USERDIR.exists():
+        return 0
+    n = 0
+    for f in list(USERDIR.iterdir()):
+        if not f.is_file():
+            continue
+        if _meta_get(f.name, "proto") != "zivpn":
+            continue
+        try:
+            get_zivpn_traffic(f.name)
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def _ensure_zivpn_crons(bin_path=""):
+    """Garantit les crons quota zivpn (guard + enforce + sync usage).
+    Répare les VPS où --quota-enforce manque (cas observé : trafic passe,
+    users dépassent quota, jamais bloqués). Idempotent."""
+    try:
+        if not bin_path:
+            for cand in ("/usr/local/bin/kighmu", "/usr/local/bin/kighmu-bot"):
+                if Path(cand).exists():
+                    bin_path = cand
+                    break
+        if not bin_path:
+            bin_path = "/usr/local/bin/kighmu"
+        crontab = sh("crontab -l 2>/dev/null")
+        cmds = [
+            f"*/5 * * * * {bin_path} --zivpn-quota-guard >> /var/log/zivpn-quota-guard.log 2>&1",
+            f"*/5 * * * * {bin_path} --quota-enforce >/dev/null 2>&1",
+        ]
+        changed = False
+        for cmd in cmds:
+            # Détecte par flag, pas par chemin (kighmu vs kighmu-bot)
+            flag = "--zivpn-quota-guard" if "zivpn-quota-guard" in cmd else "--quota-enforce"
+            if flag not in crontab:
+                sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
+                changed = True
+                crontab = sh("crontab -l 2>/dev/null")
+        return changed
+    except Exception:
+        return False
+
 
 def zivpn_quota_guard():
     """Garde-fou long terme (cron */5) : garantit que zivpn compte bien le
@@ -526,6 +625,15 @@ def zivpn_quota_guard():
     want = _zivpn_expected_quota()
     if not want:
         return 0, "aucun quota configure"
+    # Auto-réparation crons (VPS sans --quota-enforce observé) + refresh affichage
+    try:
+        _ensure_zivpn_crons()
+    except Exception:
+        pass
+    try:
+        _zivpn_sync_usage()
+    except Exception:
+        pass
     try:
         STATEDIR.mkdir(parents=True, exist_ok=True)
         last = float(_ZIVPN_GUARD_MARK.read_text().strip())
@@ -538,7 +646,10 @@ def zivpn_quota_guard():
         data = json.loads(cfg.read_text())
         cur_auth = sorted((data.get("auth") or {}).get("config", []))
         cur_quota = data.get("quota") or {}
-        pws = sorted(_active_passwords("zivpn")) or ["zi"]
+        pws = sorted(_active_passwords("zivpn"))
+        # Pas de fallback "zi" : un password inconnu ne doit jamais ouvrir l'accès
+        # ni fausser la détection de dérive (bug: guard forçait un restart en boucle
+        # dès que cur_auth=[] alors que pws=[] aussi, ou inversement).
         need_apply = (sorted(cur_quota.keys()) != sorted(want.keys())) or (cur_auth != pws)
     except Exception:
         need_apply = True
@@ -2223,8 +2334,9 @@ WantedBy=multi-user.target
         print(f" {C['GREEN']}✔ ZIVPN installé et actif (port 5667).{C['RST']}")
     else: print(f" {C['RED']}✗ ZIVPN: échec démarrage.{C['RST']}")
     # Garde-fou quota : auto-reparation si le process tourne sans compteur
-    if "zivpn-quota-guard" not in sh("crontab -l 2>/dev/null"):
-        sh('(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/kighmu --zivpn-quota-guard >> /var/log/zivpn-quota-guard.log 2>&1") | crontab - 2>/dev/null || true')
+    # + enforce (blocage dépassement) : les deux sont requis, sinon le trafic
+    # passe sans limite (bug observé : --quota-enforce manquant au crontab).
+    _ensure_zivpn_crons()
 
 def uninstall_zivpn():
     sh("systemctl disable --now zivpn.service 2>/dev/null || true")
@@ -2632,6 +2744,12 @@ def quota_enforce():
     repasse sous la limite. Appelé régulièrement par cron (--quota-enforce)."""
     today = date.today().isoformat()
     if not USERDIR.exists(): return (0, 0)
+    # Refresh cumul zivpn AVANT comparaison pour que l'affichage et le blocage
+    # suivent quota-state.json même si le menu n'a pas été ouvert (bug "gelé").
+    try:
+        _zivpn_sync_usage()
+    except Exception:
+        pass
     blocked = restored = 0
     xray_changed = v2ray_changed = False
     for f in list(USERDIR.iterdir()):
@@ -3159,6 +3277,7 @@ def ui_create_wizard(protos):
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
     elif rc==1: print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter()
     elif rc==2: print(f" {C['RED']}✗ User exists{C['RST']}");press_enter()
+    elif rc==4: print(f" {C['RED']}✗ Password déjà utilisé (zivpn/hysteria comptent par password){C['RST']}");press_enter()
     else: print(f" {C['RED']}✗ System error{C['RST']}");press_enter()
 
 def ui_list_users(title,protos):
@@ -5863,6 +5982,17 @@ if __name__ == "__main__":
         elif arg == "--zivpn-quota-guard":
             n, d = zivpn_quota_guard()
             if n: log.info(f"zivpn-quota-guard: {d}")
+            sys.exit(0)
+        elif arg == "--zivpn-sync-usage":
+            n = _zivpn_sync_usage()
+            log.info(f"zivpn-sync-usage: {n} users refresh")
+            sys.exit(0)
+        elif arg == "--zivpn-repair":
+            _ensure_zivpn_crons()
+            zivpn_apply()
+            n, d = zivpn_quota_guard()
+            b, r = quota_enforce()
+            log.info(f"zivpn-repair: guard={d}, enforce={b} blocked/{r} restored")
             sys.exit(0)
         elif arg == "--ssh-quota-sync":
             _install_ssh_banner_shell()
