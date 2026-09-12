@@ -46,7 +46,7 @@ jobs:
           echo "glibc max requise: $MAX"
           awk -v v="$MAX" 'BEGIN{exit !(v <= 2.35)}' || { echo "glibc $MAX > 2.35, FAIL"; exit 1; }
           # Preuve anti-bypass : PyNaCl+VK embarqués, faux token rejeté
-          ./install2.bin --license-selftest
+          sudo mkdir -p /etc/kighmu/bot && sudo ./install2.bin --license-selftest
       - uses: actions/upload-artifact@v4
         with:
           name: install2-x86_64
@@ -84,7 +84,7 @@ jobs:
           ls -lh install2-arm64.bin
           file install2-arm64.bin | grep -q "ARM aarch64" && echo "ARCH OK"
           objdump -T install2-arm64.bin 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u | tail -1
-          ./install2-arm64.bin --license-selftest
+          sudo mkdir -p /etc/kighmu/bot && sudo ./install2-arm64.bin --license-selftest
       - uses: actions/upload-artifact@v4
         with:
           name: install2-arm64
