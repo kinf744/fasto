@@ -10,3 +10,7 @@
 !README.md
 !ssh-banner.sh
 !.gitignore
+!sshws/
+!sshws/sshws.go
+!sshws/go.mod
+!sshws/README.md

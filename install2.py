@@ -1236,9 +1236,34 @@ def uninstall_ssl_tls():
     sh("systemctl reset-failed ssl_tls.service 2>/dev/null || true")
     print(f" {C['GREEN']}✔ SSL/TLS désinstallé.{C['RST']}")
 
+def _ensure_sshws_haproxy_backend():
+    """Garantit backend ssh-wss -> 127.0.0.1:80 (WSS 443 déchiffré par HAProxy).
+    Utilisé par install_sshws même sans xray : si haproxy existe mais sans
+    backend, on l'ajoute + reload. Sinon rien (WS 80 direct reste actif)."""
+    try:
+        if sh("command -v haproxy 2>/dev/null") == "":
+            return False
+        cfg = Path("/etc/haproxy/haproxy.cfg")
+        if not cfg.exists():
+            return False
+        t = cfg.read_text()
+        if "backend ssh-wss" in t:
+            return False
+        t += "\nbackend ssh-wss\n    server s1 127.0.0.1:80\n"
+        cfg.write_text(t)
+        ok = sh("haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo OK")
+        if ok:
+            sh("systemctl reload haproxy 2>/dev/null || systemctl restart haproxy 2>/dev/null || true")
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def install_sshws():
-    if sh("command -v sshws 2>/dev/null") != "" and Path("/etc/systemd/system/sshws.service").exists():
-        print(f" {C['GREEN']}✔ SSHWS déjà installé.{C['RST']}");return
+    # sshws v2 : handshake strict, mode auto (raw legacy + vrai WS),
+    # paths /ssh-wss (HAProxy 443/8880 -> :80), timeouts, anti-DDoS.
+    # L'unité est réécrite même si existante (migration v1 -> v2).
     sh("apt-get install -y -qq curl python3-websockets 2>/dev/null || true")
     if sh("python3 -c 'import websockets' 2>/dev/null && echo OK") != "OK":
         sh("pip3 install websockets --quiet --break-system-packages 2>/dev/null || true")
@@ -1249,7 +1274,7 @@ def install_sshws():
     r=sh("curl -fsSL 'https://github.com/kinf744/fasto/releases/download/v1.0.0-zivpn/sshws.sha256' -o /tmp/sshws.sha256 2>/dev/null && sha256sum -c /tmp/sshws.sha256 2>/dev/null && echo OK")
     if "OK" not in r: print(f" {C['YELLOW']}⚠ Vérification SHA-256 sshws non disponible (skip).{C['RST']}")
     svc = """[Unit]
-Description=SSHWS Slipstream Tunnel
+Description=SSHWS WS + TCP RAW Tunnel (v2)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -1257,7 +1282,7 @@ StartLimitBurst=0
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 1092
+ExecStart=/usr/local/bin/sshws -listen 80 -target-host 127.0.0.1 -target-port 1092 -mode auto -paths /ssh-wss,/ssh-ws,/ws -max-conns 2048 -handshake-timeout 5s -idle-timeout 5m
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -1265,12 +1290,22 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 """
     svc_path = Path("/etc/systemd/system/sshws.service")
-    if not svc_path.exists():
+    # Migration v1->v2 : réécrit l'unité si ExecStart obsolète (RestartSec=0, sans -mode)
+    need_write = True
+    if svc_path.exists():
+        try:
+            cur = svc_path.read_text()
+            need_write = ("-mode" not in cur) or ("RestartSec=0" in cur)
+        except Exception:
+            need_write = True
+    if need_write:
         svc_path.write_text(svc)
         sh("systemctl daemon-reload 2>/dev/null || true")
         sh("systemctl enable --now sshws.service 2>/dev/null || true")
+        sh("systemctl restart sshws.service 2>/dev/null || true")
     else:
-        print(f" {C['YELLOW']}⚠ Service systemd sshws déjà existant.{C['RST']}")
+        sh("systemctl enable --now sshws.service 2>/dev/null || true")
+    _ensure_sshws_haproxy_backend()
     sh("systemctl reset-failed sshws.service 2>/dev/null || true")
     _deploy_nft("sshws", 'table inet sshws { chain input { type filter hook input priority 0; policy accept; tcp dport 80 accept; }; }')
     _install_ws_proxies()
@@ -6204,6 +6239,10 @@ if __name__ == "__main__":
         elif arg == "--zivpn-quarantine-list":
             import json as _j
             print(_j.dumps(zivpn_quarantine_list(), indent=2))
+            sys.exit(0)
+        elif arg == "--sshws-upgrade":
+            install_sshws()
+            log.info("sshws-upgrade: done")
             sys.exit(0)
         elif arg == "--ssh-quota-sync":
             _install_ssh_banner_shell()
