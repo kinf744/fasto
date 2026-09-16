@@ -315,23 +315,111 @@ def _svc_ready(svc):
     return cases.get(svc, False)
 
 def _meta_get(user, field):
+    # FIX anti-corruption (race crons) : lecture sous verrou partagé.
     if not user: return ""
     f = USERDIR / user
     if not f.is_file(): return ""
-    for line in f.read_text().splitlines():
-        if line.startswith(f"{field}="): return line.split("=",1)[1]
+    try:
+        with open(f, "r") as fh:
+            fcntl.flock(fh, fcntl.LOCK_SH)
+            try:
+                content = fh.read()
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        for line in content.splitlines():
+            if line.startswith(f"{field}="): return line.split("=",1)[1]
+    except Exception:
+        return ""
     return ""
+def _meta_read_lines(user):
+    # FIX anti-corruption : lecture atomique sous LOCK_SH.
+    f = USERDIR / user
+    if not f.is_file(): return None
+    try:
+        with open(f, "r") as fh:
+            fcntl.flock(fh, fcntl.LOCK_SH)
+            try:
+                return fh.read().splitlines()
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+    except Exception:
+        return None
+def _meta_write_lines(user, lines):
+    # FIX anti-corruption : écriture atomique tmp + fsync + rename sous LOCK_EX.
+    f = USERDIR / user
+    if not f.is_file(): return False
+    tmp = f.with_suffix(".tmp")
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            data = ("\n".join(lines) + "\n").encode()
+            os.write(fd, data)
+            os.fsync(fd)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+        os.rename(str(tmp), str(f))
+        return True
+    except Exception:
+        try: tmp.unlink(missing_ok=True)
+        except Exception: pass
+        return False
 def _meta_set(user, field, value):
+    # FIX anti-corruption : read-modify-write verrouillé + retry.
     if not user: return
     f = USERDIR / user
     if not f.is_file(): return
-    lines = f.read_text().splitlines(); new = []
-    found = False
-    for line in lines:
-        if line.startswith(f"{field}="): new.append(f"{field}={value}"); found = True
-        else: new.append(line)
-    if not found: new.append(f"{field}={value}")
-    f.write_text("\n".join(new) + "\n")
+    for _attempt in range(3):
+        lines = _meta_read_lines(user)
+        if lines is None:
+            time.sleep(0.05)
+            continue
+        new = []
+        found = False
+        for line in lines:
+            if line.startswith(f"{field}="): new.append(f"{field}={value}"); found = True
+            else: new.append(line)
+        if not found: new.append(f"{field}={value}")
+        if _meta_write_lines(user, new):
+            return
+        time.sleep(0.05)
+
+def _parse_quota_gb(q_str):
+    # FIX parsing quota robuste, ne lève JAMAIS. Accepte '100', '100GB', ' 10.5 '.
+    if q_str is None: return 0.0
+    try:
+        s = str(q_str).strip().replace(",", ".")
+        if not s: return 0.0
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)", s)
+        if not m: return 0.0
+        q = float(m.group(1))
+        if q < 0 or q != q or q == float("inf"): return 0.0
+        return q
+    except Exception:
+        return 0.0
+
+def _parse_exp_date(exp_str):
+    # FIX expiration stricte YYYY-MM-DD. Vide/'permanent'/corrompu -> None.
+    # Un exp corrompu ne doit JAMAIS être considéré comme expiré (fail-open).
+    if exp_str is None: return None
+    s = str(exp_str).strip()
+    if not s or s.lower() == "permanent": return None
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", s): return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def _is_expired(exp_str, today=None):
+    # FIX : True UNIQUEMENT si date valide < today.
+    d = _parse_exp_date(exp_str)
+    if d is None: return False
+    try:
+        today = today or date.today()
+        return d < today
+    except Exception:
+        return False
 
 def write_meta(user, proto, exp, limit="", passwd="", uuid="", quota=""):
     USERDIR.mkdir(parents=True, exist_ok=True)
@@ -340,7 +428,17 @@ def write_meta(user, proto, exp, limit="", passwd="", uuid="", quota=""):
     if passwd: lines.append(f"pass={passwd}")
     if uuid: lines.append(f"uuid={uuid}")
     if quota: lines.append(f"quota={quota}")
-    (USERDIR / user).write_text("\n".join(lines) + "\n")
+    # FIX anti-corruption : création atomique tmp + rename.
+    f = USERDIR / user
+    tmp = f.with_suffix(".tmp")
+    try:
+        tmp.write_text("\n".join(lines) + "\n")
+        os.rename(str(tmp), str(f))
+        try: os.chmod(str(f), 0o600)
+        except Exception: pass
+    except Exception:
+        try: f.write_text("\n".join(lines) + "\n")
+        except Exception: pass
 
 def valid_name(name): return bool(re.match(r'^[a-zA-Z0-9._-]{1,32}$', name))
 def exp_in_days(days): return (date.today() + timedelta(days=days)).isoformat()
@@ -397,16 +495,17 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         v2raydns_apply()
     elif proto == "zivpn":
         passwd = passwd or gen_pass()
-        # Le binaire compte par password : deux logins avec le même password
-        # partagent le même bucket used/quota (ex: cas opnom/ip9090). Refusé.
-        dup = _zivpn_password_in_use(passwd)
+        # Bucket password PAR TUNNEL : doublon refusé dans zivpn seul,
+        # mais le même password en hysteria est autorisé (tunnel indépendant).
+        dup = _proto_password_in_use(passwd, "zivpn")
         if dup:
             return 4
         write_meta(user, "zivpn", exp, "", passwd, "", quota)
         zivpn_apply()
     elif proto == "hysteria":
         passwd = passwd or gen_pass()
-        dup = _zivpn_password_in_use(passwd)
+        # Idem : doublon refusé dans hysteria seul, même password en zivpn OK.
+        dup = _proto_password_in_use(passwd, "hysteria")
         if dup:
             return 4
         write_meta(user, "hysteria", exp, "", passwd, "", quota)
@@ -424,14 +523,16 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
 
 # ── Apply functions (self-contained, no bash dependency) ───────────────────
 def _active_passwords(proto):
-    today = date.today().isoformat()
+    # FIX : fail-open — exp vide/corrompu n'exclut plus. Indépendance stricte par proto :
+    # zivpn et hysteria ont chacun leur config JSON et leur compteur, aucun partage.
+    today_d = date.today()
     if not USERDIR.exists(): return []
     passwords = []
     for f in USERDIR.iterdir():
         if not f.is_file(): continue
         if _meta_get(f.name, "proto") != proto: continue
         exp = _meta_get(f.name, "exp")
-        if exp and exp < today: continue
+        if _is_expired(exp, today_d): continue
         if is_locked(f.name): continue
         p = _meta_get(f.name, "pass")
         if p: passwords.append(p)
@@ -474,18 +575,26 @@ def _zivpn_parse_quota(q_str):
         return 0.0
 
 
-def _zivpn_password_in_use(passwd, exclude_user=""):
-    """Retourne le login zivpn/hysteria utilisant déjà ce password (ou '')."""
-    if not passwd or not USERDIR.exists():
+def _proto_password_in_use(passwd, proto, exclude_user=""):
+    """Retourne le login du MEME proto utilisant déjà ce password (ou '').
+    INDEPENDANCE ZIVPN/HYSTERIA : deux tunnels UDP distincts, configs JSON
+    distinctes, compteurs distincts. Un même password dans les deux tunnels
+    ne doit jamais se perturber : on ne compare QUE dans le même proto."""
+    if not passwd or not proto or not USERDIR.exists():
         return ""
     for f in USERDIR.iterdir():
         if not f.is_file() or f.name == exclude_user:
             continue
-        if _meta_get(f.name, "proto") not in ("zivpn", "hysteria"):
+        if _meta_get(f.name, "proto") != proto:
             continue
         if _meta_get(f.name, "pass") == passwd:
             return f.name
     return ""
+
+def _zivpn_password_in_use(passwd, exclude_user=""):
+    """Compat legacy : ne vérifie PLUS en cross-proto. Vérifie zivpn seul.
+    Gardé pour ne pas casser les appels externes ; préférez _proto_password_in_use."""
+    return _proto_password_in_use(passwd, "zivpn", exclude_user)
 
 
 def _zivpn_sync_config():
@@ -2934,19 +3043,24 @@ def change_password(user, newpass=""):
         _meta_set(user, "pass", newpass)
         xray_build_config()
     else:
+        # FIX : nouveau pass écrit AVANT régénération (sinon ancien poussé,
+        # nouveau inactif jusqu'au prochain guard). Chaque proto sur SON tunnel.
+        _meta_set(user, "pass", newpass)
         if proto == "zivpn": zivpn_apply()
         elif proto == "hysteria": hysteria_apply()
         elif proto == "v2raydns": v2raydns_apply()
+        return newpass
     _meta_set(user, "pass", newpass)
     return newpass
 
 def delete_expired_users():
-    today = date.today().isoformat(); n = 0
+    # FIX : suppression réelle UNIQUEMENT si exp valide < today (fail-open).
+    today_d = date.today(); n = 0
     if not USERDIR.exists(): return 0
     for f in list(USERDIR.iterdir()):
         if not f.is_file(): continue
         e = _meta_get(f.name, "exp")
-        if e and e < today and delete_user(f.name) == 0: n += 1
+        if _is_expired(e, today_d) and delete_user(f.name) == 0: n += 1
     return n
 
 def quota_enforce():
@@ -2968,9 +3082,11 @@ def quota_enforce():
         if not f.is_file(): continue
         user = f.name
         proto = _meta_get(user, "proto")
-        q = float(_meta_get(user, "quota") or "0")
+        # FIX parsing robuste : jamais de crash de boucle sur quota malformé.
+        q = _parse_quota_gb(_meta_get(user, "quota"))
         exp = _meta_get(user, "exp")
-        expired = bool(exp) and exp != "permanent" and exp < today
+        # FIX fail-open sur exp corrompu.
+        expired = _is_expired(exp)
         if proto == "ssh":
             if expired:
                 if not is_locked(user):
@@ -2995,34 +3111,49 @@ def quota_enforce():
                     _meta_set(user, "locked", "1"); _meta_set(user, "quota_hit", "1"); v2ray_changed = True; blocked += 1
             elif is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired and (q <= 0 or get_v2ray_traffic(user) < q * 1024**3):
                 _meta_set(user, "locked", "0"); _meta_set(user, "quota_hit", "0"); v2ray_changed = True; restored += 1
-        elif proto in ("zivpn","hysteria"):
+        elif proto == "zivpn":
+            # TUNNEL ZIVPN SEUL : config + quarantaine + compteur zivpn uniquement.
             if expired:
                 if not is_locked(user):
                     _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
-                    if proto == "zivpn":
-                        _zivpn_quarantine_add(user, "expired")
-                        zivpn_apply()
-                    else: hysteria_apply()
+                    _zivpn_quarantine_add(user, "expired")
+                    zivpn_apply()
                     blocked += 1
             elif q > 0:
-                used = get_zivpn_traffic(user) if proto == "zivpn" else get_hysteria_traffic(user)
+                used = get_zivpn_traffic(user)
                 if used >= q * 1024**3:
                     if not is_locked(user):
                         _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
-                        if proto == "zivpn":
-                            _zivpn_quarantine_add(user, "quota")
-                            zivpn_apply()
-                        else: hysteria_apply()
+                        _zivpn_quarantine_add(user, "quota")
+                        zivpn_apply()
                         blocked += 1
-            # Restauration automatique si quota augmenté ou trafic < limite et non expiré
             if is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired:
-                used_now = get_zivpn_traffic(user) if proto == "zivpn" else get_hysteria_traffic(user)
+                used_now = get_zivpn_traffic(user)
                 if q <= 0 or used_now < q * 1024**3:
                     _meta_set(user, "quota_hit", "0"); _meta_set(user, "locked", "0")
-                    if proto == "zivpn":
-                        _zivpn_quarantine_remove(user)
-                        zivpn_apply()
-                    else: hysteria_apply()
+                    _zivpn_quarantine_remove(user)
+                    zivpn_apply()
+                    restored += 1
+        elif proto == "hysteria":
+            # TUNNEL HYSTERIA SEUL : config + compteur hysteria uniquement.
+            # Totalement indépendant de zivpn (aucune quarantaine zivpn touchée).
+            if expired:
+                if not is_locked(user):
+                    _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
+                    hysteria_apply()
+                    blocked += 1
+            elif q > 0:
+                used = get_hysteria_traffic(user)
+                if used >= q * 1024**3:
+                    if not is_locked(user):
+                        _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
+                        hysteria_apply()
+                        blocked += 1
+            if is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired:
+                used_now = get_hysteria_traffic(user)
+                if q <= 0 or used_now < q * 1024**3:
+                    _meta_set(user, "quota_hit", "0"); _meta_set(user, "locked", "0")
+                    hysteria_apply()
                     restored += 1
     if xray_changed: xray_build_config()
     if v2ray_changed: v2raydns_apply()
@@ -3031,7 +3162,7 @@ def quota_enforce():
 def _ssh_expiry_enforce():
     """Lock SSH accounts whose expiry has passed. Dropbear ignores shadow expiry
     (no PAM), so the only reliable block is `passwd -l`. Called from the 5-min cron."""
-    today = date.today().isoformat()
+    today_d = date.today()
     n = 0
     if not USERDIR.exists(): return 0
     for f in list(USERDIR.iterdir()):
@@ -3039,7 +3170,7 @@ def _ssh_expiry_enforce():
         user = f.name
         if _meta_get(user, "proto") != "ssh": continue
         e = _meta_get(user, "exp")
-        if not e or e == "permanent" or e >= today: continue
+        if not _is_expired(e, today_d): continue
         if _meta_get(user, "locked") == "1": continue
         _run(["passwd", "-l", user])
         _meta_set(user, "locked", "1")
@@ -5646,9 +5777,10 @@ Expired resellers auto-deactivated daily by cron.
         elif step=="cr_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["cr_pass"]=p
             if proto in ("zivpn", "hyst") and p != "auto":
-                dup = _zivpn_password_in_use(p)
+                _pp = "zivpn" if proto == "zivpn" else "hysteria"
+                dup = _proto_password_in_use(p, _pp)
                 if dup:
-                    await update.message.reply_text(f"❌ Password déjà utilisé par `{dup}`. Même quota possible, mais password unique requis (compteur binaire par password).");return
+                    await update.message.reply_text(f"❌ Password déjà utilisé par `{dup}` (tunnel {_pp}). Même quota possible, mais password unique requis dans ce tunnel.");return
             if proto in("trojan","ssh","zivpn","hyst"):ctx.user_data["step"]="cr_quota";await reply_cls(update,ctx,"✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["cr_quota"]="0";await do_create(update,ctx)
         elif step=="cr_quota":
@@ -6153,9 +6285,10 @@ if BOT_AVAILABLE:
         elif step=="r_pass":
             p=text if text!="auto"else gen_pass();ctx.user_data["r_pass"]=p
             if proto in ("zivpn", "hyst") and p != "auto":
-                dup = _zivpn_password_in_use(p)
+                _pp = "zivpn" if proto == "zivpn" else "hysteria"
+                dup = _proto_password_in_use(p, _pp)
                 if dup:
-                    await update.message.reply_text(f"❌ Password déjà utilisé par `{dup}`.");return
+                    await update.message.reply_text(f"❌ Password déjà utilisé par `{dup}` (tunnel {_pp}).");return
             if proto in("trojan","ssh","zivpn","hyst","v2ray"):ctx.user_data["r_step"]="r_quota";await update.message.reply_text("✏️ Quota GB (0=unlimited):",parse_mode="Markdown")
             else:ctx.user_data["r_quota"]="0";await do_create_reseller(update,ctx,rid2)
         elif step=="r_quota":
