@@ -1,0 +1,90 @@
+name: Build zivpn
+
+on:
+  push:
+    paths:
+      - 'zivpn-clone/source/**'
+      - '.github/workflows/build-zivpn.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: v1.0.0-zivpn
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Install python + flask (requis par TestHTTPAuthenticator)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python-is-python3 python3-flask
+      - name: Go tests (auth + trafficlogger)
+        working-directory: zivpn-clone/source
+        run: go test ./extras/auth/... ./extras/trafficlogger/...
+
+  build:
+    needs: [test]
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, out: zivpn }
+          - { goos: linux, goarch: arm64, out: zivpn-arm64 }
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build zivpn (${{ matrix.goos }}/${{ matrix.goarch }})
+        working-directory: zivpn-clone/source
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -trimpath -ldflags "-s -w" -o "/tmp/${{ matrix.out }}" ./app
+          ls -lh "/tmp/${{ matrix.out }}"
+          sha256sum "/tmp/${{ matrix.out }}" > "/tmp/${{ matrix.out }}.sha256"
+          cat "/tmp/${{ matrix.out }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zivpn-${{ matrix.goarch }}
+          path: |
+            /tmp/${{ matrix.out }}
+            /tmp/${{ matrix.out }}.sha256
+
+  release:
+    needs: [build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zivpn-*
+          merge-multiple: true
+          path: dist
+      - name: Upload release assets (clobber)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes "Binaries" || true
+          for f in dist/zivpn dist/zivpn.sha256 dist/zivpn-arm64 dist/zivpn-arm64.sha256; do
+            gh release upload "$RELEASE_TAG" "$f" --clobber
+          done
+      - name: Commit prebuilt binaries in repo (zivpn-clone/)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp dist/zivpn zivpn-clone/zivpn
+          cp dist/zivpn.sha256 zivpn-clone/zivpn.sha256
+          md5sum zivpn-clone/zivpn | awk '{print $1}' > zivpn-clone/zivpn.md5
+          git add -f zivpn-clone/zivpn zivpn-clone/zivpn.sha256 zivpn-clone/zivpn.md5
+          git commit -m "chore: update zivpn binaries (state v2 checksum+backup) [skip ci]" || echo "No changes"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git HEAD:main || true

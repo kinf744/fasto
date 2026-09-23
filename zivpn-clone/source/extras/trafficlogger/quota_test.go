@@ -3,6 +3,7 @@ package trafficlogger
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -71,4 +72,56 @@ func TestQuotaTrafficLoggerOnExceed(t *testing.T) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+func TestQuotaStateChecksumAndBackup(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	quotas := map[string]uint64{"u1": 10000}
+
+	ql := NewQuotaTrafficLogger(quotas, stateFile, nil)
+	ql.Log("u1", 1234, 0)
+	if err := ql.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// Main + backup both written, with version tag.
+	if !fileExists(stateFile) || !fileExists(stateFile+".bak") {
+		t.Fatal("main or backup state file missing")
+	}
+	data, _ := os.ReadFile(stateFile)
+	if !containsStr(string(data), `"version":2`) {
+		t.Fatal("state file not versioned")
+	}
+
+	// Corrupt the MAIN file: counters must be restored from .bak.
+	if err := os.WriteFile(stateFile, []byte("{garbage"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ql2 := NewQuotaTrafficLogger(quotas, stateFile, nil)
+	if got := ql2.UsedNow("u1"); got != 1234 {
+		t.Fatalf("backup restore failed: got %d, want 1234", got)
+	}
+}
+
+func TestQuotaStateTamperedChecksum(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	quotas := map[string]uint64{"u1": 10000}
+
+	ql := NewQuotaTrafficLogger(quotas, stateFile, nil)
+	ql.Log("u1", 500, 0)
+	if err := ql.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// Tamper the counter in the main file without fixing the checksum:
+	// load must refuse the tampered data.
+	data, _ := os.ReadFile(stateFile)
+	tampered := []byte(strings.Replace(string(data), `"u1":500`, `"u1":99999`, 1))
+	os.WriteFile(stateFile, tampered, 0o644)
+	if _, ok := loadStateFile(stateFile); ok {
+		t.Fatal("tampered checksum accepted")
+	}
+}
+
+func containsStr(s, sub string) bool {
+	return strings.Contains(s, sub)
 }

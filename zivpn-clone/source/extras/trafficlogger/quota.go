@@ -2,16 +2,27 @@ package trafficlogger
 
 import (
 	"encoding/json"
+	"hash/crc32"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
+// QuotaStateVersion identifies the persisted state schema. Bump it whenever
+// the structure changes so future migrations can be explicit and safe.
+const QuotaStateVersion = 2
+
 // QuotaState is the persisted per-password byte counters and quota limits.
+// Checksum is a CRC32 (IEEE) over the canonical JSON encoding of the state
+// with Checksum forced to 0 : it lets us detect a torn/corrupted write and
+// fall back to the backup copy instead of silently resetting counters.
 type QuotaState struct {
-	Month  string            `json:"month"` // YYYY-MM of the current quota period
-	Quotas map[string]uint64 `json:"quotas"`
-	Used   map[string]uint64 `json:"used"`
+	Version  int               `json:"version"`
+	Checksum uint32            `json:"checksum"`
+	Month    string            `json:"month"` // YYYY-MM of the current quota period
+	Quotas   map[string]uint64 `json:"quotas"`
+	Used     map[string]uint64 `json:"used"`
 }
 
 // QuotaTrafficLogger implements server.TrafficLogger to track per-password
@@ -137,6 +148,65 @@ func (q *QuotaTrafficLogger) rolloverLocked() {
 	}
 }
 
+// marshalState encodes the state canonically. With zeroChecksum=false the
+// stored Checksum is computed over the encoding with Checksum == 0.
+func marshalState(st *QuotaState, zeroChecksum bool) ([]byte, error) {
+	cpy := *st
+	cpy.Version = QuotaStateVersion
+	cpy.Checksum = 0
+	data, err := json.Marshal(&cpy)
+	if err != nil {
+		return nil, err
+	}
+	if zeroChecksum {
+		return data, nil
+	}
+	cpy.Checksum = crc32.ChecksumIEEE(data)
+	return json.Marshal(&cpy)
+}
+
+// stateChecksumOK verifies the embedded CRC32. Legacy files (version <= 1,
+// no checksum written by older binaries) are accepted as-is so an upgrade
+// never loses counters; they are rewritten to v2 on the next Save.
+func stateChecksumOK(st *QuotaState) bool {
+	if st.Version < 2 {
+		return true
+	}
+	data, err := marshalState(st, true)
+	if err != nil {
+		return false
+	}
+	return crc32.ChecksumIEEE(data) == st.Checksum
+}
+
+// writeFileAtomic writes data via a temp file + rename in the same
+// directory, so a crash never leaves a truncated state file.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".quota-state-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// saveLocked writes the state atomically to the main file AND to a ".bak"
+// mirror. The backup costs nothing and survives a corruption of the main
+// file (disk error, partial fsync, accidental manual edit).
+// Callers must hold q.Mutex.
 func (q *QuotaTrafficLogger) saveLocked() error {
 	if q.StateFile == "" {
 		return nil
@@ -146,37 +216,57 @@ func (q *QuotaTrafficLogger) saveLocked() error {
 		Quotas: q.Quotas,
 		Used:   q.Used,
 	}
-	data, err := json.Marshal(st)
+	data, err := marshalState(&st, false)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(q.StateFile, data, 0o644)
+	err = writeFileAtomic(q.StateFile, data, 0o644)
+	if bakErr := writeFileAtomic(q.StateFile+".bak", data, 0o644); bakErr != nil && err == nil {
+		err = bakErr
+	}
+	return err
 }
 
+// load reads the state file, verifies its integrity and falls back to the
+// ".bak" mirror if the main file is missing, unparsable or has a bad
+// checksum. A corrupted state must NEVER silently zero the counters.
 func (q *QuotaTrafficLogger) load() {
 	if q.StateFile == "" {
 		return
 	}
-	data, err := os.ReadFile(q.StateFile)
-	if err != nil {
-		return
+	st, ok := loadStateFile(q.StateFile)
+	if !ok {
+		st, ok = loadStateFile(q.StateFile + ".bak")
 	}
-	var st QuotaState
-	if err := json.Unmarshal(data, &st); err != nil {
+	if !ok {
 		return
 	}
 	// Quota lifetime : on charge Used même si le mois a changé
 	if st.Used != nil {
 		q.Used = st.Used
 	}
-	// Si le fichier vient d'un ancien binaire mensuel, on garde le mois
-	// courant en mémoire mais on ne jette plus Used
+	// On conserve aussi les quotas persistés pour le diagnostic ; la config
+	// reste prioritaire (NewQuotaTrafficLogger a déjà peuplé q.Quotas).
 	if st.Month != "" {
 		q.Month = st.Month
-		// On force la sauvegarde avec le mois courant pour migrer le fichier
 		now := time.Now().Format("2006-01")
 		if q.Month != now {
 			q.Month = now
 		}
 	}
+}
+
+func loadStateFile(path string) (*QuotaState, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var st QuotaState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil, false
+	}
+	if !stateChecksumOK(&st) {
+		return nil, false
+	}
+	return &st, true
 }

@@ -62,6 +62,7 @@ type serverConfig struct {
 	Auth                  serverConfigAuth            `mapstructure:"auth"`
 	Quota                 map[string]string           `mapstructure:"quota"`
 	QuotaStateFile        string                      `mapstructure:"quotaStateFile"`
+	QuotaFlushInterval    int                         `mapstructure:"quotaFlushInterval"`
 	Resolver              serverConfigResolver        `mapstructure:"resolver"`
 	ACL                   serverConfigACL             `mapstructure:"acl"`
 	Outbounds             []serverConfigOutboundEntry `mapstructure:"outbounds"`
@@ -653,7 +654,7 @@ func (c *serverConfig) fillTrafficLogger(hyConfig *server.Config) error {
 			)
 		})
 		hyConfig.TrafficLogger = ql
-		go runQuotaStateSaver(ql, c.QuotaStateFile)
+		go runQuotaStateSaver(ql, c.QuotaStateFile, c.QuotaFlushInterval)
 	}
 	if c.StatsAPI.Listen != "" {
 		if ql != nil {
@@ -676,11 +677,22 @@ func (c *serverConfig) fillTrafficLogger(hyConfig *server.Config) error {
 }
 
 // runQuotaStateSaver periodically persists quota counters to disk.
-func runQuotaStateSaver(ql *trafficlogger.QuotaTrafficLogger, stateFile string) {
+// flushInterval is in seconds; values outside [5, 600] fall back to the
+// historical default of 30 s. A shorter interval reduces the amount of
+// traffic lost if the process crashes, at the cost of more disk writes.
+func runQuotaStateSaver(ql *trafficlogger.QuotaTrafficLogger, stateFile string, flushInterval int) {
 	if stateFile == "" {
 		return
 	}
-	ticker := time.NewTicker(30 * time.Second)
+	if flushInterval < 5 || flushInterval > 600 {
+		flushInterval = 30
+	}
+	// Sauvegarde immédiate au boot : migre le fichier legacy vers le format
+	// versionné + checksum sans attendre le premier tick.
+	if err := ql.Save(); err != nil {
+		logger.Error("failed to save quota state", zap.Error(err))
+	}
+	ticker := time.NewTicker(time.Duration(flushInterval) * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		if err := ql.Save(); err != nil {

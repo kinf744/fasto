@@ -369,3 +369,13 @@ systemctl status zivpn.service   # active (running)
 - `/tmp/opencode/zivpn-clone-test` : build de développement du clone
 - `/tmp/opencode/zivpn_full.txt` : dump GoReSym
 - `/root/tuo/APPROFONDISSEMENTS.md`, `/root/tuo/CAPTURES_ET_AUTH.md` : analyse détaillée (désassemblage, captures)
+## 12. Persistance quota v2 (fiabilité long terme)
+
+- `quota-state.json` versionné (`"version": 2`) + checksum CRC32 IEEE :
+  un fichier corrompu/écrit partiellement est rejeté au chargement.
+- Écriture atomique (tmp + rename) et miroir `.bak` : si le fichier
+  principal est illisible, le `.bak` est chargé (compteurs préservés).
+- `quotaFlushInterval` (config, secondes, défaut 30, borné [5,600]) :
+  sauvegarde immédiate au boot puis toutes les N secondes.
+- Compat lecture du format legacy v1 (sans version/checksum) : migration
+  automatique au premier flush. Voir `docs/CONTRAT_QUOTA.md`.

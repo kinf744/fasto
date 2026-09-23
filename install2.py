@@ -502,13 +502,25 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
         write_meta(user, "v2raydns", exp, "", passwd, uuid, quota)
         v2raydns_apply()
     elif proto == "zivpn":
-        passwd = passwd or gen_pass()
         # Bucket password PAR TUNNEL : doublon refusé dans zivpn seul,
         # mais le même password en hysteria est autorisé (tunnel indépendant).
-        dup = _proto_password_in_use(passwd, "zivpn")
-        if dup:
-            return 4
+        # REGISTRE A VIE : un password déjà émis (même pour un compte depuis
+        # supprimé) n'est JAMAIS réattribué -> aucune confusion de compteur.
+        if passwd:
+            # Password manuel : collision ou réattribution -> refus net.
+            if _proto_password_in_use(passwd, "zivpn") or passwd in _zivpn_registry_read():
+                return 4
+        else:
+            for _try in range(5):
+                passwd = gen_pass()
+                if not _proto_password_in_use(passwd, "zivpn") and passwd not in _zivpn_registry_read():
+                    break
+                passwd = ""
+            if not passwd:
+                return 4
+        _zivpn_registry_add(passwd)
         write_meta(user, "zivpn", exp, "", passwd, "", quota)
+        _zivpn_event("user_created", user=user, quota_gb=quota)
         zivpn_apply()
     elif proto == "hysteria":
         passwd = passwd or gen_pass()
@@ -606,6 +618,229 @@ def _zivpn_password_in_use(passwd, exclude_user=""):
     return _proto_password_in_use(passwd, "zivpn", exclude_user)
 
 
+# ── Registre à vie des passwords zivpn (anti-réattribution) ────────────────
+# Un password zivpn EST la clé de comptage du quota. Pour qu'un comptage soit
+# sûr dans le temps, un password ayant appartenu à un compte ne doit JAMAIS
+# être réattribué à un autre compte (sinon risque d'héritage/confusion de
+# compteur). Ce registre append-only garantit cette unicité à vie.
+ZIVPN_PW_REGISTRY = Path("/etc/zivpn/issued-passwords.txt")
+ZIVPN_EVENT_LOG = Path("/var/log/zivpn-quota-events.jsonl")
+
+
+def _zivpn_registry_read():
+    try:
+        if ZIVPN_PW_REGISTRY.exists():
+            return set(x.strip() for x in ZIVPN_PW_REGISTRY.read_text().splitlines() if x.strip())
+    except Exception:
+        pass
+    return set()
+
+
+def _zivpn_registry_add(password):
+    """Enregistre un password à vie (append-only, verrou flock anti-race).
+    Retourne True si nouvellement enregistré, False si déjà présent/erreur."""
+    if not password:
+        return False
+    try:
+        ZIVPN_PW_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+        with open(ZIVPN_PW_REGISTRY, "a+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            fh.seek(0)
+            existing = set(x.strip() for x in fh.read().splitlines() if x.strip())
+            if password in existing:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+                return False
+            fh.write(password + "\n")
+            fh.flush()
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        try: os.chmod(str(ZIVPN_PW_REGISTRY), 0o600)
+        except Exception: pass
+        return True
+    except Exception:
+        return False
+
+
+def _zivpn_registry_seed():
+    """Enregistre rétroactivement les passwords des users zivpn existants
+    (migration) afin qu'aucun ne soit réattribué après suppression."""
+    try:
+        if not USERDIR.exists():
+            return 0
+        n = 0
+        for f in USERDIR.iterdir():
+            if not f.is_file(): continue
+            if _meta_get(f.name, "proto") != "zivpn": continue
+            pw = (_meta_get(f.name, "pass") or "").strip()
+            if pw and _zivpn_registry_add(pw):
+                n += 1
+        return n
+    except Exception:
+        return 0
+
+
+def _zivpn_event(event, **fields):
+    """Journal append-only des événements quota (blocages, dérives, restaurés,
+    partages...). Survit mieux aux crashs qu'un JSON réécrit et permet de
+    rejouer l'historique lors d'un litige client."""
+    try:
+        rec = {"ts": datetime.now().isoformat(timespec="seconds"), "event": event}
+        rec.update({k: v for k, v in fields.items() if v is not None})
+        with open(ZIVPN_EVENT_LOG, "a") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _zivpn_migrate_state_key(old_key, new_key):
+    """Renomme une clé dans quota-state.json (used + quotas) : utilisé au
+    changement de password pour que le compteur d'un compte le SUIVE sur sa
+    nouvelle clé (le compteur appartient au compte, pas au credential)."""
+    try:
+        stf = Path("/etc/zivpn/quota-state.json")
+        if not old_key or not new_key or old_key == new_key or not stf.exists():
+            return False
+        st = json.loads(stf.read_text())
+        changed = False
+        for sec in ("used", "quotas"):
+            d = st.get(sec)
+            if isinstance(d, dict) and old_key in d and new_key not in d:
+                d[new_key] = d.pop(old_key)
+                changed = True
+        if changed:
+            stf.write_text(json.dumps(st))
+            _zivpn_event("counter_migrated", old_key=old_key, new_key=new_key)
+        return changed
+    except Exception:
+        return False
+
+
+def zivpn_state_backup(retention_days=7):
+    """Copie horaire du state quota (cron) : permet de restaurer le comptage
+    après incident disque/corruption. Idempotent si rien n'a changé ; purge
+    les backups plus vieux que retention_days."""
+    src = Path("/etc/zivpn/quota-state.json")
+    bdir = Path("/etc/zivpn/backups")
+    try:
+        if not src.exists():
+            return 0
+        bdir.mkdir(parents=True, exist_ok=True)
+        existing = sorted(bdir.glob("quota-state-*.json"))
+        cur = src.read_bytes()
+        if not (existing and existing[-1].read_bytes() == cur):
+            dst = bdir / f"quota-state-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+            dst.write_bytes(cur)
+            for extra in (src.with_suffix(".json.bak"),):
+                if extra.exists():
+                    (bdir / (dst.name + ".bak")).write_bytes(extra.read_bytes())
+            try: os.chmod(str(dst), 0o600)
+            except Exception: pass
+        cutoff = time.time() - retention_days * 86400
+        for b in bdir.glob("quota-state-*.json*"):
+            try:
+                if b.stat().st_mtime < cutoff:
+                    b.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return 1
+    except Exception:
+        return 0
+
+
+def zivpn_state_restore():
+    """Restaure le state quota depuis le miroir .bak du binaire ou le backup
+    horaire le plus récent, si le fichier principal est absent/corrompu."""
+    src = Path("/etc/zivpn/quota-state.json")
+    def _valid(p):
+        try:
+            d = json.loads(Path(p).read_text())
+            return isinstance(d, dict) and "used" in d
+        except Exception:
+            return False
+    try:
+        if _valid(src):
+            return "ok"
+        for cand in [Path(str(src) + ".bak")] + sorted(Path("/etc/zivpn/backups").glob("quota-state-*.json"), reverse=True):
+            if cand.exists() and _valid(cand):
+                shutil.copy2(str(cand), str(src))
+                _zivpn_event("state_restored", source=str(cand))
+                log.warning(f"zivpn: quota-state restauré depuis {cand}")
+                return str(cand)
+        return "aucun backup valide"
+    except Exception:
+        return "erreur"
+
+
+def zivpn_share_detect(minutes=15, max_ips=4):
+    """Détecte le partage d'un password zivpn entre plusieurs clients :
+    {password: [ips distinctes]} au-delà de max_ips dans les logs récents.
+    Aide contre la revente sauvage d'un même compte."""
+    out = {}
+    try:
+        logs = sh(f"journalctl -u zivpn --since '-{int(minutes)}min' --no-pager 2>/dev/null")
+        if not logs:
+            logs = sh("tail -n 30000 /var/log/zivpn.log 2>/dev/null")
+    except Exception:
+        logs = ""
+    for line in (logs or "").splitlines():
+        if "client connected" not in line:
+            continue
+        m_addr = re.search(r'"addr":\s*"([^"]+)"', line)
+        m_id = re.search(r'"id":\s*"([^"]*)"', line)
+        if not (m_addr and m_id):
+            continue
+        ip = m_addr.group(1).rsplit(":", 1)[0]
+        pid = m_id.group(1)
+        if not pid or pid.startswith("__KIGHMU_EMPTY__"):
+            continue
+        out.setdefault(pid, set()).add(ip)
+    suspect = {p: sorted(ips) for p, ips in out.items() if len(ips) > max_ips}
+    for p, ips in suspect.items():
+        _zivpn_event("sharing_detected", password=p, ips=ips, window_min=minutes)
+    return suspect
+
+
+def zivpn_status(user=None):
+    """Vue unifiée du comptage quota zivpn : compteur brut binaire, cumul
+    panneau lifetime, quota configuré, état (actif/bloqué/quarantaine).
+    Un seul point de vérité consultable = support client facile."""
+    users = []
+    if USERDIR.exists():
+        for f in sorted(USERDIR.iterdir()):
+            if f.is_file() and _meta_get(f.name, "proto") == "zivpn":
+                if user and f.name != user:
+                    continue
+                users.append(f.name)
+    if user and not users:
+        return {"error": f"utilisateur zivpn introuvable: {user}"}
+    raw = {}
+    try:
+        raw = json.loads(Path("/etc/zivpn/quota-state.json").read_text()).get("used", {}) or {}
+    except Exception:
+        pass
+    quarantine = zivpn_quarantine_list()
+    q_by_login = {e.get("login"): k for k, e in quarantine.items() if isinstance(e, dict)}
+    res = []
+    for u in users:
+        pw = (_meta_get(u, "pass") or "").strip()
+        quota_gb = _zivpn_parse_quota((_meta_get(u, "quota") or "").strip())
+        info = {
+            "user": u,
+            "quota_gb": quota_gb,
+            "raw_counter_bytes": int(raw.get(pw, 0)),
+            "used_total_bytes": get_zivpn_traffic(u),
+            "exp": _meta_get(u, "exp") or "",
+            "locked": _meta_get(u, "locked") == "1",
+            "quota_hit": _meta_get(u, "quota_hit") == "1",
+            "exp_lock": _meta_get(u, "exp_lock") == "1",
+        }
+        info["state"] = ("quarantaine:" + q_by_login[u]) if u in q_by_login else \
+                        ("bloque" if info["locked"] else "actif")
+        if quota_gb > 0:
+            info["used_pct"] = round(100.0 * info["used_total_bytes"] / (quota_gb * 1024**3), 2)
+        res.append(info)
+    return {"users": res, "count": len(res)}
+
+
 def _zivpn_sync_config():
     """Régénère auth.config (passwords actifs) et la map quota (password -> "XGB")
     dans /etc/zivpn/config.json, en préservant quotaStateFile et statsAPI.
@@ -657,6 +892,9 @@ def _zivpn_sync_config():
                 quota[pw] = f"{q:g}GB"
         data["quota"] = quota
         if not data.get("quotaStateFile"): data["quotaStateFile"] = "/etc/zivpn/quota-state.json"
+        # Flush disque toutes les 15 s (défaut binaire 30 s) : réduit de
+        # moitié la perte de comptage en cas de crash/coupure électrique.
+        if not data.get("quotaFlushInterval"): data["quotaFlushInterval"] = 15
         # FIX securite : statsAPI jamais sans token (sinon n'importe quel user
         # local peut lire les passwords via l'API). Jeton persiste dans la config.
         try:
@@ -744,7 +982,7 @@ def _zivpn_logrotate():
         conf = Path("/etc/logrotate.d/zivpn")
         if conf.exists():
             return
-        conf.write_text("""/var/log/zivpn.log /var/log/zivpn-watchdog.log /var/log/zivpn-quota-guard.log {
+        conf.write_text("""/var/log/zivpn.log /var/log/zivpn-watchdog.log /var/log/zivpn-quota-guard.log /var/log/zivpn-quota-events.jsonl {
     daily
     rotate 7
     compress
@@ -786,7 +1024,7 @@ def _zivpn_logrotate():
         conf = Path("/etc/logrotate.d/zivpn")
         if conf.exists():
             return
-        conf.write_text("""/var/log/zivpn.log /var/log/zivpn-watchdog.log /var/log/zivpn-quota-guard.log {
+        conf.write_text("""/var/log/zivpn.log /var/log/zivpn-watchdog.log /var/log/zivpn-quota-guard.log /var/log/zivpn-quota-events.jsonl {
     daily
     rotate 7
     compress
@@ -844,11 +1082,15 @@ def _ensure_zivpn_crons(bin_path=""):
         cmds = [
             f"*/5 * * * * {bin_path} --zivpn-quota-guard >> /var/log/zivpn-quota-guard.log 2>&1",
             f"*/5 * * * * {bin_path} --quota-enforce >/dev/null 2>&1",
+            f"7 * * * * {bin_path} --zivpn-state-backup >/dev/null 2>&1",
         ]
         changed = False
         for cmd in cmds:
             # Détecte par flag, pas par chemin (kighmu vs kighmu-bot)
-            flag = "--zivpn-quota-guard" if "zivpn-quota-guard" in cmd else "--quota-enforce"
+            if "--zivpn-state-backup" in cmd:
+                flag = "--zivpn-state-backup"
+            else:
+                flag = "--zivpn-quota-guard" if "zivpn-quota-guard" in cmd else "--quota-enforce"
             if flag not in crontab:
                 sh(f'(crontab -l 2>/dev/null; echo "{cmd}") | crontab - 2>/dev/null || true')
                 changed = True
@@ -963,6 +1205,7 @@ def zivpn_block_users(users, reason="manual"):
             _meta_set(user, "exp_lock", "1")
         _meta_set(user, "locked", "1")
         _zivpn_quarantine_add(user, reason)
+        _zivpn_event("blocked", user=user, reason=reason, source="manual")
         blocked += 1
     if blocked:
         zivpn_apply()
@@ -986,6 +1229,7 @@ def zivpn_unblock_users(users, purge_quarantine=True):
         _meta_set(user, "exp_lock", "0")
         if purge_quarantine:
             _zivpn_quarantine_remove(user)
+        _zivpn_event("unblocked", user=user, source="manual")
         restored += 1
     if restored:
         zivpn_apply()
@@ -1020,7 +1264,26 @@ def zivpn_quota_guard():
     except Exception:
         pass
     try:
+        _zivpn_registry_seed()
+    except Exception:
+        pass
+    try:
         _zivpn_sync_usage()
+    except Exception:
+        pass
+    # Restauration auto du compteur si le state est absent/corrompu :
+    # miroir .bak du binaire, puis backup horaire le plus récent.
+    try:
+        stf = Path("/etc/zivpn/quota-state.json")
+        corrupt = False
+        if stf.exists():
+            try:
+                json.loads(stf.read_text())
+            except Exception:
+                corrupt = True
+        if corrupt:
+            restored = zivpn_state_restore()
+            _zivpn_event("state_corrupt_auto_repair", result=restored)
     except Exception:
         pass
     if not want:
@@ -1058,6 +1321,13 @@ def zivpn_quota_guard():
         pws = sorted(_active_passwords("zivpn"))
         # Pas de fallback : detection aussi sur les VALEURS de quota (pas seulement les cles).
         need_apply = (cur_quota != want) or (cur_auth != pws)
+        if need_apply:
+            # Alerte de dérive : la config réelle ne suit plus les users.
+            _zivpn_event("config_drift",
+                         quota_missing=sorted(set(want) - set(cur_quota)),
+                         quota_extra=sorted(set(cur_quota) - set(want)),
+                         quota_mismatch=sorted(k for k in set(want) & set(cur_quota) if want[k] != cur_quota[k]),
+                         auth_mismatch=(cur_auth != pws))
     except Exception:
         need_apply = True
     alive = _zivpn_logger_alive()
@@ -3071,10 +3341,12 @@ def delete_user(user):
     elif proto == "zivpn":
         # Suppression definitive : purge quarantaine + bucket compteur
         # (evite l'heritage du comptage par un futur user au meme password).
+        # Le password reste dans le registre a vie (jamais réattribué).
         _zivpn_quarantine_remove(user)
         if _del_pw:
             _zivpn_quarantine_remove(_del_pw)
             _zivpn_forget_password(_del_pw)
+        _zivpn_event("user_deleted", user=user, password=_del_pw or None)
         zivpn_apply()
     elif proto == "hysteria":
         hysteria_apply()
@@ -3179,9 +3451,17 @@ def change_password(user, newpass=""):
         old_pw = (_meta_get(user, "pass") or "").strip()
         _meta_set(user, "pass", newpass)
         if proto == "zivpn":
-            # L'ancien bucket compteur ne doit pas etre herite (reuse password).
-            if old_pw and old_pw != newpass:
-                _zivpn_forget_password(old_pw)
+            # Le compteur appartient au compte : il SUIT le nouveau password
+            # (renommage de la clé dans quota-state.json, aucune perte).
+            # Le nouveau password est enregistré a vie, l'ancien reste
+            # enregistré aussi (jamais réattribué).
+            if old_pw != newpass:
+                if _proto_password_in_use(newpass, "zivpn", exclude_user=user) or newpass in _zivpn_registry_read():
+                    _meta_set(user, "pass", old_pw)
+                    return old_pw
+                _zivpn_migrate_state_key(old_pw, newpass)
+                _zivpn_registry_add(newpass)
+                _zivpn_event("password_changed", user=user)
             zivpn_apply()
         elif proto == "hysteria": hysteria_apply()
         elif proto == "v2raydns": v2raydns_apply()
@@ -3254,6 +3534,7 @@ def quota_enforce():
                 if not is_locked(user):
                     _meta_set(user, "locked", "1"); _meta_set(user, "exp_lock", "1")
                     _zivpn_quarantine_add(user, "expired")
+                    _zivpn_event("blocked", user=user, reason="expired")
                     zivpn_dirty = True
                     blocked += 1
             elif q > 0:
@@ -3262,6 +3543,7 @@ def quota_enforce():
                     if not is_locked(user):
                         _meta_set(user, "quota_hit", "1"); _meta_set(user, "locked", "1")
                         _zivpn_quarantine_add(user, "quota")
+                        _zivpn_event("blocked", user=user, reason="quota", used_bytes=int(used), quota_gb=q)
                         zivpn_dirty = True
                         blocked += 1
             if is_locked(user) and _meta_get(user, "quota_hit") == "1" and not expired:
@@ -3269,6 +3551,7 @@ def quota_enforce():
                 if q <= 0 or used_now < q * 1024**3:
                     _meta_set(user, "quota_hit", "0"); _meta_set(user, "locked", "0")
                     _zivpn_quarantine_remove(user)
+                    _zivpn_event("unblocked", user=user, reason="quota_reset", used_bytes=int(used_now), quota_gb=q)
                     zivpn_dirty = True
                     restored += 1
         elif proto == "hysteria":
@@ -6632,6 +6915,24 @@ if __name__ == "__main__":
         elif arg == "--zivpn-quarantine-list":
             import json as _j
             print(_j.dumps(zivpn_quarantine_list(), indent=2))
+            sys.exit(0)
+        elif arg == "--zivpn-state-backup":
+            n = zivpn_state_backup()
+            log.info(f"zivpn-state-backup: {'ok' if n else 'skip/erreur'}")
+            sys.exit(0)
+        elif arg == "--zivpn-state-restore":
+            r = zivpn_state_restore()
+            print(f"state-restore: {r}")
+            sys.exit(0)
+        elif arg == "--zivpn-share-detect":
+            import json as _j
+            minutes = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 15
+            print(_j.dumps(zivpn_share_detect(minutes=minutes), indent=2))
+            sys.exit(0)
+        elif arg == "--zivpn-status":
+            import json as _j
+            user = sys.argv[2] if len(sys.argv) > 2 else None
+            print(_j.dumps(zivpn_status(user), indent=2, ensure_ascii=False))
             sys.exit(0)
         elif arg == "--sshws-upgrade":
             install_sshws()
