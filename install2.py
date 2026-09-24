@@ -4198,9 +4198,12 @@ def ui_delete_wizard(protos=None):
             for f in sorted(USERDIR.iterdir()):
                 if not f.is_file(): continue
                 p = _meta_get(f.name, "proto")
-                if protos and p not in protos: continue
+                # Un fichier residuel (proto vide/inconnu, restes d'anciennes
+                # versions) est TOUJOURS listé et supprimable, quel que soit
+                # le tunnel du menu : sinon il devient invisible à jamais.
+                if p and protos and p not in protos: continue
                 e = _meta_get(f.name, "exp")
-                entries.append((f.name, p, e))
+                entries.append((f.name, p or "residu", e))
         if not protos or "ssh" in protos:
             for u in panel_system_accounts():
                 if not (USERDIR / u).exists():
