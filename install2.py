@@ -4048,7 +4048,7 @@ def ui_create_wizard(protos):
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
     elif rc==1: print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter()
     elif rc==2: print(f" {C['RED']}✗ User exists{C['RST']}");press_enter()
-    elif rc==4: print(f" {C['RED']}✗ Password déjà utilisé (zivpn/hysteria comptent par password){C['RST']}");press_enter()
+    elif rc==4: print(f" {C['RED']}✗ Password déjà utilisé ou déjà attribué par le passé (registre à vie : jamais réattribué, comptage quota protégé){C['RST']}");press_enter()
     else: print(f" {C['RED']}✗ System error{C['RST']}");press_enter()
 
 def ui_list_users(title,protos):
@@ -6435,7 +6435,7 @@ Expired resellers auto-deactivated daily by cron.
         rp=pm.get(proto,proto);pn=nm.get(proto,rp.upper());exp=exp_in_days(int(days))
         rc=create_user(rp,user,int(days),pwd,"1",quota)
         if rc!=0:
-            msgs={1:"Invalid username",2:"Username déjà utilisé (nom unique requis, même quota possible)",4:"Password déjà utilisé (password unique requis, même quota possible)"}
+            msgs={1:"Invalid username",2:"Username déjà utilisé (nom unique requis, même quota possible)",4:"Password déjà utilisé OU déjà attribué par le passé (jamais réattribué : registre à vie, comptage quota protégé)"}
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=back_kb("users"),parse_mode="Markdown")
             ctx.user_data.clear();return
         apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or ""
@@ -6807,7 +6807,7 @@ if BOT_AVAILABLE:
         exp=exp_in_days(int(days))
         rc=create_user(rp,user,int(days),pwd,"1",quota)
         if rc!=0:
-            msgs={1:"Invalid username",2:"Username déjà utilisé",4:"Password déjà utilisé"}
+            msgs={1:"Invalid username",2:"Username déjà utilisé",4:"Password déjà utilisé OU déjà attribué par le passé (registre à vie zivpn)"}
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back",callback_data="r_users")]]))
             ctx.user_data.clear();return
         _meta_set(user,"reseller",str(rid))
