@@ -627,6 +627,57 @@ ZIVPN_PW_REGISTRY = Path("/etc/zivpn/issued-passwords.txt")
 ZIVPN_EVENT_LOG = Path("/var/log/zivpn-quota-events.jsonl")
 
 
+def _zivpn_all_identities():
+    """Union de TOUTES les identités zivpn connues du système :
+    - 'meta'       : fichier méta proto=zivpn (compte normal)
+    - 'quarantine' : bloqué / retiré de la config (ex. expiré, quota, manuel)
+    - 'orphan'     : méta vidée ou supprimée mais compteur résiduel dans
+                     quota-state.json (used/quotas) ou quarantaine seule.
+    Permet aux menus LIST USERS / DELETE USER de tout voir et tout purger.
+    Retourne des dicts {name, password, exp, used, source}."""
+    out = []
+    covered_pw = set()
+    covered_names = set()
+    if USERDIR.exists():
+        for f in sorted(USERDIR.iterdir()):
+            if not f.is_file():
+                continue
+            if _meta_get(f.name, "proto") != "zivpn":
+                continue
+            pw = (_meta_get(f.name, "pass") or "").strip()
+            covered_pw.add(pw)
+            covered_names.add(f.name)
+            out.append({"name": f.name, "password": pw,
+                        "exp": _meta_get(f.name, "exp") or "",
+                        "used": 0, "source": "meta"})
+    # Quarantaine : bloqués/retirés
+    try:
+        quar = _zivpn_quarantine_load()
+    except Exception:
+        quar = {}
+    for pw, e in (quar or {}).items():
+        login = e.get("login") if isinstance(e, dict) else ""
+        out.append({"name": login or pw, "password": pw,
+                    "exp": (e.get("exp") if isinstance(e, dict) else "") or "",
+                    "used": 0, "source": "quarantine"})
+        covered_pw.add(pw)
+        if login:
+            covered_names.add(login)
+    # Compteurs résiduels du state sans compte actif ni quarantaine
+    try:
+        st = json.loads(Path("/etc/zivpn/quota-state.json").read_text())
+        keys = set((st.get("used") or {})) | set((st.get("quotas") or {}))
+        used_map = st.get("used") or {}
+    except Exception:
+        keys, used_map = set(), {}
+    for pw in sorted(keys):
+        if pw in covered_pw or pw.startswith("__KIGHMU_EMPTY__"):
+            continue
+        out.append({"name": pw, "password": pw, "exp": "",
+                    "used": int(used_map.get(pw, 0)), "source": "orphan"})
+    return out
+
+
 def _zivpn_registry_read():
     try:
         if ZIVPN_PW_REGISTRY.exists():
@@ -3290,7 +3341,25 @@ def delete_user(user):
     f = USERDIR / user
     had_file = f.exists()
     proto = _meta_get(user, "proto") if had_file else ""
-    
+
+    # Identite zivpn ORPHELINE : fichier meta vide/absent mais login en
+    # quarantaine ou password residuel dans quota-state.json. Permet de
+    # purger ces identites depuis DELETE USER.
+    _orphan_pw = ""
+    if not proto and user not in panel_system_accounts():
+        try:
+            for _i in _zivpn_all_identities():
+                if _i["source"] in ("quarantine", "orphan") and \
+                   (user == _i["name"] or user == _i["password"]):
+                    proto = "zivpn"
+                    _orphan_pw = _i["password"]
+                    break
+        except Exception:
+            pass
+    if had_file and not proto:
+        # Méta vidée non rattachée à zivpn : suppression du seul fichier.
+        f.unlink(missing_ok=True)
+        return 0
     # Si pas de USERDIR, détecter le proto depuis les configs JSON
     if not had_file and user not in panel_system_accounts():
         # Check Xray configs
@@ -3324,8 +3393,11 @@ def delete_user(user):
             return 2  # User not found anywhere
     
     # Retirer le meta AVANT de régénérer les configs
-    # (capture le password AVANT unlink pour purger la quarantaine)
+    # (capture le password AVANT unlink pour purger la quarantaine ;
+    #  pour un orphelin le password vient du state/quarantaine)
     _del_pw = (_meta_get(user, "pass") or "").strip() if had_file else ""
+    if not _del_pw:
+        _del_pw = _orphan_pw
     f.unlink(missing_ok=True)
     
     if proto == "ssh" or (not had_file and user in panel_system_accounts()):
@@ -3340,7 +3412,7 @@ def delete_user(user):
         v2raydns_apply()
     elif proto == "zivpn":
         # Suppression definitive : purge quarantaine + bucket compteur
-        # (evite l'heritage du comptage par un futur user au meme password).
+        # (compte normal OU orphelin : même mécanique, clé = password).
         # Le password reste dans le registre a vie (jamais réattribué).
         _zivpn_quarantine_remove(user)
         if _del_pw:
@@ -4079,7 +4151,24 @@ def ui_list_users(title,protos):
             st=f"{st}{' ' * max(1, 8 - len(vis))}"
             L.append(f" {C['GREEN']}{f.name:<14}{C['RST']} {ex:<10} {st} {tr}")
             n+=1
+    # Identités zivpn hors méta : quarantaine (bloqués/retirés) + orphelines
+    # (compteur résiduel). Visibles ici pour que l'admin sache qu'elles
+    # existent encore et consomment/ont consommé de la data.
+    if "zivpn" in protos:
+        try:
+            for ident in _zivpn_all_identities():
+                if ident["source"] == "meta":
+                    continue
+                lbl = "BLOQUE" if ident["source"] == "quarantine" else "ORPHAN"
+                col = C['YELLOW'] if ident["source"] == "quarantine" else C['GRAY']
+                ex = ident["exp"] or "-"
+                tr = f"{fmt_bytes(ident['used'])} / -"
+                L.append(f" {col}{ident['name'][:14]:<14}{C['RST']} {ex:<10} {col}{lbl:<8}{C['RST']} {tr}")
+                n += 1
+        except Exception:
+            pass
     if n==0: L.append(f" {C['GRAY']}(no {title} user){C['RST']}")
+    elif "zivpn" in protos: L.append(f" {C['GRAY']}BLOQUE=en quarantaine (retiré de la config) · ORPHAN=compteur résiduel sans compte (supprimable via DELETE USER){C['RST']}")
     L.append("%SEP%");render_screen(L);press_enter()
 
 def ui_delete_wizard(protos=None):
@@ -4097,6 +4186,16 @@ def ui_delete_wizard(protos=None):
             for u in panel_system_accounts():
                 if not (USERDIR / u).exists():
                     entries.append((u, "ssh", ""))
+        # Identités zivpn hors méta (quarantaine + orphelines) : affichées et
+        # supprimables ici pour purger compteur/quarantaine résiduels.
+        if not protos or "zivpn" in protos:
+            try:
+                _known = {e[0] for e in entries}
+                for _i in _zivpn_all_identities():
+                    if _i["source"] in ("quarantine", "orphan") and _i["name"] not in _known:
+                        entries.append((_i["name"], "zivpn", _i["exp"]))
+            except Exception:
+                pass
         if not entries:
             print(f" {C['RED']}✗ No users found.{C['RST']}");press_enter();return
         cleanup_panel_residues();clear_screen()
@@ -4106,6 +4205,8 @@ def ui_delete_wizard(protos=None):
         print(f" {C['GRAY']}{'──':<6}{'────────':<18}{'──────────':<14}{'──────':<10}{C['RST']}")
         for i, (nm, p, ex) in enumerate(entries, 1):
             if is_locked(nm): st = f"{C['RED']}LOCKED{C['RST']}"
+            elif not (USERDIR / nm).is_file(): st = f"{C['GRAY']}ORPHAN{C['RST']}"
+            elif not _meta_get(nm, "proto"): st = f"{C['YELLOW']}RESIDU{C['RST']}"
             elif ex and ex < today: st = f"{C['RED']}EXPIRED{C['RST']}"
             elif ex and ex >= today and (date.fromisoformat(ex) - date.today()).days <= 3: st = f"{C['YELLOW']}EXPIRING{C['RST']}"
             else: st = f"{C['GREEN']}ACTIVE{C['RST']}"
