@@ -3414,12 +3414,25 @@ def delete_user(user):
         # Suppression definitive : purge quarantaine + bucket compteur
         # (compte normal OU orphelin : même mécanique, clé = password).
         # Le password reste dans le registre a vie (jamais réattribué).
-        _zivpn_quarantine_remove(user)
-        if _del_pw:
+        # ORDRE CRITIQUE : stop AVANT la purge du state, start APRES.
+        # Sinon le binaire en cours re-écrit sa mémoire (qui contient encore
+        # l'ancienne clé) au prochain flush et la purge est annulée — surtout
+        # pour les orphelins où la config ne change pas et zivpn_apply ne
+        # redémarre pas le service.
+        if _del_pw and sh("systemctl is-active zivpn 2>/dev/null") == "active":
+            sh("systemctl stop zivpn 2>/dev/null || true")
+            _zivpn_quarantine_remove(user)
             _zivpn_quarantine_remove(_del_pw)
             _zivpn_forget_password(_del_pw)
+            zivpn_apply()
+            sh("systemctl start zivpn 2>/dev/null || true")
+        else:
+            _zivpn_quarantine_remove(user)
+            if _del_pw:
+                _zivpn_quarantine_remove(_del_pw)
+                _zivpn_forget_password(_del_pw)
+            zivpn_apply()
         _zivpn_event("user_deleted", user=user, password=_del_pw or None)
-        zivpn_apply()
     elif proto == "hysteria":
         hysteria_apply()
     
@@ -3525,16 +3538,22 @@ def change_password(user, newpass=""):
         if proto == "zivpn":
             # Le compteur appartient au compte : il SUIT le nouveau password
             # (renommage de la clé dans quota-state.json, aucune perte).
-            # Le nouveau password est enregistré a vie, l'ancien reste
-            # enregistré aussi (jamais réattribué).
+            # Stop AVANT migration (sinon le binaire en cours écrase le
+            # fichier avec sa mémoire au prochain flush).
             if old_pw != newpass:
                 if _proto_password_in_use(newpass, "zivpn", exclude_user=user) or newpass in _zivpn_registry_read():
                     _meta_set(user, "pass", old_pw)
                     return old_pw
+                active = sh("systemctl is-active zivpn 2>/dev/null") == "active"
+                if active:
+                    sh("systemctl stop zivpn 2>/dev/null || true")
                 _zivpn_migrate_state_key(old_pw, newpass)
                 _zivpn_registry_add(newpass)
                 _zivpn_event("password_changed", user=user)
-            zivpn_apply()
+                zivpn_apply()
+                if active:
+                    sh("systemctl start zivpn 2>/dev/null || true")
+                return newpass
         elif proto == "hysteria": hysteria_apply()
         elif proto == "v2raydns": v2raydns_apply()
         return newpass
