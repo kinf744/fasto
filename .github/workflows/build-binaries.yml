@@ -107,6 +107,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add install2.bin install2-arm64.bin
+          # Regenere les pins SHA-256 (install.sh exige un match exact)
+          sha256sum install2.bin > install2.bin.sha256
+          sha256sum install2-arm64.bin > install2-arm64.bin.sha256
+          git add install2.bin install2-arm64.bin install2.bin.sha256 install2-arm64.bin.sha256
           git commit -m "chore: update binaries (nuitka, glibc<=2.35 x86 / <=2.39 arm64) [skip ci]" || echo "No changes"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/kinf744/fasto.git HEAD:main || true
