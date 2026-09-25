@@ -758,7 +758,16 @@ def _zivpn_migrate_state_key(old_key, new_key):
                 d[new_key] = d.pop(old_key)
                 changed = True
         if changed:
-            stf.write_text(json.dumps(st))
+            # Binaire v2 : reecriture SANS checksum stale + miroir .bak
+            # synchronise (sinon le chargeur retombe sur le .bak ancien).
+            st.pop("checksum", None)
+            st.pop("version", None)
+            payload = json.dumps(st)
+            stf.write_text(payload)
+            try:
+                Path(str(stf) + ".bak").write_text(payload)
+            except Exception:
+                pass
             _zivpn_event("counter_migrated", old_key=old_key, new_key=new_key)
         return changed
     except Exception:
@@ -1006,9 +1015,12 @@ def _zivpn_expected_quota():
 
 def _zivpn_forget_password(password):
     """Supprime un password de /etc/zivpn/quota-state.json (used + quotas).
-    Appele lorsqu'un compte zivpn est supprime ou change de password : evite
-    que le compteur d'un ancien compte soit herite par un nouveau (reuse).
-    Ne touche qu'a ce bucket (independance stricte par password)."""
+    Appele lorsqu'un compte zivpn est supprime : evite que le compteur d'un
+    ancien compte soit herite par un nouveau (reuse). Ne touche qu'a ce bucket.
+    IMPORTANT (binaire v2) : le fichier est reecrit SANS version/checksum
+    (le format legacy est accepte a la lecture) ET le miroir .bak est
+    synchronise — sinon le checksum devenu invalide fait RECHARGER le .bak
+    qui contient encore la cle purgee (resurrection du compteur !)."""
     try:
         stf = Path("/etc/zivpn/quota-state.json")
         if not password or not stf.exists():
@@ -1020,7 +1032,14 @@ def _zivpn_forget_password(password):
                 del st[key][password]
                 changed = True
         if changed:
-            stf.write_text(json.dumps(st))
+            st.pop("checksum", None)
+            st.pop("version", None)
+            payload = json.dumps(st)
+            stf.write_text(payload)
+            try:
+                Path(str(stf) + ".bak").write_text(payload)
+            except Exception:
+                pass
         return changed
     except Exception:
         return False
@@ -1046,26 +1065,10 @@ def _zivpn_logrotate():
         pass
 
 
-def _zivpn_forget_password(password):
-    """Supprime un password de /etc/zivpn/quota-state.json (used + quotas).
-    Appele quand un compte zivpn est supprime ou change de password : evite
-    que le compteur d'un ancien compte soit herite par un nouveau (reuse).
-    Ne touche qu'a ce bucket (independance stricte par password)."""
-    try:
-        stf = Path("/etc/zivpn/quota-state.json")
-        if not password or not stf.exists():
-            return False
-        st = json.loads(stf.read_text())
-        changed = False
-        for key in ("used", "quotas"):
-            if isinstance(st.get(key), dict) and password in st[key]:
-                del st[key][password]
-                changed = True
-        if changed:
-            stf.write_text(json.dumps(st))
-        return changed
-    except Exception:
-        return False
+def _zivpn_forget_password_legacy_dup_removed():
+    # (dedup) l'ancienne 2e definition identique a ete supprimee : la version
+    # checksum/bak ci-dessus est unique.
+    return False
 
 
 def _zivpn_logrotate():
