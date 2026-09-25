@@ -7,10 +7,13 @@ Toute évolution du binaire ou du panneau (`install2.py`) DOIT le respecter.
 
 1. **La clé de comptage est le password.** Le protocole zivpn ne transmet
    que le password (header `Zivpnudp-Auth`) : il EST l'identité du compte.
-2. **Un password n'est jamais réattribué.** Le registre append-only
-   `/etc/zivpn/issued-passwords.txt` enregistre à vie chaque password émis
-   (sous verrou `flock`). Un compte supprimé ne peut pas « contaminer » un
-   futur compte.
+2. **Un password est unique tant qu'il est en vie.** Le registre
+   `/etc/zivpn/issued-passwords.txt` (verrou `flock`) enregistre chaque
+   password « en cours d'utilisation ». Il est **libéré uniquement après
+   purge complète** du compte (state + miroir `.bak` + quarantaine + méta +
+   backups nettoyés) : il redevient alors réutilisable, le nouveau compte
+   repartant de zéro. Si des résidus subsistent, la réutilisation est
+   refusée (code 4) pour empêcher tout héritage de compteur.
 3. **Le compteur appartient au compte, pas au credential.** Au changement de
    password, la clé est renommée dans `quota-state.json` : aucune perte.
 4. **Séparation enforcement / comptabilité** :

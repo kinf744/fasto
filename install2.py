@@ -504,12 +504,19 @@ def create_user(proto, user, days, passwd="", limit="1", quota="0"):
     elif proto == "zivpn":
         # Bucket password PAR TUNNEL : doublon refusé dans zivpn seul,
         # mais le même password en hysteria est autorisé (tunnel indépendant).
-        # REGISTRE A VIE : un password déjà émis (même pour un compte depuis
-        # supprimé) n'est JAMAIS réattribué -> aucune confusion de compteur.
+        # REGISTRE : un password supprime PROPREMENT (toutes traces purgees)
+        # redevient reutilisable pour un compte neuf repartant de zero.
+        # En revanche, un password ayant encore des residus (compteur, miroir
+        # .bak, quarantaine, backup) est refuse : risque d'heritage de data.
         if passwd:
-            # Password manuel : collision ou réattribution -> refus net.
-            if _proto_password_in_use(passwd, "zivpn") or passwd in _zivpn_registry_read():
+            if _proto_password_in_use(passwd, "zivpn"):
                 return 4
+            if passwd in _zivpn_registry_read():
+                if _zivpn_password_has_residuals(passwd):
+                    return 4  # traces résiduelles -> refus, réutilisation dangereuse
+                _zivpn_registry_remove(passwd)  # propre -> libère
+                _zivpn_purge_password_in_backups(passwd)  # anti-résurrection via restauration
+                _zivpn_event("password_rereleased", password=passwd)
         else:
             for _try in range(5):
                 passwd = gen_pass()
@@ -622,7 +629,8 @@ def _zivpn_password_in_use(passwd, exclude_user=""):
 # Un password zivpn EST la clé de comptage du quota. Pour qu'un comptage soit
 # sûr dans le temps, un password ayant appartenu à un compte ne doit JAMAIS
 # être réattribué à un autre compte (sinon risque d'héritage/confusion de
-# compteur). Ce registre append-only garantit cette unicité à vie.
+# compteur). Le registre garantit l'unicité tant que le compte existe ;
+# un password n'est réutilisable qu'après purge COMPLÈTE (voir delete_user).
 ZIVPN_PW_REGISTRY = Path("/etc/zivpn/issued-passwords.txt")
 ZIVPN_EVENT_LOG = Path("/var/log/zivpn-quota-events.jsonl")
 
@@ -688,7 +696,7 @@ def _zivpn_registry_read():
 
 
 def _zivpn_registry_add(password):
-    """Enregistre un password à vie (append-only, verrou flock anti-race).
+    """Enregistre un password comme « en cours d'utilisation » (flock).
     Retourne True si nouvellement enregistré, False si déjà présent/erreur."""
     if not password:
         return False
@@ -709,6 +717,77 @@ def _zivpn_registry_add(password):
         return True
     except Exception:
         return False
+
+
+def _zivpn_registry_remove(password):
+    """Libère un password du registre. N'est appelé QUE lorsque TOUTES les
+    traces du compte ont été purgées proprement (state used/quotas + miroir
+    .bak synchronisé + quarantaine + méta) : le password redevient alors
+    réutilisable pour un compte neuf qui repartira de zéro."""
+    if not password or not ZIVPN_PW_REGISTRY.exists():
+        return False
+    try:
+        with open(ZIVPN_PW_REGISTRY, "r+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            lines = [l for l in fh.read().splitlines() if l.strip() and l.strip() != password]
+            fh.seek(0)
+            fh.truncate()
+            fh.write("\n".join(lines) + ("\n" if lines else ""))
+            fh.flush()
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        return True
+    except Exception:
+        return False
+
+
+def _zivpn_password_has_residuals(password):
+    """Des traces de ce password subsistent-elles (compteur state, miroir,
+    quarantaine) ? Si oui, la réutilisation est dangereuse (risque de
+    compteur hérité) et doit être refusée."""
+    if not password:
+        return False
+    try:
+        for f in [Path("/etc/zivpn/quota-state.json"), Path("/etc/zivpn/quota-state.json.bak")]:
+            if f.exists():
+                st = json.loads(f.read_text())
+                for sec in ("used", "quotas"):
+                    if isinstance(st.get(sec), dict) and password in st[sec]:
+                        return True
+        if password in _zivpn_quarantine_load():
+            return True
+    except Exception:
+        return True  # doute -> refuse par prudence
+    return False
+
+
+def _zivpn_purge_password_in_backups(password):
+    """Nettoie un password des backups horaires (/etc/zivpn/backups/*.json*).
+    Sinon une restauration ultérieure du state (état corrompu) pourrait
+    ressusciter l'ANCIEN compteur de ce password et le mélanger au nouveau
+    compte qui le réutilise."""
+    try:
+        bdir = Path("/etc/zivpn/backups")
+        if not password or not bdir.exists():
+            return 0
+        n = 0
+        for b in bdir.glob("quota-state-*.json*"):
+            try:
+                st = json.loads(b.read_text())
+                hit = False
+                for sec in ("used", "quotas"):
+                    if isinstance(st.get(sec), dict) and password in st[sec]:
+                        del st[sec][password]
+                        hit = True
+                if hit:
+                    st.pop("checksum", None)  # checksum devient invalide
+                    st.pop("version", None)   # -> legacy accepte a la lecture
+                    b.write_text(json.dumps(st))
+                    n += 1
+            except Exception:
+                pass
+        return n
+    except Exception:
+        return 0
 
 
 def _zivpn_registry_seed():
@@ -3416,7 +3495,7 @@ def delete_user(user):
     elif proto == "zivpn":
         # Suppression definitive : purge quarantaine + bucket compteur
         # (compte normal OU orphelin : même mécanique, clé = password).
-        # Le password reste dans le registre a vie (jamais réattribué).
+        # Après purge complète, le password est LIBÉRÉ du registre.
         # ORDRE CRITIQUE : stop AVANT la purge du state, start APRES.
         # Sinon le binaire en cours re-écrit sa mémoire (qui contient encore
         # l'ancienne clé) au prochain flush et la purge est annulée — surtout
@@ -3435,6 +3514,11 @@ def delete_user(user):
                 _zivpn_quarantine_remove(_del_pw)
                 _zivpn_forget_password(_del_pw)
             zivpn_apply()
+        # Purge COMPLÈTE effectuée (state + miroir .bak + quarantaine + méta)
+        # -> le password est libéré : réutilisable pour un compte neuf.
+        if _del_pw:
+            _zivpn_registry_remove(_del_pw)
+            _zivpn_purge_password_in_backups(_del_pw)
         _zivpn_event("user_deleted", user=user, password=_del_pw or None)
     elif proto == "hysteria":
         hysteria_apply()
@@ -3552,6 +3636,10 @@ def change_password(user, newpass=""):
                     sh("systemctl stop zivpn 2>/dev/null || true")
                 _zivpn_migrate_state_key(old_pw, newpass)
                 _zivpn_registry_add(newpass)
+                _zivpn_purge_password_in_backups(old_pw)
+                # L'ancien password n'a plus aucune trace (compteur migré,
+                # backups nettoyés) et n'est plus utilisé -> libéré.
+                _zivpn_registry_remove(old_pw)
                 _zivpn_event("password_changed", user=user)
                 zivpn_apply()
                 if active:
@@ -4142,7 +4230,7 @@ def ui_create_wizard(protos):
         else: print(f" {C['GREEN']}✔{C['RST']} {C['WHITE']}{proto.upper()} user '{user}' created.{C['RST']}");press_enter()
     elif rc==1: print(f" {C['RED']}✗ Invalid username{C['RST']}");press_enter()
     elif rc==2: print(f" {C['RED']}✗ User exists{C['RST']}");press_enter()
-    elif rc==4: print(f" {C['RED']}✗ Password déjà utilisé ou déjà attribué par le passé (registre à vie : jamais réattribué, comptage quota protégé){C['RST']}");press_enter()
+    elif rc==4: print(f" {C['RED']}✗ Password déjà utilisé (ou traces résiduelles non purgées - réessayez ou nettoyez les orphelins){C['RST']}");press_enter()
     else: print(f" {C['RED']}✗ System error{C['RST']}");press_enter()
 
 def ui_list_users(title,protos):
@@ -6561,7 +6649,7 @@ Expired resellers auto-deactivated daily by cron.
         rp=pm.get(proto,proto);pn=nm.get(proto,rp.upper());exp=exp_in_days(int(days))
         rc=create_user(rp,user,int(days),pwd,"1",quota)
         if rc!=0:
-            msgs={1:"Invalid username",2:"Username déjà utilisé (nom unique requis, même quota possible)",4:"Password déjà utilisé OU déjà attribué par le passé (jamais réattribué : registre à vie, comptage quota protégé)"}
+            msgs={1:"Invalid username",2:"Username déjà utilisé (nom unique requis, même quota possible)",4:"Password déjà utilisé ou avec traces résiduelles (supprimez l'ancien compte proprement via DELETE USER)"}
             await update.message.reply_text(f"❌ {msgs.get(rc,'Error')}.",reply_markup=back_kb("users"),parse_mode="Markdown")
             ctx.user_data.clear();return
         apw=_meta_get(user,"pass")or pwd;uuid=_meta_get(user,"uuid")or ""
