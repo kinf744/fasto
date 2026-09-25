@@ -199,7 +199,7 @@ def panel_system_accounts():
 def count_xray_total(): return int(sh("jq '[.vmess,.vless,.trojan]|map(length)|add' /etc/xray/users.json 2>/dev/null") or "0")
 def count_total_users():
     if not USERDIR.exists(): return 0
-    return sum(1 for f in USERDIR.iterdir() if f.is_file())
+    return sum(1 for f in USERDIR.iterdir() if f.is_file() and not f.name.startswith("."))
 def count_locked(): return int(sh(r"awk -F: '$3>=1000 && $2 ~ /^!/ {n++} END{print n+0}' /etc/shadow 2>/dev/null") or "0")
 
 def _count_family(mode, *protos):
@@ -344,19 +344,23 @@ def _meta_read_lines(user):
                 fcntl.flock(fh, fcntl.LOCK_UN)
     except Exception:
         return None
+def _meta_lock_path(user):
+    return USERDIR / f".{user}.lock"
+
+
 def _meta_write_lines(user, lines):
-    # FIX anti-corruption : écriture atomique tmp + fsync + rename sous LOCK_EX.
+    # FIX anti-corruption v2 : tmp UNIQUE par PID (avant: nom fixe share entre
+    # processus concurrents -> corruption/croisement des contenus, ex. meta
+    # Barnet5 reduit a 2 champs dynamiques). fsync + rename atomique.
     f = USERDIR / user
     if not f.is_file(): return False
-    tmp = f.with_suffix(".tmp")
+    tmp = USERDIR / f".{user}.{os.getpid()}.tmp"
     try:
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
             data = ("\n".join(lines) + "\n").encode()
             os.write(fd, data)
             os.fsync(fd)
-            fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
         os.rename(str(tmp), str(f))
@@ -365,25 +369,44 @@ def _meta_write_lines(user, lines):
         try: tmp.unlink(missing_ok=True)
         except Exception: pass
         return False
+
 def _meta_set(user, field, value):
-    # FIX anti-corruption : read-modify-write verrouillé + retry.
+    # FIX anti-corruption v2 : TOUT le read-modify-write sous verrou EXCLUSIF
+    # par user (fichier .lock dedie) — avant, le lock portait sur le tmp ou le
+    # fichier renomme, ce qui ne protegeait rien entre les deux crons
+    # quota-enforce (kighmu + kighmu-bot) tournant en parallele.
     if not user: return
     f = USERDIR / user
     if not f.is_file(): return
-    for _attempt in range(3):
-        lines = _meta_read_lines(user)
-        if lines is None:
+    lf = _meta_lock_path(user)
+    try:
+        lfd = os.open(str(lf), os.O_WRONLY | os.O_CREAT, 0o600)
+    except Exception:
+        lfd = None
+    try:
+        if lfd is not None:
+            fcntl.flock(lfd, fcntl.LOCK_EX)
+        for _attempt in range(3):
+            lines = _meta_read_lines(user)
+            if lines is None:
+                time.sleep(0.05)
+                continue
+            new = []
+            found = False
+            for line in lines:
+                if line.startswith(f"{field}="): new.append(f"{field}={value}"); found = True
+                else: new.append(line)
+            if not found: new.append(f"{field}={value}")
+            if _meta_write_lines(user, new):
+                return
             time.sleep(0.05)
-            continue
-        new = []
-        found = False
-        for line in lines:
-            if line.startswith(f"{field}="): new.append(f"{field}={value}"); found = True
-            else: new.append(line)
-        if not found: new.append(f"{field}={value}")
-        if _meta_write_lines(user, new):
-            return
-        time.sleep(0.05)
+    finally:
+        if lfd is not None:
+            try:
+                fcntl.flock(lfd, fcntl.LOCK_UN)
+                os.close(lfd)
+            except Exception:
+                pass
 
 def _parse_quota_gb(q_str):
     # FIX parsing quota robuste, ne lève JAMAIS. Accepte '100', '100GB', ' 10.5 '.
@@ -428,9 +451,10 @@ def write_meta(user, proto, exp, limit="", passwd="", uuid="", quota=""):
     if passwd: lines.append(f"pass={passwd}")
     if uuid: lines.append(f"uuid={uuid}")
     if quota: lines.append(f"quota={quota}")
-    # FIX anti-corruption : création atomique tmp + rename.
+    # FIX anti-corruption : création atomique tmp UNIQUE (par PID) + rename.
+    # (avant: tmp a nom fixe ".tmp" partage avec _meta_write_lines -> croisement)
     f = USERDIR / user
-    tmp = f.with_suffix(".tmp")
+    tmp = USERDIR / f".{user}.{os.getpid()}.meta.tmp"
     try:
         tmp.write_text("\n".join(lines) + "\n")
         os.rename(str(tmp), str(f))
@@ -4288,6 +4312,7 @@ def ui_delete_wizard(protos=None):
         if USERDIR.exists():
             for f in sorted(USERDIR.iterdir()):
                 if not f.is_file(): continue
+                if f.name.startswith("."): continue  # fichiers techniques (.lock, .tmp)
                 p = _meta_get(f.name, "proto")
                 # Un fichier residuel (proto vide/inconnu, restes d'anciennes
                 # versions) est TOUJOURS listé et supprimable, quel que soit
